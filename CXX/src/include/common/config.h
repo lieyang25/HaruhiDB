@@ -1,4 +1,6 @@
-
+/**
+ * CXX/src/include/common/config.h
+ */
 #pragma once
 
 #include <cstddef>

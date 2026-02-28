@@ -1,30 +1,39 @@
 #pragma once
 
+/**
+ * CXX/src/include/storage/disk/disk_manager.h
+ */
+
 #include "common/config.h"
 #include <string>
+#include <expected>
+#include <filesystem>
+#include <fstream>
 
 namespace HaruhiDB
 {
 namespace storage
 {
-    struct IOErr { std::string mes;};
+    /**
+     * To return msg ,if some error happen.
+     */
+    struct IOErr { 
+        std::string msg;
+        int err_code;
+    };
 
-    class disk_manager
+    class DiskManager
     {
     private:
-        /* data */
+        std::filesystem::path path_;
+        std::fstream file_;
+        page_id_t next_page;
     public:
-        disk_manager(/* args */);
-        ~disk_manager();
+        explicit DiskManager(const std::filesystem::path& path);
+        ~DiskManager();
+        std::expected<void,IOErr> ReadPage(page_id_t page_id , char* data);
+        std::expected<void,IOErr> WritePage(page_id_t page_id , const char* data);
+        std::expected<page_id_t,IOErr> AllocatePage();
     };
-    
-    disk_manager::disk_manager(/* args */)
-    {
-    }
-    
-    disk_manager::~disk_manager()
-    {
-    }
-    
 } // namespace storage
 } // namespace HaruhiDB
