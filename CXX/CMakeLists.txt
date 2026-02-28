@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.28)
+
+project(HaruhiDB 
+        VERSION 1.0
+        DESCRIPTION "a DB project"
+        LANGUAGES C CXX
+        )
+
+add_library(compile_version_cxx23 INTERFACE)
+target_compile_features(compile_version_cxx23 INTERFACE cxx_std_23)
+
+add_subdirectory(src)
+add_subdirectory(test)
