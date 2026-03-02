@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "common/error_code.h"
 #include "common/config.h"
 #include <string>
 #include <expected>
@@ -26,9 +27,9 @@ namespace storage
         page_id_t free_list_head;
     };
     
-    struct IOErr { 
+    struct IOErr {
         std::string msg;
-        int err_code;
+        HaruhiDB::ErrorCode err_code;
     };
 
     class DiskManager
@@ -52,6 +53,8 @@ namespace storage
         std::fstream file_;
         page_id_t next_page_id_{1};
         page_id_t free_list_head_{INVALID_PAGE_ID};
+        static constexpr uint32_t DB_MAGIC = 0x48415255;
+        static constexpr uint32_t DB_VERSION = 1;
     };
 } // namespace storage
 } // namespace HaruhiDB
