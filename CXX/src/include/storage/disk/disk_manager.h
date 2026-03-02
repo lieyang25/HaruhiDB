@@ -1,8 +1,8 @@
-#pragma once
-
 /**
  * CXX/src/include/storage/disk/disk_manager.h
  */
+
+#pragma once
 
 #include "common/config.h"
 #include <string>
@@ -24,16 +24,25 @@ namespace storage
 
     class DiskManager
     {
-    private:
-        std::filesystem::path path_;
-        std::fstream file_;
-        page_id_t next_page;
     public:
         explicit DiskManager(const std::filesystem::path& path);
         ~DiskManager();
-        std::expected<void,IOErr> ReadPage(page_id_t page_id , char* data);
-        std::expected<void,IOErr> WritePage(page_id_t page_id , const char* data);
+        std::expected<void,IOErr> ReadPage(page_id_t page_id , page_data_t& data);
+        std::expected<void,IOErr> WritePage(page_id_t page_id , const page_data_t& data);
         std::expected<page_id_t,IOErr> AllocatePage();
+        std::expected<void,IOErr> DeallocatePage(page_id_t page_id);
+        std::expected<void,IOErr> Flush();
+    private:
+        std::expected<void,IOErr> OpenFile();
+        std::expected<void,IOErr> InitHeaderIfNeeded();
+        std::expected<void,IOErr> LoagHeader();
+        std::expected<void,IOErr> PersistHeader();
+
+    private:
+        std::filesystem::path path_;
+        std::fstream file_;
+        page_id_t next_page_id_{1};
+        page_id_t free_list_head_{INVALID_PAGE_ID};
     };
 } // namespace storage
 } // namespace HaruhiDB
