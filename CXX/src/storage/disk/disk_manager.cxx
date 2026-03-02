@@ -3,6 +3,7 @@
  */
 
 #include "storage/disk/disk_manager.h"
+#include <format>
 #include <system_error>
 
 namespace HaruhiDB
@@ -12,6 +13,7 @@ namespace storage
     DiskManager::DiskManager(const std::filesystem::path& path)
         :path_(path)
     {
+        // Open file (create if not exist)
         auto open_file = OpenFile();
         if (!open_file) {
             throw std::runtime_error(
@@ -26,6 +28,7 @@ namespace storage
     }
     DiskManager::~DiskManager()
     {
+        // Flush data to disk and close file
         if (file_.is_open()) {
             file_.flush();
             file_.close();
@@ -34,7 +37,39 @@ namespace storage
 
     std::expected<void,IOErr> DiskManager::OpenFile()
     {
+        try {
+            std::filesystem::create_directories(path_.parent_path());
+        }
+        catch (const std::exception& e) {
+            return std::unexpected(IOErr{std::format("Dir error: {}", e.what()), -1});
+        }
 
+        file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
+        if (!file_.is_open()) {
+            file_.clear();
+            file_.open(path_, std::ios::out | std::ios::binary);
+            file_.close();
+            file_.open(path_, std::ios::binary | std::ios::out | std::ios::in);
+        }
+
+        if (!file_.is_open()) {
+            return std::unexpected(IOErr{std::format("Failed to open file: {}", path_.string()), -1});
+        }
+
+        try {
+            auto size = std::filesystem::file_size(path_);
+            if (size % PAGE_SIZE != 0) {
+                return std::unexpected(IOErr{"Database file is corrupted (size mismatch)", -4});
+            }
+
+            page_id_t pages = static_cast<page_id_t>(size / PAGE_SIZE);
+            next_page_id_ = (pages == 0) ? 1 : pages;
+        }
+        catch (const std::exception&e) {
+            return std::unexpected(IOErr{std::format("File size error: {}", e.what()), -5});
+        }
+
+        return {};
     }
     std::expected<void,IOErr> DiskManager::InitHeaderIfNeeded()
     {
