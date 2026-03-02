@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 
 namespace HaruhiDB
 {

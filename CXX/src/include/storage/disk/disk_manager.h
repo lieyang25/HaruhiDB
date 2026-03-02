@@ -17,6 +17,15 @@ namespace storage
     /**
      * To return msg ,if some error happen.
      */
+
+    struct DBHeader
+    {
+        uint32_t magic_number;
+        uint32_t version;
+        page_id_t next_page_id;
+        page_id_t free_list_head;
+    };
+    
     struct IOErr { 
         std::string msg;
         int err_code;
@@ -35,7 +44,7 @@ namespace storage
     private:
         std::expected<void,IOErr> OpenFile();
         std::expected<void,IOErr> InitHeaderIfNeeded();
-        std::expected<void,IOErr> LoagHeader();
+        std::expected<void,IOErr> LoadHeader();
         std::expected<void,IOErr> PersistHeader();
 
     private:

@@ -3,6 +3,7 @@
  */
 
 #include "storage/disk/disk_manager.h"
+#include <cstring>
 #include <format>
 #include <system_error>
 
@@ -37,13 +38,14 @@ namespace storage
 
     std::expected<void,IOErr> DiskManager::OpenFile()
     {
+        // Ensure parent directory exists
         try {
             std::filesystem::create_directories(path_.parent_path());
-        }
-        catch (const std::exception& e) {
+        } catch (const std::exception& e) {
             return std::unexpected(IOErr{std::format("Dir error: {}", e.what()), -1});
         }
 
+        // Try to open existing file
         file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
         if (!file_.is_open()) {
             file_.clear();
@@ -56,16 +58,16 @@ namespace storage
             return std::unexpected(IOErr{std::format("Failed to open file: {}", path_.string()), -1});
         }
 
+        // Check file size and set next_page_id_
         try {
-            auto size = std::filesystem::file_size(path_);
-            if (size % PAGE_SIZE != 0) {
-                return std::unexpected(IOErr{"Database file is corrupted (size mismatch)", -4});
+            auto file_size = std::filesystem::file_size(path_);
+            if (file_size % PAGE_SIZE != 0) {
+                return std::unexpected(IOErr{"Database file is corrupted (file_size mismatch)", -4});
             }
 
-            page_id_t pages = static_cast<page_id_t>(size / PAGE_SIZE);
+            page_id_t pages = static_cast<page_id_t>(file_size / PAGE_SIZE);
             next_page_id_ = (pages == 0) ? 1 : pages;
-        }
-        catch (const std::exception&e) {
+        } catch (const std::exception&e) {
             return std::unexpected(IOErr{std::format("File size error: {}", e.what()), -5});
         }
 
@@ -73,9 +75,33 @@ namespace storage
     }
     std::expected<void,IOErr> DiskManager::InitHeaderIfNeeded()
     {
+        uint64_t file_size = 0;
+        try {
+            file_size = static_cast<uint64_t>(std::filesystem::file_size(path_));
+        } catch (const std::exception& e) {
+            return std::unexpected(IOErr{std::format("File size error: {}", e.what()), -5});
+        }
 
+        if (file_size < PAGE_SIZE) {
+            DBHeader dbheader;
+            dbheader.magic_number = 0x48415255;
+            dbheader.version = 1;
+            dbheader.next_page_id = next_page_id_;
+            dbheader.free_list_head = static_cast<uint64_t>(INVALID_PAGE_ID);
+
+            std::array<std::byte,PAGE_SIZE> buffer{};
+            std::memcpy(buffer.data(),&dbheader,sizeof(DBHeader));
+
+            file_.seekg(0,std::ios::beg);
+            file_.write(reinterpret_cast<const char*>(buffer.data()),PAGE_SIZE);
+            if (!file_) {
+                return std::unexpected(IOErr{std::format("Failed to write header page"),-1});
+            }
+            file_.flush();
+            return {};
+        }
     }
-    std::expected<void,IOErr> DiskManager::LoagHeader()
+    std::expected<void,IOErr> DiskManager::LoadHeader()
     {
 
     }
