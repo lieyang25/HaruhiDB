@@ -5,6 +5,7 @@ add_executable(disk_manager_test
 )
 
 target_link_libraries(disk_manager_test PRIVATE
+    compile_version_cxx23
     HaruhiDB
     GTest::gtest_main
 )

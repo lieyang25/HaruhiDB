@@ -7,6 +7,8 @@ project(HaruhiDB
         LANGUAGES C CXX
         )
 
+enable_testing()
+
 add_library(compile_version_cxx23 INTERFACE)
 target_compile_features(compile_version_cxx23 INTERFACE cxx_std_23)
 
