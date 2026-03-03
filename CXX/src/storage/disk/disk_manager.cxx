@@ -136,7 +136,7 @@ namespace storage
     }
 
     std::expected<void, IOErr> DiskManager::PersistHeader()
-    {
+    {        
         DBHeader dbheader{};
         dbheader.magic_number = DB_MAGIC;
         dbheader.version = DB_VERSION;
@@ -146,6 +146,7 @@ namespace storage
         std::array<std::byte, PAGE_SIZE> buffer{};
         std::memcpy(buffer.data(), &dbheader, sizeof(DBHeader));
 
+        file_.clear();
         file_.seekp(0, std::ios::beg);
         file_.write(reinterpret_cast<const char*>(buffer.data()), PAGE_SIZE);
         if (!file_) return std::unexpected(IOErr{"Failed to write header page", HaruhiDB::ErrorCode::HeaderWriteFailed});
@@ -253,7 +254,7 @@ namespace storage
     std::expected<void, IOErr> DiskManager::DeallocatePage(page_id_t page_id)
     {
         if (!file_.is_open()) return std::unexpected(IOErr{"File not open", HaruhiDB::ErrorCode::FileNotOpen});
-
+        
         std::array<std::byte, PAGE_SIZE> buffer{};
         uint64_t cur_head_raw = static_cast<uint64_t>(free_list_head_);
         std::memcpy(buffer.data(), &cur_head_raw, sizeof(uint64_t));

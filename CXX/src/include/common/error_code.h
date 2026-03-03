@@ -1,3 +1,8 @@
+/**
+ * CXX/src/include/common/error_code.h
+ */
+#pragma once
+
 #include <string>
 namespace HaruhiDB
 {

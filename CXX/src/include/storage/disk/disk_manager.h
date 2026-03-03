@@ -18,7 +18,11 @@ namespace storage
     /**
      * To return msg ,if some error happen.
      */
-
+    /**
+     * DBHeader structure is stored in the first page of the file, 
+     * containing metadata about the database file, 
+     * such as magic number, version, next_page_id and free_list_head.
+     */
     struct DBHeader
     {
         uint32_t magic_number;
@@ -26,23 +30,32 @@ namespace storage
         page_id_t next_page_id;
         page_id_t free_list_head;
     };
-    
+    /**
+     * IOErr is used to return error message and error code 
+     * when disk operations fail,
+     */
     struct IOErr {
         std::string msg;
         HaruhiDB::ErrorCode err_code;
     };
 
+    /**
+     * DiskManager is responsible for managing the disk storage of the database,
+     * including reading/writing pages, allocating/deallocating pages, and maintaining the free page
+     */
     class DiskManager
     {
     public:
         explicit DiskManager(const std::filesystem::path& path);
         ~DiskManager();
+        // Basic page operations
         std::expected<void,IOErr> ReadPage(page_id_t page_id , page_data_t& data);
         std::expected<void,IOErr> WritePage(page_id_t page_id , const page_data_t& data);
         std::expected<page_id_t,IOErr> AllocatePage();
         std::expected<void,IOErr> DeallocatePage(page_id_t page_id);
         std::expected<void,IOErr> Flush();
     private:
+        //helper functions
         std::expected<void,IOErr> OpenFile();
         std::expected<void,IOErr> InitHeaderIfNeeded();
         std::expected<void,IOErr> LoadHeader();
