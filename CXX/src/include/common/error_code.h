@@ -6,7 +6,7 @@
 #include <string>
 namespace HaruhiDB
 {
-    enum class ErrorCode : int {
+    enum class ErrorCode : uint8_t {
         OK = 0,
         DirError,                   // 创建目录失败
         FileOpenFailed,             // 打开文件失败
