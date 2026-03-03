@@ -9,5 +9,5 @@ target_link_libraries(haruhi_disk   PUBLIC
 )
 
 target_include_directories(haruhi_disk  PUBLIC
-    "${PROJECT_SOURCE_DIR}/src/include"
+    "${CMAKE_SOURCE_DIR}/src/include"
 )
