@@ -41,9 +41,14 @@ namespace storage
     {
         // Ensure parent directory exists
         try {
-            std::filesystem::create_directories(path_.parent_path());
+            auto parent = path_.parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent);
+            }
         } catch (const std::exception& e) {
-            return std::unexpected(IOErr{std::format("Dir error: {}", e.what()), HaruhiDB::ErrorCode::DirError});
+            return std::unexpected(IOErr{
+                std::format("Dir error: {}", e.what()),
+                HaruhiDB::ErrorCode::DirError});
         }
 
         // Try to open existing file (read/write, binary)
