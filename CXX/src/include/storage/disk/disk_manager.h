@@ -23,7 +23,6 @@ namespace storage
      * containing metadata about the database file, 
      * such as magic number, version, next_page_id and free_list_head.
      */
-    #pragma pack(push, 1)
     struct DBHeader
     {
         uint32_t magic_number;
@@ -31,7 +30,7 @@ namespace storage
         page_id_t next_page_id;
         page_id_t free_list_head;
     };
-    #pragma pace(pop)
+    static_assert(std::is_trivially_copyable_v<DBHeader>);
     static_assert(sizeof(DBHeader) == 16, "DBHeader size must be 16 bytes");
     /**
      * IOErr is used to return error message and error code 

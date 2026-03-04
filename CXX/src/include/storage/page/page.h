@@ -4,8 +4,11 @@
 #pragma once
 
 #include "common/config.h"
+
 #include <atomic>
 #include <shared_mutex>
+#include <span>
+#include <expected>
 
 namespace HaruhiDB
 {
@@ -20,23 +23,23 @@ namespace storage
         FREELIST
     };
 
-    #pragma pack(push,1)
     struct PersistentHeader
     {
+        lsn_t lsn;
         page_id_t page_id;
+        slot_id_t slot_count;
+        uint16_t free_space_offset;
         PageType page_type;
-        uint16_t slot_count;
-        uint16_t free_space_offest;
+        uint8_t reserved[15];
     };
-    #pragma pack(pop)
+    static_assert(std::is_trivially_copyable_v<PersistentHeader>);
+    static_assert(sizeof(PersistentHeader) <= HEADER_SIZE,"PersistentHeader size must lower HEADER_SIZE");
 
     struct Slot
     {
-        uint16_t offest;
+        uint16_t offset;
         uint16_t length;
     };
-
-    static_assert(sizeof(PersistentHeader) <= HEADER_SIZE, "PersistentHeader size must lower 32 bytes");
 
     class Page
     {
@@ -44,24 +47,47 @@ namespace storage
         Page();
         ~Page();
 
-        PersistentHeader GetHeader() const;
-        size_t GetFreeSpace() const;
+        void InitBlank(page_id_t page_id,PageType page_type);
 
-        void Pin();
-        void UnPin();
-        int PinCount() const;
+        // PersistentHeader* Header() and const version
+        PersistentHeader* Header() ;
+        const PersistentHeader* Header() const ;
 
-        void MarkDirty();
-        bool IsDirty() const;
+        page_id_t PageId() ;
+        PageType Type() ;
 
-        std::shared_mutex& Latch();
-        std::array<std::byte,PAGE_SIZE> RawData();
+        // Slot* SlotArray() and const version
+        Slot* SlotArray();
+        const Slot* SlotArray() const;
+        std::expected<Slot*,bool> GetSlot(slot_id_t slot_id);
+
+        size_t FreeSpace() const;
+
+        bool InsertRecord(std::span<const std::byte> record);
+
+        // Pinning methods
+        void Pin() ;
+        void UnPin() ;
+        int PinCount() const ;
+
+        // Dirty flag methods
+        void MarkDirty() ;
+        bool IsDirty() const ;
+
+        // Latch methods
+        void RLock() ;
+        void RUnLock() ;
+        void WLock() ;
+        void WUnLock() ;
+
+        // Raw data access
+        std::byte* RawData() ;
+        const std::byte* RawData() const ;
         
     private:
-        page_id_t page_id_;
-        std::atomic<int> pin_count_;
+        std::atomic<int64_t> pin_count_;
         std::atomic<bool> is_dirty_;
-        std::array<std::byte,PAGE_SIZE> data_;
+        page_data_t data_;
         std::shared_mutex latch_;
     };
 } // namespace storage
