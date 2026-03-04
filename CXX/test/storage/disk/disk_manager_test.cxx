@@ -1,7 +1,5 @@
 /**
  * CXX/test/storage/disk/disk_manager_test.cxx
- *
- * Expanded unit tests for DiskManager with short English comments on each test.
  */
 
 #include <gtest/gtest.h>
