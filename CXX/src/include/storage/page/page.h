@@ -45,34 +45,34 @@ namespace storage
     {
     public:
         Page();
-        ~Page();
+        ~Page() = default;
 
         void InitBlank(page_id_t page_id,PageType page_type);
 
         // PersistentHeader* Header() and const version
-        PersistentHeader* Header() ;
-        const PersistentHeader* Header() const ;
+        PersistentHeader* Header() noexcept;
+        const PersistentHeader* Header() const noexcept;
 
-        page_id_t PageId() ;
-        PageType Type() ;
+        page_id_t PageId() noexcept;
+        PageType Type() noexcept;
 
         // Slot* SlotArray() and const version
-        Slot* SlotArray();
-        const Slot* SlotArray() const;
+        Slot* SlotArray() noexcept;
+        const Slot* SlotArray() const noexcept;
         std::expected<Slot*,bool> GetSlot(slot_id_t slot_id);
 
-        size_t FreeSpace() const;
+        size_t FreeSpace() const noexcept;
 
         bool InsertRecord(std::span<const std::byte> record);
 
         // Pinning methods
-        void Pin() ;
-        void UnPin() ;
-        int PinCount() const ;
+        void Pin() noexcept;
+        void UnPin() noexcept;
+        int PinCount() const noexcept;
 
         // Dirty flag methods
-        void MarkDirty() ;
-        bool IsDirty() const ;
+        void MarkDirty() noexcept;
+        bool IsDirty() const noexcept;
 
         // Latch methods
         void RLock() ;
@@ -81,11 +81,11 @@ namespace storage
         void WUnLock() ;
 
         // Raw data access
-        std::byte* RawData() ;
-        const std::byte* RawData() const ;
+        std::byte* RawData() noexcept;
+        const std::byte* RawData() const noexcept;
         
     private:
-        std::atomic<int64_t> pin_count_;
+        std::atomic<int> pin_count_;
         std::atomic<bool> is_dirty_;
         page_data_t data_;
         std::shared_mutex latch_;

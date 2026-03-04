@@ -4,7 +4,7 @@
 
 #include "storage/page/page.h"
 #include <cstring>
-
+#include <cassert>
 
 namespace HaruhiDB
 {
@@ -30,41 +30,41 @@ namespace storage
     }
 
     // PersistentHeader* Page::Header() and const version
-    PersistentHeader* Page::Header() 
+    PersistentHeader* Page::Header() noexcept
     {
         return reinterpret_cast<PersistentHeader*>(data_.data());
     }
-    const PersistentHeader* Page::Header() const 
+    const PersistentHeader* Page::Header() const noexcept
     {
         return reinterpret_cast<const PersistentHeader*>(data_.data());
     }
 
-    page_id_t Page::PageId() 
+    page_id_t Page::PageId() noexcept
     {
         return Header()->page_id;
     }
-    PageType Page::Type() 
+    PageType Page::Type() noexcept
     {
         return Header()->page_type;
     }
 
-    Slot* Page::SlotArray()
+    Slot* Page::SlotArray()noexcept
     {
         return reinterpret_cast<Slot*>(data_.data() + sizeof(PersistentHeader));
     }
-    const Slot* Page::SlotArray() const
+    const Slot* Page::SlotArray() const noexcept
     {
         return reinterpret_cast<const Slot*>(data_.data() + sizeof(PersistentHeader));
     }
     std::expected<Slot*,bool> Page::GetSlot(slot_id_t slot_id)
     {
-        if (slot_id < Header()->slot_count) {
+        if (slot_id >= Header()->slot_count) {
             return std::unexpected(false);
         }
         return &SlotArray()[slot_id];
     }
 
-    size_t Page::FreeSpace() const
+    size_t Page::FreeSpace() const noexcept
     {
         size_t slot_area_end = sizeof(PersistentHeader)
             + Header()->slot_count * sizeof(Slot);
@@ -95,24 +95,25 @@ namespace storage
         return true;
     }
 
-    void Page::Pin() 
+    void Page::Pin() noexcept
     {
         pin_count_.fetch_add(1,std::memory_order_relaxed);
     }
-    void Page::UnPin() 
+    void Page::UnPin() noexcept
     {
-        pin_count_.fetch_sub(1,std::memory_order_relaxed);
+        int old = pin_count_.fetch_sub(1, std::memory_order_relaxed);
+        assert(old > 0 && "UnPin called when pin_count == 0");
     }
-    int Page::PinCount() const 
+    int Page::PinCount() const noexcept
     {
         return pin_count_.load(std::memory_order_relaxed);
     }
 
-    void Page::MarkDirty() 
+    void Page::MarkDirty() noexcept
     {
         is_dirty_.store(true,std::memory_order_relaxed);
     }
-    bool Page::IsDirty() const 
+    bool Page::IsDirty() const noexcept
     {
         return is_dirty_.load(std::memory_order_relaxed);
     }
@@ -134,11 +135,11 @@ namespace storage
         latch_.unlock();
     }
 
-    std::byte* Page::RawData() 
+    std::byte* Page::RawData() noexcept
     {
         return data_.data();
     }
-    const std::byte* Page::RawData() const 
+    const std::byte* Page::RawData() const noexcept
     {
         return data_.data();
     }
