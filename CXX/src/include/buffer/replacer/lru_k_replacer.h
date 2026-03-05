@@ -1,5 +1,5 @@
 /**
- * CXX/src/include/buffer/lru_k_replacer.h
+ * CXX/src/include/buffer/replacer/lru_k_replacer.h
  */
 #pragma once
 
@@ -13,8 +13,10 @@
 #include <cstdint>
 #include <limits>
 
-namespace HaruhiDB {
-namespace buffer {
+namespace HaruhiDB
+{
+namespace replacer
+{
 
     class LruKReplacer
     {
@@ -54,5 +56,5 @@ namespace buffer {
 
         frame_id_t PickVictimInternal();
     };
-} // namespace buffer
+} // namespace replacer
 } // namespace HaruhiDB
