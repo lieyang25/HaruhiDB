@@ -100,7 +100,7 @@ namespace replacer
          * @param k LRU-K 算法中记录的访问历史次数
          */
         explicit LruKReplacer(size_t pool_size, size_t k = 2);
-
+        ~LruKReplacer() = default;
         /**
          * English:
          * Records an access to a frame. This updates the access history
