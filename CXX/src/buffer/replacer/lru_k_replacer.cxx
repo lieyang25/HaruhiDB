@@ -8,7 +8,7 @@ namespace HaruhiDB
 {
 namespace replacer
 {
-    LruKReplacer::LruKReplacer(size_t pool_size, size_t k = 2) : pool_size_(pool_size),k_(k)
+    LruKReplacer::LruKReplacer(size_t pool_size, size_t k) : pool_size_(pool_size),k_(k)
     {
         frames_.resize(pool_size_);
     }
