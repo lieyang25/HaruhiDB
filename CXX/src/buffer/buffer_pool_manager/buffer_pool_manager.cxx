@@ -1,8 +1,8 @@
 /**
- * CXX/src/buffer/buffer_manager/buffer_pool_manager.cxx
+ * CXX/src/buffer/buffer_pool_manager/buffer_pool_manager.cxx
  */
 
-#include "buffer/buffer_manager/buffer_pool_manager.h"
+#include "buffer/buffer_pool_manager/buffer_pool_manager.h"
 
 namespace HaruhiDB
 {
@@ -15,7 +15,7 @@ namespace buffer
         disk_manager_ = disk_manager;
         pages_.resize(pool_size);
         replacer_ = std::make_unique<replacer::LruKReplacer>(pool_size, k);
-        for (page_id_t fid = 0; fid < static_cast<frame_id_t>(pool_size); fid++) {
+        for (frame_id_t fid = 0; fid < static_cast<frame_id_t>(pool_size); fid++) {
             frame_list_.push_back(fid);
         }
     }
@@ -29,6 +29,9 @@ namespace buffer
         // 4. 更新 page_table_，从磁盘读取 page 存储到该 frame。
         // 5. 设置该 Page 的元数据，调用 replacer_->RecordAccess()。
         std::lock_guard<std::mutex> guard(latch_);
+        if (page_id == INVALID_PAGE_ID) {
+            return std::unexpected(false);
+        }
 
         frame_id_t fid;
         auto it = page_table_.find(page_id);
@@ -40,13 +43,14 @@ namespace buffer
             return &pages_[fid];
         }
 
-        auto vivtim_frame = GetVictimFrame();
-        if (!vivtim_frame.has_value()) {
+        auto victim_frame = GetVictimFrame();
+        if (!victim_frame.has_value()) {
             return std::unexpected(false);
         }
 
-        fid = vivtim_frame.value();
+        fid = victim_frame.value();
         storage::Page& page = pages_[fid];
+        const page_id_t old_page_id = page.PageId();
 
         if (page.IsDirty()) {
             auto write = disk_manager_->WritePage(page.PageId(),page.Data());
@@ -57,11 +61,12 @@ namespace buffer
             page.ClearDirty();
         }
 
-    
-        page_table_.erase(page.PageId());
         auto read = disk_manager_->ReadPage(page_id,page.Data());
         if (!read.has_value()) {
             return std::unexpected(false);
+        }
+        if (old_page_id != INVALID_PAGE_ID) {
+            page_table_.erase(old_page_id);
         }
 
         page.ResetMetaData(page_id);
@@ -81,6 +86,9 @@ namespace buffer
         // 4. 清空该 frame 对应的 Page 对象（ResetMemory）。
         // 5. 更新 page_table_ 和 replacer_ 的状态。
         std::lock_guard<std::mutex> guard(latch_);
+        if (page_id == nullptr) {
+            return std::unexpected(false);
+        }
 
         auto new_page_id = disk_manager_->AllocatePage();
         if (!new_page_id.has_value()) {
@@ -95,16 +103,20 @@ namespace buffer
 
         frame_id_t fid = frame.value();
         storage::Page& page = pages_[fid];
+        const page_id_t old_page_id = page.PageId();
 
         if (page.IsDirty()) {
             auto write = disk_manager_->WritePage(page.PageId(),page.Data());
             if (!write.has_value()) {
+                (void)disk_manager_->DeallocatePage(new_page_id.value());
                 return std::unexpected(false);
             }
             page.ClearDirty();
         }
 
-        page_table_.erase(page.PageId());
+        if (old_page_id != INVALID_PAGE_ID) {
+            page_table_.erase(old_page_id);
+        }
 
         page.InitBlank(new_page_id.value(),storage::PageType::HEAP);
         page.Pin();
@@ -189,6 +201,9 @@ namespace buffer
     }
     bool BufferPoolManager::DeletePage(page_id_t page_id) {
         std::lock_guard<std::mutex> guard(latch_);
+        if (page_id == INVALID_PAGE_ID) {
+            return false;
+        }
 
         auto it = page_table_.find(page_id);
         
@@ -212,7 +227,7 @@ namespace buffer
         // 内存清理
         page_table_.erase(it);
         replacer_->Remove(fid);
-        page.ClearDirty();
+        page.ResetMetaData(INVALID_PAGE_ID);
         frame_list_.push_back(fid);
 
         return true;

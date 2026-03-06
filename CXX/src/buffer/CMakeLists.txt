@@ -1,6 +1,6 @@
 # CXX/src/buffer/CMakeLists.txt
 add_subdirectory(replacer)
-add_subdirectory(buffer_manager)
+add_subdirectory(buffer_pool_manager)
 
 add_library(haruhi_buffer INTERFACE)
 

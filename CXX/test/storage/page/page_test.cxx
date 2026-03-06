@@ -2,305 +2,393 @@
  * CXX/test/storage/page/page_test.cxx
  */
 #include <gtest/gtest.h>
-
 #include <vector>
 #include <cstring>
-#include <cstdint>
-#include <algorithm>
 #include <thread>
-#include <chrono>
+#include <future>
+#include <algorithm>
 
 #include "storage/page/page.h"
+
 namespace HaruhiDB
 {
 namespace storage
 {
-    // Helper: create a record with bytes 0,1,2,...
-static std::vector<std::byte> MakeRecord(size_t n) {
+
+// Helper: 生成测试数据
+static std::vector<std::byte> MakeData(size_t n, uint8_t pattern = 0xCC) {
     std::vector<std::byte> v(n);
-    for (size_t i = 0; i < n; ++i) v[i] = static_cast<std::byte>(i & 0xFF);
+    std::fill(v.begin(), v.end(), static_cast<std::byte>(pattern));
     return v;
 }
 
-// Helper: read record pointed by slot_id into a vector
-static std::vector<std::byte> ReadRecordFromSlot(Page &page, slot_id_t slot_id) {
-    auto res = page.GetSlot(slot_id);
-    if (!res.has_value()) return {};
-    Slot* s = res.value();
-    std::vector<std::byte> out(s->length);
-    const std::byte* base = page.RawData();
-    std::memcpy(out.data(), base + s->offset, s->length);
-    return out;
+// ---------------------------------------------------------
+// 1. 结构与初始化测试 (Header & Init)
+// ---------------------------------------------------------
+
+TEST(PageTest, PersistentHeaderLayout) {
+    // 验证关键字段位置，确保磁盘布局符合预期
+    EXPECT_EQ(offsetof(PersistentHeader, lsn), 0);
+    EXPECT_EQ(offsetof(PersistentHeader, page_id), 8);
+    EXPECT_LE(sizeof(PersistentHeader), HEADER_SIZE);
 }
 
-// ------------------------------
-// 1) Construction & InitBlank
-// ------------------------------
-
-TEST(PageInit, InitBlankBasic) {
+TEST(PageTest, InitBlankState) {
     Page p;
-    constexpr page_id_t pid = 12345;
+    page_id_t pid = 42;
     p.InitBlank(pid, PageType::HEAP);
 
-    const PersistentHeader* hdr = p.Header();
-    ASSERT_NE(hdr, nullptr);
-    EXPECT_EQ(hdr->page_id, pid);
-    EXPECT_EQ(hdr->page_type, PageType::HEAP);
-    EXPECT_EQ(hdr->slot_count, static_cast<slot_id_t>(0));
-    EXPECT_EQ(p.FreeSpace(), static_cast<size_t>(PAGE_SIZE - HEADER_SIZE));
+    auto* header = p.Header();
+    EXPECT_EQ(header->page_id, pid);
+    EXPECT_EQ(header->page_type, PageType::HEAP);
+    EXPECT_EQ(header->slot_count, 0);
+    EXPECT_EQ(header->lsn, 0);
+    // 初始空闲空间偏移应在页面最末尾
+    EXPECT_EQ(header->free_space_offset, PAGE_SIZE);
+    EXPECT_EQ(p.PinCount(), 0);
+    EXPECT_FALSE(p.IsDirty());
+    
+    // 验证初始可用空间 = 页面大小 - Header 占用的空间
+    EXPECT_EQ(p.FreeSpace(), PAGE_SIZE - sizeof(PersistentHeader));
 }
 
-TEST(PageInit, InitBlankOverwriteDifferentTypes) {
+// ---------------------------------------------------------
+// 2. 插入逻辑与 Slotted Page 布局测试
+// ---------------------------------------------------------
+
+
+
+TEST(PageTest, InsertRecordGrowthDirection) {
     Page p;
     p.InitBlank(1, PageType::HEAP);
-    // mutate header to see overwrite
-    p.Header()->slot_count = 5;
-    p.InitBlank(2, PageType::INTERNAL);
-    const PersistentHeader* hdr = p.Header();
-    EXPECT_EQ(hdr->page_id, 2);
-    EXPECT_EQ(hdr->page_type, PageType::INTERNAL);
-    // re-init should reset slot_count to 0
-    EXPECT_EQ(hdr->slot_count, static_cast<slot_id_t>(0));
-    EXPECT_EQ(p.FreeSpace(), static_cast<size_t>(PAGE_SIZE - HEADER_SIZE));
+    
+    auto data1 = MakeData(100, 0x11);
+    bool ok1 = p.InsertRecord(data1);
+    ASSERT_TRUE(ok1);
+
+    auto* header = p.Header();
+    auto* slots = p.SlotArray();
+
+    // 验证第一个 Slot
+    EXPECT_EQ(header->slot_count, 1);
+    EXPECT_EQ(slots[0].length, 100);
+    // 数据应存放在页面尾部
+    EXPECT_EQ(slots[0].offset, PAGE_SIZE - 100);
+    EXPECT_EQ(header->free_space_offset, PAGE_SIZE - 100);
+
+    // 验证第二个记录
+    auto data2 = MakeData(200, 0x22);
+    ASSERT_TRUE(p.InsertRecord(data2));
+    
+    EXPECT_EQ(header->slot_count, 2);
+    EXPECT_EQ(slots[1].length, 200);
+    // 第二个记录应存放在第一个记录的前面（地址更低）
+    EXPECT_EQ(slots[1].offset, PAGE_SIZE - 100 - 200);
+    EXPECT_EQ(header->free_space_offset, PAGE_SIZE - 300);
 }
 
-// ------------------------------
-// 2) Single-record insert tests
-// ------------------------------
-
-TEST(PageInsertSingle, InsertSingleRecordStandard) {
+TEST(PageTest, GetSlotValidation) {
     Page p;
-    p.InitBlank(10, PageType::HEAP);
-    auto rec = MakeRecord(16);
-    bool ok = p.InsertRecord(std::span<const std::byte>(rec.data(), rec.size()));
-    EXPECT_TRUE(ok);
-    EXPECT_EQ(p.Header()->slot_count, static_cast<slot_id_t>(1));
+    p.InitBlank(1, PageType::HEAP);
+    p.InsertRecord(MakeData(10));
 
-    auto read_back = ReadRecordFromSlot(p, 0);
-    EXPECT_EQ(read_back.size(), rec.size());
-    EXPECT_EQ(0, std::memcmp(read_back.data(), rec.data(), rec.size()));
+    // 合法获取
+    auto res = p.GetSlot(0);
+    ASSERT_TRUE(res.has_value());
+    EXPECT_EQ(res.value()->length, 10);
+
+    // 越界获取
+    auto res_invalid = p.GetSlot(1);
+    EXPECT_FALSE(res_invalid.has_value());
 }
 
-TEST(PageInsertSingle, InsertSingleRecordSmallSize) {
+TEST(PageTest, RecordDataIntegrity) {
     Page p;
-    p.InitBlank(11, PageType::HEAP);
-    auto rec = MakeRecord(1);
-    EXPECT_TRUE(p.InsertRecord(std::span<const std::byte>(rec.data(), rec.size())));
-    EXPECT_EQ(p.Header()->slot_count, static_cast<slot_id_t>(1));
+    p.InitBlank(1, PageType::HEAP);
+    auto original = MakeData(50, 0xAB);
+    p.InsertRecord(original);
 
-    auto read_back = ReadRecordFromSlot(p, 0);
-    ASSERT_EQ(read_back.size(), 1u);
-    EXPECT_EQ(read_back[0], rec[0]);
+    Slot* slot = p.GetSlot(0).value();
+    std::byte* raw_ptr = p.RawData() + slot->offset;
+    
+    EXPECT_EQ(0, std::memcmp(raw_ptr, original.data(), 50));
 }
 
-// ------------------------------
-// 3) FreeSpace behavior tests
-// ------------------------------
+// ---------------------------------------------------------
+// 3. 边界与容量测试
+// ---------------------------------------------------------
 
-TEST(PageFreeSpace, InitialFreeSpace) {
+TEST(PageTest, PageFullBoundary) {
     Page p;
-    p.InitBlank(20, PageType::HEADER);
-    EXPECT_EQ(p.FreeSpace(), static_cast<size_t>(PAGE_SIZE - HEADER_SIZE));
+    p.InitBlank(1, PageType::HEAP);
+
+    // 计算能插入的最大记录大小：
+    // 剩余空间 = PAGE_SIZE - HeaderSize - 1个SlotSize
+    size_t space_for_data = PAGE_SIZE - sizeof(PersistentHeader) - sizeof(Slot);
+    
+    EXPECT_TRUE(p.InsertRecord(MakeData(space_for_data)));
+    EXPECT_EQ(p.FreeSpace(), 0);
+    
+    // 此时再插入哪怕 1 字节也会失败，因为连存放 Slot 的空间都没了
+    EXPECT_FALSE(p.InsertRecord(MakeData(1)));
 }
 
-TEST(PageFreeSpace, AfterInsertFreeSpaceDecrease) {
+// ---------------------------------------------------------
+// 4. Buffer Pool 元数据测试 (Pin/Dirty)
+// ---------------------------------------------------------
+
+TEST(PageTest, BufferPoolMetadataLifecycle) {
     Page p;
-    p.InitBlank(21, PageType::HEAP);
-    size_t before = p.FreeSpace();
-    auto rec = MakeRecord(32);
-    ASSERT_TRUE(p.InsertRecord(std::span<const std::byte>(rec.data(), rec.size())));
-    size_t after = p.FreeSpace();
-    // expected decrease: record bytes + one Slot entry
-    size_t expected_decrease = rec.size() + sizeof(Slot);
-    EXPECT_EQ(before - after, expected_decrease);
-}
-
-// ------------------------------
-// 4) GetSlot valid/invalid tests
-// ------------------------------
-
-TEST(PageGetSlot, GetSlotInvalidIndexWhenEmpty) {
-    Page p;
-    p.InitBlank(30, PageType::HEAP);
-    auto r = p.GetSlot(0);
-    EXPECT_FALSE(r.has_value());
-    auto r2 = p.GetSlot(100);
-    EXPECT_FALSE(r2.has_value());
-}
-
-TEST(PageGetSlot, GetSlotValidAfterInsert) {
-    Page p;
-    p.InitBlank(31, PageType::HEAP);
-    auto rec = MakeRecord(12);
-    ASSERT_TRUE(p.InsertRecord(std::span<const std::byte>(rec.data(), rec.size())));
-    auto r = p.GetSlot(0);
-    ASSERT_TRUE(r.has_value());
-    Slot* s = r.value();
-    EXPECT_EQ(s->length, static_cast<uint16_t>(rec.size()));
-    auto read_back = ReadRecordFromSlot(p, 0);
-    EXPECT_EQ(read_back.size(), rec.size());
-    EXPECT_EQ(0, std::memcmp(read_back.data(), rec.data(), rec.size()));
-}
-
-// ------------------------------
-// 5) Multiple-record insert & fill tests
-// ------------------------------
-
-TEST(PageMultiInsert, InsertMultipleRecordsNoOverlap) {
-    Page p;
-    p.InitBlank(40, PageType::HEAP);
-    auto r1 = MakeRecord(8);
-    auto r2 = MakeRecord(20);
-    auto r3 = MakeRecord(5);
-
-    ASSERT_TRUE(p.InsertRecord(std::span<const std::byte>(r1.data(), r1.size())));
-    ASSERT_TRUE(p.InsertRecord(std::span<const std::byte>(r2.data(), r2.size())));
-    ASSERT_TRUE(p.InsertRecord(std::span<const std::byte>(r3.data(), r3.size())));
-
-    EXPECT_EQ(p.Header()->slot_count, static_cast<slot_id_t>(3));
-
-    auto a1 = ReadRecordFromSlot(p, 0);
-    auto a2 = ReadRecordFromSlot(p, 1);
-    auto a3 = ReadRecordFromSlot(p, 2);
-
-    EXPECT_EQ(a1.size(), r1.size());
-    EXPECT_EQ(a2.size(), r2.size());
-    EXPECT_EQ(a3.size(), r3.size());
-    EXPECT_EQ(0, std::memcmp(a1.data(), r1.data(), r1.size()));
-    EXPECT_EQ(0, std::memcmp(a2.data(), r2.data(), r2.size()));
-    EXPECT_EQ(0, std::memcmp(a3.data(), r3.data(), r3.size()));
-
-    auto s0 = p.GetSlot(0).value();
-    auto s1 = p.GetSlot(1).value();
-    auto s2 = p.GetSlot(2).value();
-    // check non-overlap property
-    EXPECT_TRUE(s0->offset + s0->length <= s1->offset || s1->offset + s1->length <= s0->offset);
-    EXPECT_TRUE(s1->offset + s1->length <= s2->offset || s2->offset + s2->length <= s1->offset);
-}
-
-TEST(PageMultiInsert, InsertUntilFullStops) {
-    Page p;
-    p.InitBlank(41, PageType::HEAP);
-
-    // Insert minimal records repeatedly until InsertRecord returns false.
-    // Cap number of iterations to avoid pathological infinite loops.
-    const size_t cap = 10000;
-    size_t inserted = 0;
-    for (size_t i = 0; i < cap; ++i) {
-        auto r = MakeRecord(4); // small record to fill gradually
-        if (!p.InsertRecord(std::span<const std::byte>(r.data(), r.size()))) break;
-        ++inserted;
-    }
-    // After loop, either we filled the page (inserted > 0) or reached cap
-    EXPECT_GT(inserted, 0u);
-    // further insert must fail (try inserting a single tiny record)
-    auto tiny = MakeRecord(1);
-    bool ok = p.InsertRecord(std::span<const std::byte>(tiny.data(), tiny.size()));
-    // ok may be false if already full; either false or insertion succeeded only if capacity remained.
-    // We assert the page's reported FreeSpace is non-negative and consistent with header.
-    EXPECT_LE(p.Header()->slot_count, static_cast<slot_id_t>(inserted + 1));
-    EXPECT_GE(p.FreeSpace(), 0u);
-}
-
-// ------------------------------
-// 6) Pin / UnPin tests (basic and concurrent)
-// ------------------------------
-
-TEST(PagePin, PinUnPinBasic) {
-    Page p;
-    EXPECT_EQ(p.PinCount(), 0);
     p.Pin();
-    EXPECT_EQ(p.PinCount(), 1);
     p.Pin();
     EXPECT_EQ(p.PinCount(), 2);
+    
     p.UnPin();
     EXPECT_EQ(p.PinCount(), 1);
-    p.UnPin();
-    EXPECT_EQ(p.PinCount(), 0);
+    
+    EXPECT_FALSE(p.IsDirty());
+    p.MarkDirty();
+    EXPECT_TRUE(p.IsDirty());
+    p.ClearDirty();
+    EXPECT_FALSE(p.IsDirty());
 }
 
-TEST(PagePin, PinUnPinConcurrent) {
+TEST(PageTest, ResetMetaDataPreservesPhysicalData) {
     Page p;
-    const int threads = 8;
-    const int per_thread_ops = 1000;
-    std::vector<std::thread> th;
-    for (int t = 0; t < threads; ++t) {
-        th.emplace_back([&p, per_thread_ops]() {
-            for (int i = 0; i < per_thread_ops; ++i) {
+    p.InitBlank(1, PageType::HEAP);
+    p.InsertRecord(MakeData(100));
+    p.MarkDirty();
+    p.Pin();
+
+    // 模拟 Buffer Pool 复用该 Page 对象给另一个物理页 ID
+    p.ResetMetaData(999);
+
+    EXPECT_EQ(p.PageId(), 999);
+    EXPECT_EQ(p.PinCount(), 0);
+    EXPECT_FALSE(p.IsDirty());
+    // 注意：ResetMetaData 往往只重置管理状态，物理内存中的 SlotCount 通常不应被抹除
+    // 除非逻辑要求彻底 InitBlank
+    EXPECT_EQ(p.Header()->slot_count, 1); 
+}
+
+// ---------------------------------------------------------
+// 5. 并发控制测试 (Latch Logic)
+// ---------------------------------------------------------
+
+TEST(PageTest, SharedLatchConcurrency) {
+    Page p;
+    
+    // 测试：多个读者可以同时持有锁
+    p.RLock();
+    std::atomic<bool> second_reader_success{false};
+    
+    std::thread t1([&]() {
+        p.RLock();
+        second_reader_success = true;
+        p.RUnLock();
+    });
+    
+    t1.join();
+    EXPECT_TRUE(second_reader_success);
+    p.RUnLock();
+}
+
+TEST(PageTest, ExclusiveLatchBlocking) {
+    Page p;
+    p.WLock(); // 持有写锁
+    
+    std::promise<void> ready_promise;
+    std::future<void> ready_future = ready_promise.get_future();
+    std::atomic<bool> reader_entered{false};
+
+    std::thread reader([&]() {
+        ready_promise.set_value();
+        p.RLock(); // 应该被阻塞
+        reader_entered = true;
+        p.RUnLock();
+    });
+
+    ready_future.wait();
+    // 给线程一点点启动时间
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    
+    EXPECT_FALSE(reader_entered); // 读者必须被写者阻塞
+    
+    p.WUnLock(); // 释放写锁
+    reader.join();
+    EXPECT_TRUE(reader_entered);
+}
+// ---------------------------------------------------------
+// 15) 联动测试：插入与脏页标记的生命周期 (Insert + Dirty Linkage)
+// ---------------------------------------------------------
+TEST(PageLinkage, InsertAndDirtyCycle) {
+    Page p;
+    p.InitBlank(100, PageType::HEAP);
+    
+    // 逻辑联动：在 BufferPool 中，写入操作必须伴随 MarkDirty
+    auto data = std::vector<std::byte>(20, std::byte{0x01});
+    
+    p.WLock();
+    if (p.InsertRecord(data)) {
+        p.MarkDirty();
+    }
+    p.WUnLock();
+    
+    EXPECT_TRUE(p.IsDirty());
+    EXPECT_EQ(p.Header()->slot_count, 1);
+
+    // 模拟磁盘刷新 (Flush)
+    p.ClearDirty();
+    EXPECT_FALSE(p.IsDirty());
+    
+    // 验证：清除脏标记不应影响物理数据
+    ASSERT_TRUE(p.GetSlot(0).has_value());
+    EXPECT_EQ(p.GetSlot(0).value()->length, 20);
+}
+
+// ---------------------------------------------------------
+// 16) 联动测试：Slotted Page 空间挤压 (Slot Array vs Record Space)
+// ---------------------------------------------------------
+TEST(PageLinkage, PincerMovementStress) {
+    Page p;
+    p.InitBlank(500, PageType::HEAP);
+    
+    // 这是一个关键的联动：Slot 数组向后长，数据向前长，它们在中间“会师”
+    // 我们不断插入极小记录，直到空间不足
+    size_t count = 0;
+    while (true) {
+        auto tiny_rec = std::vector<std::byte>(1, std::byte{0xEE});
+        // 每次插入消耗：1字节数据 + sizeof(Slot)字节的目录项
+        if (!p.InsertRecord(tiny_rec)) {
+            break; 
+        }
+        count++;
+    }
+    
+    // 验证联动一致性：FreeSpace 应该不足以再容纳 (1字节数据 + 1个Slot)
+    EXPECT_LT(p.FreeSpace(), sizeof(Slot) + 1);
+    EXPECT_EQ(p.Header()->slot_count, count);
+    
+    // 检查最后一条记录的完整性
+    auto last_slot = p.GetSlot(count - 1);
+    ASSERT_TRUE(last_slot.has_value());
+    EXPECT_EQ(*(p.RawData() + last_slot.value()->offset), std::byte{0xEE});
+}
+
+// ---------------------------------------------------------
+// 17) 联动测试：并发 Pin 与 ResetMetaData 的安全性
+// ---------------------------------------------------------
+TEST(PageLinkage, ConcurrencyPinAndReset_Fixed) {
+    Page p;
+    p.InitBlank(1, PageType::HEAP);
+    
+    const int readers = 10;
+    std::vector<std::thread> threads;
+    std::atomic<bool> stop{false};
+
+    for (int i = 0; i < readers; ++i) {
+        threads.emplace_back([&p, &stop]() {
+            while (!stop) {
                 p.Pin();
-            }
-            for (int i = 0; i < per_thread_ops; ++i) {
+                std::this_thread::yield();
                 p.UnPin();
             }
         });
     }
-    for (auto &t : th) t.join();
-    // all pins/unpins should cancel out
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 1. 先发停止信号
+    stop = true;
+    // 2. 等待所有读线程退出，此时 PinCount 理论上应该回到 0（因为 Pin/UnPin 配对）
+    for (auto &t : threads) t.join();
+
+    // 3. 此时再 Reset 才是安全的
+    p.ResetMetaData(200);
+    
     EXPECT_EQ(p.PinCount(), 0);
+    EXPECT_EQ(p.PageId(), 200);
 }
 
-// ------------------------------
-// 7) Dirty flag tests
-// ------------------------------
-
-TEST(PageDirty, MarkDirtyAndQuery) {
+// ---------------------------------------------------------
+// 18) 联动测试：RawData 修改与 Header 映射一致性
+// ---------------------------------------------------------
+TEST(PageLinkage, RawMemoryVsHeaderInterplay) {
     Page p;
-    p.InitBlank(50, PageType::HEAP);
-    EXPECT_FALSE(p.IsDirty());
-    p.MarkDirty();
-    EXPECT_TRUE(p.IsDirty());
-}
-
-TEST(PageDirty, InitBlankResetsDirty) {
-    Page p;
-    p.InitBlank(51, PageType::HEAP);
-    p.MarkDirty();
-    EXPECT_TRUE(p.IsDirty());
-    // Re-initialize should clear dirty flag according to common semantics
-    p.InitBlank(52, PageType::HEAP);
-    EXPECT_FALSE(p.IsDirty());
-}
-
-// ------------------------------
-// 8) RawData read/write and header interplay
-// ------------------------------
-
-TEST(PageRawData, RawDataWriteReadConsistency) {
-    Page p;
-    p.InitBlank(60, PageType::HEAP);
-    // write after header region
-    std::byte pattern[6] = {std::byte(0xAA), std::byte(0x01), std::byte(0x02),
-                            std::byte(0x03), std::byte(0x04), std::byte(0x05)};
+    p.InitBlank(777, PageType::HEAP);
+    
+    // 直接操作原始内存
     std::byte* raw = p.RawData();
-    std::byte* target = raw + HEADER_SIZE; // payload area
-    std::memcpy(target, pattern, sizeof(pattern));
-    std::byte sanity[6];
-    std::memcpy(sanity, target, sizeof(sanity));
-    EXPECT_EQ(0, std::memcmp(sanity, pattern, sizeof(pattern)));
+    
+    // 联动 1：通过 RawData 修改 LSN
+    lsn_t new_lsn = 0x12345678;
+    std::memcpy(raw + offsetof(PersistentHeader, lsn), &new_lsn, sizeof(lsn_t));
+    EXPECT_EQ(p.Header()->lsn, new_lsn);
+    
+    // 联动 2：通过 Header 修改 PageType
+    p.Header()->page_type = PageType::LEAF;
+    EXPECT_EQ(static_cast<PageType>(*(raw + offsetof(PersistentHeader, page_type))), PageType::LEAF);
 }
 
-TEST(PageRawData, RawDataModifyHeaderBytesReflectsInHeader) {
+// ---------------------------------------------------------
+// 19) 联动测试：复杂操作序列 (Insert -> Reset -> Re-Init)
+// ---------------------------------------------------------
+TEST(PageLinkage, ObjectReuseLifecycle) {
     Page p;
-    p.InitBlank(61, PageType::HEAP);
-    // Set page_id via RawData directly (overwrite header bytes)
-    page_id_t new_pid = 0xDEADBEEF;
-    std::byte* raw = p.RawData();
-    // memcpy new page id into header beginning (assumes page_id_t is at header offset 0)
-    // This relies on PersistentHeader layout where page_id is at a known offset.
-    // Use memcpy into p.Header() as an alternative if layout is unsure.
-    std::memcpy(raw + offsetof(PersistentHeader, page_id), &new_pid, sizeof(new_pid));
-    // Now check header view sees it
-    EXPECT_EQ(p.Header()->page_id, new_pid);
+    
+    // 第一阶段：作为 HEAP 页使用
+    p.InitBlank(1, PageType::HEAP);
+    p.InsertRecord(std::vector<std::byte>(100, std::byte{0x11}));
+    p.MarkDirty();
+    p.Pin();
+    
+    // 第二阶段：被淘汰并重用于 B+Tree Leaf 页
+    p.ResetMetaData(2); // BPM 准备重用该对象
+    EXPECT_EQ(p.PinCount(), 0);
+    EXPECT_FALSE(p.IsDirty());
+    
+    p.InitBlank(2, PageType::LEAF); // 重新格式化
+    EXPECT_EQ(p.Header()->slot_count, 0);
+    EXPECT_EQ(p.FreeSpace(), PAGE_SIZE - sizeof(PersistentHeader));
+    
+    // 验证新页面的插入联动
+    EXPECT_TRUE(p.InsertRecord(std::vector<std::byte>(50, std::byte{0x22})));
+    EXPECT_EQ(p.Header()->slot_count, 1);
 }
 
-// ------------------------------
-// Optional: main if test binary does not link gtest_main.
-// ------------------------------
-#ifndef GTEST_HAS_MAIN
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+// ---------------------------------------------------------
+// 20) 极端联动：大量变长记录并发读写锁竞争
+// ---------------------------------------------------------
+TEST(PageLinkage, MultithreadedReadWriteInterplay) {
+    Page p;
+    p.InitBlank(99, PageType::HEAP);
+    std::atomic<int> success_count{0};
+    const int num_workers = 4;
+
+    auto worker = [&](int id) {
+        for (int i = 0; i < 50; ++i) {
+            auto data = MakeData(10, static_cast<uint8_t>(id));
+            p.WLock();
+            if (p.InsertRecord(data)) {
+                p.MarkDirty();
+                success_count++;
+            }
+            p.WUnLock();
+            
+            p.RLock();
+            if (p.Header()->slot_count > 0) {
+                auto s = p.GetSlot(0);
+                (void)s; // 模拟读取
+            }
+            p.RUnLock();
+        }
+    };
+
+    std::vector<std::thread> workers;
+    for (int i = 0; i < num_workers; ++i) workers.emplace_back(worker, i);
+    for (auto &t : workers) t.join();
+
+    EXPECT_EQ(p.Header()->slot_count, success_count.load());
 }
-#endif
 } // namespace storage
 } // namespace HaruhiDB

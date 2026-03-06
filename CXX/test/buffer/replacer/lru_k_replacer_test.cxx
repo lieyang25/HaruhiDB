@@ -1,19 +1,6 @@
 /**
  * CXX/test/buffer/replacer/lru_k_replacer_test.cxx
  */
-    // test/replacer/lru_k_replacer_test.cpp
-//
-// Comprehensive GoogleTest suite for HaruhiDB::replacer::LruKReplacer.
-//
-// Test strategy:
-//
-// 1. Each public method gets at least two focused tests.
-// 2. Many tests chain multiple method calls to verify interactions (RecordAccess -> SetEvictable -> Victim -> Remove -> Size).
-// 3. Concurrent RecordAccess is exercised to detect basic thread-safety regressions.
-// 4. Tests avoid depending on private implementation details; they assert observable invariants.
-//
-// Note: comments are in English as requested.
-
 #include "gtest/gtest.h"
 
 #include "buffer/replacer/lru_k_replacer.h"
@@ -363,6 +350,122 @@ namespace replacer
             EXPECT_TRUE(id == 0 || id == 1 || id == 2);
         }
     }
+//
+    // LRU-K Core Logic Tests
+    //
 
+    TEST_F(LruKReplacerTest, InfDistancePriorityTest) {
+        // 验证：访问次数少于 K 的 frame（Inf距离）优先级高于访问次数满 K 的 frame
+        // K = 3
+        LruKReplacer r(10, 3);
+
+        // Frame 1: 访问 2 次 ( < 3, 属于 Inf 距离)
+        r.RecordAccess(FID(1));
+        r.RecordAccess(FID(1));
+        r.SetEvictable(FID(1), true);
+
+        // Frame 2: 访问 3 次 ( >= 3, 属于有限距离)
+        // 即使它的最近访问时间比 Frame 1 更晚，也应该先淘汰 Frame 1
+        r.RecordAccess(FID(2));
+        r.RecordAccess(FID(2));
+        r.RecordAccess(FID(2));
+        r.SetEvictable(FID(2), true);
+
+        frame_id_t victim;
+        ASSERT_TRUE(r.Victim(victim));
+        EXPECT_EQ(victim, FID(1)); // 应当先淘汰访问次数不足 K 的
+    }
+
+    TEST_F(LruKReplacerTest, InfDistanceLruTieBreakTest) {
+        // 验证：当多个 frame 都是 Inf 距离时，按最早访问时间（LRU）淘汰
+        LruKReplacer r(10, 2);
+
+        // Frame 1 最早访问
+        r.RecordAccess(FID(1));
+        // Frame 2 稍后访问
+        r.RecordAccess(FID(2));
+
+        r.SetEvictable(FID(1), true);
+        r.SetEvictable(FID(2), true);
+
+        frame_id_t victim;
+        ASSERT_TRUE(r.Victim(victim));
+        EXPECT_EQ(victim, FID(1)); // 1 比 2 更早进入系统
+    }
+
+    TEST_F(LruKReplacerTest, KDistanceComparisonTest) {
+        // 验证：当所有 frame 访问都满 K 次时，比较第 K 次访问的时间戳
+        // 算法应当选择 $t_{k}(p)$ 最小（即最久远）的 frame
+        LruKReplacer r(10, 2);
+
+        // Frame 1: 访问时间线 [10, 100] -> 第 2 次访问是 10
+        r.RecordAccess(FID(1)); // t=10 (假设)
+        r.RecordAccess(FID(1)); // t=100
+
+        // Frame 2: 访问时间线 [20, 30] -> 第 2 次访问是 20
+        r.RecordAccess(FID(2)); // t=20
+        r.RecordAccess(FID(2)); // t=30
+
+        r.SetEvictable(FID(1), true);
+        r.SetEvictable(FID(2), true);
+
+        frame_id_t victim;
+        ASSERT_TRUE(r.Victim(victim));
+        // 比较的是倒数第 K 次访问：Frame 1 的倒数第2次是 t=10，Frame 2 是 t=20
+        // 10 < 20，所以 Frame 1 的 backward K-distance 更大
+        EXPECT_EQ(victim, FID(1));
+    }
+
+    TEST_F(LruKReplacerTest, RemoveResetsHistoryTest) {
+        // 验证：Remove 操作会清除该 frame 的所有访问历史
+        LruKReplacer r(10, 2);
+
+        // 让 Frame 1 获得“由于访问次数多而更安全”的地位
+        r.RecordAccess(FID(1));
+        r.RecordAccess(FID(1));
+        r.RecordAccess(FID(1)); 
+
+        r.Remove(FID(1)); // 彻底移除
+
+        // 重新加入系统，此时它应该被视为全新 frame（0次访问历史）
+        r.RecordAccess(FID(1));
+        r.SetEvictable(FID(1), true);
+
+        // 加入另一个访问了 2 次的 Frame 2
+        r.RecordAccess(FID(2));
+        r.RecordAccess(FID(2));
+        r.SetEvictable(FID(2), true);
+
+        frame_id_t victim;
+        ASSERT_TRUE(r.Victim(victim));
+        // 如果历史没清空，1 访问了 4 次应比 2 安全；
+        // 如果历史清空了，1 只有 1 次访问 (Inf距离)，应先被淘汰。
+        EXPECT_EQ(victim, FID(1));
+    }
+
+    TEST_F(LruKReplacerTest, HeavyConcurrencyStressTest) {
+        // 压力测试：多线程频繁存取、设置状态与淘汰
+        constexpr int num_threads = 10;
+        constexpr int num_ops = 1000;
+        LruKReplacer r(100, 2);
+
+        std::vector<std::thread> workers;
+        for (int i = 0; i < num_threads; ++i) {
+            workers.emplace_back([&r, i]() {
+                for (int j = 0; j < num_ops; ++j) {
+                    frame_id_t fid = (i * 10 + j % 10);
+                    r.RecordAccess(fid);
+                    r.SetEvictable(fid, (j % 2 == 0));
+                    if (j % 5 == 0) {
+                        frame_id_t v;
+                        r.Victim(v);
+                    }
+                }
+            });
+        }
+        for (auto &t : workers) t.join();
+        // 只要不 crash 且 latch_ 保护正常，即通过基本并发测试
+        SUCCEED();
+    }
 } // namespace replacer
 } // namespace HaruhiDB

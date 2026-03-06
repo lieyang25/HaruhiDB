@@ -163,7 +163,7 @@ namespace replacer
         // 中文：内部选择 victim
         frame_id = PickVictimInternal();
 
-        if (frame_id == -1) {
+        if (frame_id == std::numeric_limits<frame_id_t>::max()) {
             return false;
         }
 
@@ -254,7 +254,7 @@ namespace replacer
     {
         // English: selected victim frame id
         // 中文：最终选择的 victim
-        frame_id_t victim = -1;
+        frame_id_t victim = std::numeric_limits<frame_id_t>::max();
 
         // English: largest backward distance found so far
         // 中文：当前最大 backward distance
@@ -272,23 +272,27 @@ namespace replacer
         {
             auto &frame = frames_[i];
 
-            // English: skip non-evictable or unused frames
-            // 中文：跳过不可淘汰或未访问 frame
-            if (!frame.evictable || frame.history.empty()) {
+            // English: skip non-evictable frames
+            // 中文：跳过不可淘汰 frame
+            if (!frame.evictable) {
                 continue;
             }
 
             uint64_t distance = 0;
 
-            // English: first recorded access
-            // 中文：最早记录的访问时间
-            uint64_t first_access = frame.history.front();
-
             // English: compute backward K-distance
             // 中文：计算 backward K-distance
-            if (frame.history.size() < k_) {
+            // Note:
+            // - empty history (SetEvictable called before RecordAccess) is treated as coldest.
+            // - history size < K follows standard LRU-K "infinite distance" behavior.
+            uint64_t first_access = 0;
+            if (frame.history.empty()) {
+                distance = UINT64_MAX;
+            } else if (frame.history.size() < k_) {
+                first_access = frame.history.front();
                 distance = UINT64_MAX;
             } else {
+                first_access = frame.history.front();
                 distance = current_timestamp_ - frame.history.front();
             }
 

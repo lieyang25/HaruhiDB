@@ -48,6 +48,11 @@ namespace storage
     Page::Page() : pin_count_(0),is_dirty_(false)
     {
         std::memset(data_.data(),0,PAGE_SIZE);
+        Header()->page_id = INVALID_PAGE_ID;
+        Header()->page_type = PageType::INVALID;
+        Header()->slot_count = 0;
+        Header()->lsn = 0;
+        Header()->free_space_offset = PAGE_SIZE;
     }
 
     // Page::~Page() is default, no special cleanup needed
@@ -300,6 +305,16 @@ namespace storage
     const std::byte* Page::RawData() const noexcept
     {
         return data_.data();
+    }
+
+    page_data_t& Page::Data() noexcept
+    {
+        return data_;
+    }
+
+    const page_data_t& Page::Data() const noexcept
+    {
+        return data_;
     }
 
 } // namespace storage

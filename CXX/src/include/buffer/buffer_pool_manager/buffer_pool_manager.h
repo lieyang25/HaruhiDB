@@ -1,10 +1,18 @@
 /**
- * CXX/src/include/buffer/buffer_manager/buffer_pool_manager.h
+ * CXX/src/include/buffer/buffer_pool_manager/buffer_pool_manager.h
  */
+
+#pragma once
 
 #include "storage/disk/disk_manager.h"
 #include "storage/page/page.h"
 #include "buffer/replacer/lru_k_replacer.h"
+
+#include <deque>
+#include <expected>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 namespace HaruhiDB
 {
@@ -33,8 +41,8 @@ namespace buffer
         /** 映射表：用于快速通过 page_id（逻辑页 ID）找到对应的 frame_id（物理内存索引） */
         std::unordered_map<page_id_t, frame_id_t> page_table_;
 
-        /** 实际存储页面数据的连续内存区域，数组长度为 pool_size_ */
-        std::vector<storage::Page> pages_;
+        /** 存储所有 frame 对应的 Page。使用 deque 以支持不可移动对象（Page 含 shared_mutex）。 */
+        std::deque<storage::Page> pages_;
 
         /** 用于保证 BufferPoolManager 内部数据结构（如 page_table_）线程安全的互斥锁 */
         mutable std::mutex latch_;
@@ -50,4 +58,3 @@ namespace buffer
     };
 } // namespace buffer
 } // namespace HaruhiDB
-

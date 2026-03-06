@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <array>
+#include <limits>
 
 namespace HaruhiDB
 {
@@ -20,5 +21,5 @@ namespace HaruhiDB
     using slot_id_t = uint16_t;
     using lsn_t = uint64_t;
     
-    static constexpr page_id_t INVALID_PAGE_ID = -1;
+    static constexpr page_id_t INVALID_PAGE_ID = std::numeric_limits<page_id_t>::max();
 } // namespace HaruhiDB

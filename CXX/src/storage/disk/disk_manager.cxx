@@ -348,7 +348,7 @@ namespace storage
                 HaruhiDB::ErrorCode::FileNotOpen});
         }
 
-        if (page_id < 0) {
+        if (page_id == INVALID_PAGE_ID) {
             return std::unexpected(IOErr{
                 "ReadPage: invalid page_id",
                 HaruhiDB::ErrorCode::ReadPageOutOfRange});
@@ -395,7 +395,7 @@ namespace storage
                 HaruhiDB::ErrorCode::FileNotOpen});
         }
 
-        if (page_id < 0) {
+        if (page_id == INVALID_PAGE_ID) {
             return std::unexpected(IOErr{
                 "WritePage: invalid page_id",
                 HaruhiDB::ErrorCode::WriteIOError});
@@ -570,4 +570,3 @@ namespace storage
 
 } // namespace storage
 } // namespace HaruhiDB
-
