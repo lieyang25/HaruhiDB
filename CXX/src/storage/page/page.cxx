@@ -236,6 +236,17 @@ namespace storage
     {
         is_dirty_.store(true,std::memory_order_relaxed);
     }
+     /**     
+     * English:
+     * Marks the page not as dirty (modified).
+     *
+     * 中文：
+     * 标记页面不为 dirty（已修改）。
+     */
+    void Page::ClearDirty() noexcept
+    {
+        is_dirty_.store(false,std::memory_order_relaxed);
+    }
     bool Page::IsDirty() const noexcept
     {
         return is_dirty_.load(std::memory_order_relaxed);

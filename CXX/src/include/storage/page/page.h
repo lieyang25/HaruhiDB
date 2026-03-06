@@ -302,6 +302,14 @@ namespace storage
          */
         void MarkDirty() noexcept;
 
+        /**     
+         * English:
+         * Marks the page not as dirty (modified).
+         *
+         * 中文：
+         * 标记页面不为 dirty（已修改）。
+         */
+        void ClearDirty() noexcept;
 
         /**
          * English:
