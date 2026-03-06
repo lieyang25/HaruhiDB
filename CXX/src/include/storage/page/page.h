@@ -182,7 +182,7 @@ namespace storage
          * 将页面初始化为一个空页面，并指定 page_id 与类型。
          */
         void InitBlank(page_id_t page_id,PageType page_type);
-        
+
         void ResetMetaData(page_id_t page_id);
         /**
          * English:
@@ -390,9 +390,9 @@ namespace storage
          * 中文：
          * 返回页面page_data_t。
          */
-        page_data_t& Page::Data() noexcept;
+        page_data_t& Data() noexcept;
 
-        const page_data_t& Page::Data() const noexcept;
+        const page_data_t& Data() const noexcept;
         
     private:
 

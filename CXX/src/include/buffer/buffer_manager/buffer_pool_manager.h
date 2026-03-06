@@ -19,9 +19,9 @@ namespace buffer
         std::expected<storage::Page*,bool> FetchPage(page_id_t page_id);
         std::expected<storage::Page*,bool> NewPage(page_id_t *page_id);
         bool UnpinPage(page_id_t page_id,bool is_dirty);
-        bool FlushPage(page_id_t page_id);
         bool DeletePage(page_id_t page_id);
-        void FlushAllPages();
+        std::expected<bool,bool> FlushPage(page_id_t page_id);
+        std::expected<bool,bool> FlushAllPages();
 
     private:
         std::expected<frame_id_t,bool> GetVictimFrame();
