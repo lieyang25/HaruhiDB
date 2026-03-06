@@ -182,8 +182,8 @@ namespace storage
          * 将页面初始化为一个空页面，并指定 page_id 与类型。
          */
         void InitBlank(page_id_t page_id,PageType page_type);
-
-
+        
+        void ResetMetaData(page_id_t page_id);
         /**
          * English:
          * Returns a pointer to the persistent header.
@@ -382,6 +382,17 @@ namespace storage
 
 
         const std::byte* RawData() const noexcept;
+
+        /**
+         * English:
+         * Returns raw page memory page_data_t.
+         *
+         * 中文：
+         * 返回页面page_data_t。
+         */
+        page_data_t& Page::Data() noexcept;
+
+        const page_data_t& Page::Data() const noexcept;
         
     private:
 

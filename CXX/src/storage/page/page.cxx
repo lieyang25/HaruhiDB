@@ -77,6 +77,12 @@ namespace storage
         is_dirty_.store(false);
     }
 
+    void Page::ResetMetaData(page_id_t page_id)
+    {
+        Header()->page_id = page_id;
+        pin_count_.store(0);
+        is_dirty_.store(false);
+    }
     /**
      * Header accessors
      *
