@@ -4,7 +4,7 @@
 
 #include "storage/disk/disk_manager.h"
 #include "storage/page/page.h"
-#include "replacer/lru_k_replacer.h"
+#include "buffer/replacer/lru_k_replacer.h"
 
 namespace HaruhiDB
 {
