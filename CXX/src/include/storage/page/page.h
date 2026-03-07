@@ -135,23 +135,6 @@ namespace storage
     // 确保 header 不超过 HEADER_SIZE
     static_assert(sizeof(PersistentHeader) <= HEADER_SIZE,"PersistentHeader size must lower HEADER_SIZE");
 
-
-    /**
-     * English:
-     * Slot represents a record entry in the slot directory.
-     * It stores the offset and length of a record.
-     *
-     * 中文：
-     * Slot 表示 slot directory 中的一个记录条目，
-     * 用于记录某条记录在页面中的偏移和长度。
-     */
-    struct Slot
-    {
-        uint16_t offset;   // record offset / 记录偏移
-        uint16_t length;   // record length / 记录长度
-    };
-
-
     /**
      * English:
      * Page is the in-memory representation of a database page.
@@ -218,53 +201,6 @@ namespace storage
 
         /**
          * English:
-         * Returns pointer to slot array.
-         *
-         * 中文：
-         * 返回 slot 数组指针。
-         */
-        Slot* SlotArray() noexcept;
-
-        const Slot* SlotArray() const noexcept;
-
-
-        /**
-         * English:
-         * Get a specific slot by slot id.
-         *
-         * 中文：
-         * 根据 slot_id 获取 slot。
-         */
-        std::expected<Slot*,bool> GetSlot(slot_id_t slot_id);
-
-
-        /**
-         * English:
-         * Calculates available free space inside the page.
-         *
-         * 中文：
-         * 计算当前页面剩余可用空间。
-         */
-        size_t FreeSpace() const noexcept;
-
-
-        /**
-         * English:
-         * Inserts a record into the page.
-         *
-         * 中文：
-         * 向页面插入一条记录。
-         */
-        bool InsertRecord(std::span<const std::byte> record);
-
-
-        /**
-         * ---------------- Buffer Pool Metadata ----------------
-         */
-
-
-        /**
-         * English:
          * Increases pin count of this page.
          *
          * 中文：
@@ -322,11 +258,6 @@ namespace storage
 
 
         /**
-         * ---------------- Concurrency Control ----------------
-         */
-
-
-        /**
          * English:
          * Acquire read lock.
          *
@@ -364,12 +295,6 @@ namespace storage
          * 释放写锁。
          */
         void WUnLock() ;
-
-
-        /**
-         * ---------------- Raw Page Access ----------------
-         */
-
 
         /**
          * English:
