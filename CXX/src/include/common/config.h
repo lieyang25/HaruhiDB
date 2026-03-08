@@ -26,4 +26,5 @@ namespace HaruhiDB
     static constexpr uint16_t FLAG_MOV = 0x4000;       
     
     static constexpr page_id_t INVALID_PAGE_ID = std::numeric_limits<page_id_t>::max();
+    static constexpr slot_id_t INVALID_SLOT_ID = std::numeric_limits<slot_id_t>::max();
 } // namespace HaruhiDB
