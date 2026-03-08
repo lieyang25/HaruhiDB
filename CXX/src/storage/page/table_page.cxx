@@ -2,216 +2,232 @@
  * CXX/src/storage/page/table_page.cxx
  */
 
-#include "page/table_page.h"
+#include "storage/page/table_page.h"
+
 #include <cstring>
 
 namespace HaruhiDB
 {
 namespace storage
 {
-    //采用隐式链表法，链表头在header的free_list_head
-    //插入时优先查找链表，INVALID_SLOT_ID在此处代表 无删除过 的空slot位置
-    //如果不存在则在slot后方新增一个位置
-    slot_id_t TablePage::InsertTuple(record::Tuple& tuple)
+    namespace
     {
-        // size check
-        page_->WLock();
-        uint16_t size = tuple.Size();
-        if (size == 0 || size > PAGE_SIZE - sizeof(PersistentHeader) - sizeof(Slot)) {
-            return INVALID_SLOT_ID;
+        class WritePageGuard
+        {
+        public:
+            explicit WritePageGuard(Page* page) : page_(page) { page_->WLock(); }
+            ~WritePageGuard() { page_->WUnLock(); }
+
+            WritePageGuard(const WritePageGuard&) = delete;
+            WritePageGuard& operator=(const WritePageGuard&) = delete;
+
+        private:
+            Page* page_;
+        };
+
+        class ReadPageGuard
+        {
+        public:
+            explicit ReadPageGuard(Page* page) : page_(page) { page_->RLock(); }
+            ~ReadPageGuard() { page_->RUnLock(); }
+
+            ReadPageGuard(const ReadPageGuard&) = delete;
+            ReadPageGuard& operator=(const ReadPageGuard&) = delete;
+
+        private:
+            Page* page_;
+        };
+    } // namespace
+
+    std::expected<slot_id_t, TablePageErr> TablePage::InsertTuple(const record::Tuple& tuple)
+    {
+        if (page_ == nullptr) {
+            return std::unexpected(TablePageErr{"TablePage::InsertTuple: null page", TablePageErrCode::NullPage});
         }
 
-        auto header = page_->Header();
+        WritePageGuard guard(page_);
+        const uint16_t tuple_size = tuple.Size();
+        if (tuple_size == 0 || tuple_size > PAGE_SIZE - sizeof(PersistentHeader) - sizeof(Slot)) {
+            return std::unexpected(
+                TablePageErr{"TablePage::InsertTuple: invalid tuple size", TablePageErrCode::InvalidTupleSize});
+        }
 
-        // lock page for write
+        auto* header = page_->Header();
 
-        // try reuse free slot
         slot_id_t reuse_slot = INVALID_SLOT_ID;
         if (header->free_list_head != INVALID_SLOT_ID) {
             reuse_slot = header->free_list_head;
-            // pop head
-            Slot* slot = GetSlot(reuse_slot);
-            // slot.offset currently stores next_free (by convention)
-            header->free_list_head = slot->offset;
-            // we'll reuse this slot: allocate data area below
-            // Note: slot's previous offset no longer points to data; we'll overwrite it.
+            if (reuse_slot >= header->slot_count) {
+                return std::unexpected(
+                    TablePageErr{"TablePage::InsertTuple: free list corrupted", TablePageErrCode::FreeListCorrupted});
+            }
+            const Slot* reusable = GetSlot(reuse_slot);
+            header->free_list_head = reusable->GetOffset();
         }
 
-        // compute required extra header bytes if adding a new slot
-        bool adding_new_slot = (reuse_slot == INVALID_SLOT_ID);
-        uint16_t needed = size;
+        const bool adding_new_slot = (reuse_slot == INVALID_SLOT_ID);
+        uint16_t needed = tuple_size;
         if (adding_new_slot) {
-            needed += static_cast<uint16_t>(sizeof(Slot));
+            needed = static_cast<uint16_t>(needed + sizeof(Slot));
         }
-
         if (FreeSpace() < needed) {
-            page_->WUnLock();
-            return INVALID_SLOT_ID;
+            return std::unexpected(
+                TablePageErr{"TablePage::InsertTuple: not enough free space", TablePageErrCode::InsufficientSpace});
         }
 
-        // allocate data area: grow downward
-        uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - size);
-        std::byte* dest = page_->RawData() + new_data_offset;
-
-        // copy tuple bytes (assume tuple.Data() returns std::span<std::byte>)
-        std::memcpy(dest, tuple.Data(), size);
-
-        // update free_space_offset
+        const uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - tuple_size);
+        std::memcpy(page_->RawData() + new_data_offset, tuple.Data(), tuple_size);
         header->free_space_offset = new_data_offset;
 
-        slot_id_t result_slot_id = INVALID_SLOT_ID;
+        const slot_id_t slot_id = adding_new_slot ? header->slot_count : reuse_slot;
+        Slot* slot = GetSlot(slot_id);
+        slot->SetOffset(new_data_offset);
+        slot->SetLength(tuple_size);
         if (adding_new_slot) {
-            result_slot_id = header->slot_count;
-            // initialize new slot
-            Slot* slot = GetSlot(result_slot_id);
-            slot->SetOffset(new_data_offset);
-            slot->SetLength(size);
-
-            header->slot_count += 1;
-        } else {
-            result_slot_id = reuse_slot;
-
-            Slot* slot = GetSlot(result_slot_id);
-            slot->SetOffset(new_data_offset);
-            slot->SetLength(size);
+            header->slot_count = static_cast<slot_id_t>(header->slot_count + 1);
         }
 
         page_->MarkDirty();
-        page_->WUnLock();
-        return result_slot_id;
+        return slot_id;
     }
 
+    std::expected<void, TablePageErr> TablePage::UpdateTuple(slot_id_t slot_id, const record::Tuple& tuple)
+    {
+        if (page_ == nullptr) {
+            return std::unexpected(TablePageErr{"TablePage::UpdateTuple: null page", TablePageErrCode::NullPage});
+        }
 
-    bool TablePage::UpdateTuple(slot_id_t slot_id, record::Tuple& tuple) {
-        // TODO: 1. 线程安全优化
-        // 检查 header->slot_count 应该在加锁之后，防止在检查和加锁的间隙，
-        // 其他线程执行了压缩（Defragment）或截断操作。
-        
-        page_->WLock();
-        
-        auto header = page_->Header();
+        WritePageGuard guard(page_);
+        auto* header = page_->Header();
         if (slot_id >= header->slot_count) {
-            return false;
+            return std::unexpected(
+                TablePageErr{"TablePage::UpdateTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
         }
 
         Slot* slot = GetSlot(slot_id);
         if (slot->IsDeleted()) {
-            page_->WUnLock();
-            return false;
+            return std::unexpected(
+                TablePageErr{"TablePage::UpdateTuple: slot already deleted", TablePageErrCode::SlotAlreadyDeleted});
         }
 
-        uint16_t old_len = slot->GetLength();
-        uint16_t new_len = tuple.Size();
-
-        if (new_len == 0) {
-            page_->WUnLock();
-            return false;
+        const uint16_t new_len = tuple.Size();
+        if (new_len == 0 || new_len > PAGE_SIZE - sizeof(PersistentHeader) - sizeof(Slot)) {
+            return std::unexpected(
+                TablePageErr{"TablePage::UpdateTuple: invalid tuple size", TablePageErrCode::InvalidTupleSize});
         }
 
+        const uint16_t old_len = slot->GetLength();
         if (new_len <= old_len) {
-            std::byte* dest = page_->RawData() + slot->GetOffset();
-            std::memcpy(dest,tuple.Data(),new_len);
+            std::memcpy(page_->RawData() + slot->GetOffset(), tuple.Data(), new_len);
             slot->SetLength(new_len);
             page_->MarkDirty();
-            page_->WUnLock();
-            return true;
+            return {};
         }
 
         if (FreeSpace() < new_len) {
-            page_->WUnLock();
-            return false;
+            return std::unexpected(
+                TablePageErr{"TablePage::UpdateTuple: not enough free space", TablePageErrCode::InsufficientSpace});
         }
 
-        uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - new_len);
-        std::byte* dest = page_->RawData() + new_data_offset;
-
-        // copy tuple bytes (assume tuple.Data() returns std::span<std::byte>)
-        std::memcpy(dest, tuple.Data(), new_len);
-
-        // update free_space_offset
+        const uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - new_len);
+        std::memcpy(page_->RawData() + new_data_offset, tuple.Data(), new_len);
         header->free_space_offset = new_data_offset;
         slot->SetOffset(new_data_offset);
         slot->SetLength(new_len);
 
         page_->MarkDirty();
-        page_->WUnLock();
-        return true;
+        return {};
     }
 
-    //采用隐式链表法，此处只是标记删除，标记位为0x8000
-    bool TablePage::MarkDelTuple(slot_id_t slot_id)
+    std::expected<void, TablePageErr> TablePage::MarkDelTuple(slot_id_t slot_id)
     {
-        page_->WLock();
-        auto header = page_->Header();
-        if (slot_id >= header->slot_count) {
-            return false;
+        if (page_ == nullptr) {
+            return std::unexpected(TablePageErr{"TablePage::MarkDelTuple: null page", TablePageErrCode::NullPage});
         }
-        
+
+        WritePageGuard guard(page_);
+        auto* header = page_->Header();
+        if (slot_id >= header->slot_count) {
+            return std::unexpected(
+                TablePageErr{"TablePage::MarkDelTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
+        }
 
         Slot* slot = GetSlot(slot_id);
         if (slot->IsDeleted()) {
-            page_->WUnLock();
-            return false;
+            return std::unexpected(
+                TablePageErr{"TablePage::MarkDelTuple: slot already deleted", TablePageErrCode::SlotAlreadyDeleted});
         }
 
-        slot->offset = header->free_list_head;
+        slot->SetOffset(header->free_list_head);
         slot->SetDeleted();
-
         header->free_list_head = slot_id;
-
         page_->MarkDirty();
-        page_->WUnLock();
-        return true;
+        return {};
     }
 
-    //获取指定slot位置的tuple
-    //根据slot_id获取slot槽位的信息
-    //根据槽位信息再去取tuple
-    bool TablePage::GetTuple(slot_id_t slot_id,record::Tuple& tuple)
+    std::expected<void, TablePageErr> TablePage::GetTuple(slot_id_t slot_id, record::Tuple& tuple) const
     {
-        page_->RLock();
-        auto header = page_->Header();
+        if (page_ == nullptr) {
+            return std::unexpected(TablePageErr{"TablePage::GetTuple: null page", TablePageErrCode::NullPage});
+        }
+
+        ReadPageGuard guard(page_);
+        const auto* header = page_->Header();
         if (slot_id >= header->slot_count) {
-            page_->RUnLock();
-            return false;
+            return std::unexpected(
+                TablePageErr{"TablePage::GetTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
         }
 
-        Slot* slot = GetSlot(slot_id);
-
+        const Slot* slot = GetSlot(slot_id);
         if (slot->IsDeleted()) {
-            page_->RUnLock();
-            return false;
+            return std::unexpected(
+                TablePageErr{"TablePage::GetTuple: slot already deleted", TablePageErrCode::SlotAlreadyDeleted});
         }
 
-        std::byte* data_ptr = slot->GetOffset() + page_->RawData();
+        const uint16_t offset = slot->GetOffset();
+        const uint16_t length = slot->GetLength();
+        if (length == 0 || static_cast<size_t>(offset) + length > PAGE_SIZE) {
+            return std::unexpected(
+                TablePageErr{"TablePage::GetTuple: invalid slot content", TablePageErrCode::InvalidSlotContent});
+        }
 
-        tuple = record::Tuple(std::span<std::byte>(data_ptr,slot->GetLength()));
-        page_->RUnLock();
-        return true;
+        std::byte* data_ptr = page_->RawData() + offset;
+        tuple = record::Tuple(std::span<std::byte>(data_ptr, length));
+        return {};
     }
 
     Slot* TablePage::SlotArray()
     {
         return reinterpret_cast<Slot*>(page_->RawData() + sizeof(PersistentHeader));
     }
+
     const Slot* TablePage::SlotArray() const
     {
         return reinterpret_cast<const Slot*>(page_->RawData() + sizeof(PersistentHeader));
     }
+
     Slot* TablePage::GetSlot(slot_id_t slot_id)
     {
         return &SlotArray()[slot_id];
     }
+
     const Slot* TablePage::GetSlot(slot_id_t slot_id) const
     {
         return &SlotArray()[slot_id];
     }
+
     uint16_t TablePage::FreeSpace()
     {
-        return page_->Header()->free_space_offset - static_cast<uint16_t>(
-            sizeof(PersistentHeader) + page_->Header()->slot_count * sizeof(Slot)
-        );
+        const auto* header = page_->Header();
+        const uint32_t slot_area_end =
+            static_cast<uint32_t>(sizeof(PersistentHeader)) +
+            static_cast<uint32_t>(header->slot_count) * static_cast<uint32_t>(sizeof(Slot));
+
+        if (header->free_space_offset <= slot_area_end) {
+            return 0;
+        }
+        return static_cast<uint16_t>(header->free_space_offset - slot_area_end);
     }
+
 } // namespace storage
 } // namespace HaruhiDB
-

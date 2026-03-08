@@ -8,6 +8,14 @@ namespace HaruhiDB
 {
 namespace buffer
 {
+    namespace
+    {
+        std::unexpected<BufferPoolErr> MakeBpmErr(BufferPoolErrCode err_code, const std::string& msg)
+        {
+            return std::unexpected(BufferPoolErr{msg, err_code});
+        }
+    } // namespace
+
     BufferPoolManager::BufferPoolManager(
         size_t pool_size, storage::DiskManager* disk_manager, size_t k)
     {
@@ -20,7 +28,7 @@ namespace buffer
         }
     }
 
-    std::expected<storage::Page*,bool> BufferPoolManager::FetchPage(page_id_t page_id)
+    std::expected<storage::Page*,BufferPoolErr> BufferPoolManager::FetchPage(page_id_t page_id)
     {
         // TODO: 
         // 1. 在 page_table_ 中查找 page_id。如果存在，记录 access，固定(pin)该页并返回。
@@ -30,7 +38,7 @@ namespace buffer
         // 5. 设置该 Page 的元数据，调用 replacer_->RecordAccess()。
         std::lock_guard<std::mutex> guard(latch_);
         if (page_id == INVALID_PAGE_ID) {
-            return std::unexpected(false);
+            return MakeBpmErr(BufferPoolErrCode::InvalidPageId, "FetchPage: invalid page id");
         }
 
         frame_id_t fid;
@@ -45,7 +53,7 @@ namespace buffer
 
         auto victim_frame = GetVictimFrame();
         if (!victim_frame.has_value()) {
-            return std::unexpected(false);
+            return std::unexpected(victim_frame.error());
         }
 
         fid = victim_frame.value();
@@ -55,7 +63,9 @@ namespace buffer
         if (page.IsDirty()) {
             auto write = disk_manager_->WritePage(page.PageId(),page.Data());
             if ( !write.has_value() ) {
-                return std::unexpected(false);
+                return MakeBpmErr(
+                    BufferPoolErrCode::DiskWriteFailed,
+                    "FetchPage: flush victim failed: " + write.error().msg);
             }
             
             page.ClearDirty();
@@ -63,7 +73,9 @@ namespace buffer
 
         auto read = disk_manager_->ReadPage(page_id,page.Data());
         if (!read.has_value()) {
-            return std::unexpected(false);
+            return MakeBpmErr(
+                BufferPoolErrCode::DiskReadFailed,
+                "FetchPage: load page failed: " + read.error().msg);
         }
         if (old_page_id != INVALID_PAGE_ID) {
             page_table_.erase(old_page_id);
@@ -77,7 +89,7 @@ namespace buffer
         return &pages_[fid];
     }
 
-    std::expected<storage::Page*,bool> BufferPoolManager::NewPage(page_id_t *page_id)
+    std::expected<storage::Page*,BufferPoolErr> BufferPoolManager::NewPage(page_id_t *page_id)
     {
         // TODO:
         // 1. 调用 GetVictimFrame()。如果没有可用 frame，返回 nullptr。
@@ -87,18 +99,25 @@ namespace buffer
         // 5. 更新 page_table_ 和 replacer_ 的状态。
         std::lock_guard<std::mutex> guard(latch_);
         if (page_id == nullptr) {
-            return std::unexpected(false);
+            return MakeBpmErr(BufferPoolErrCode::NullPageIdOutput, "NewPage: output page_id pointer is null");
         }
 
         auto new_page_id = disk_manager_->AllocatePage();
         if (!new_page_id.has_value()) {
-            return std::unexpected(false);
+            return MakeBpmErr(
+                BufferPoolErrCode::DiskAllocateFailed,
+                "NewPage: allocate page failed: " + new_page_id.error().msg);
         }
 
         auto frame = GetVictimFrame();
         if (!frame.has_value()) {
-            disk_manager_->DeallocatePage(new_page_id.value());
-            return std::unexpected(false);
+            auto rollback = disk_manager_->DeallocatePage(new_page_id.value());
+            if (!rollback.has_value()) {
+                return MakeBpmErr(
+                    BufferPoolErrCode::DiskDeallocateFailed,
+                    "NewPage: rollback deallocate failed: " + rollback.error().msg);
+            }
+            return std::unexpected(frame.error());
         }
 
         frame_id_t fid = frame.value();
@@ -108,8 +127,15 @@ namespace buffer
         if (page.IsDirty()) {
             auto write = disk_manager_->WritePage(page.PageId(),page.Data());
             if (!write.has_value()) {
-                (void)disk_manager_->DeallocatePage(new_page_id.value());
-                return std::unexpected(false);
+                auto rollback = disk_manager_->DeallocatePage(new_page_id.value());
+                if (!rollback.has_value()) {
+                    return MakeBpmErr(
+                        BufferPoolErrCode::DiskDeallocateFailed,
+                        "NewPage: rollback deallocate failed: " + rollback.error().msg);
+                }
+                return MakeBpmErr(
+                    BufferPoolErrCode::DiskWriteFailed,
+                    "NewPage: flush victim failed: " + write.error().msg);
             }
             page.ClearDirty();
         }
@@ -160,7 +186,7 @@ namespace buffer
         return true;
     }
 
-    std::expected<bool,bool> BufferPoolManager::FlushPage(page_id_t page_id)
+    std::expected<void,BufferPoolErr> BufferPoolManager::FlushPage(page_id_t page_id)
     {
         // TODO:
         // 1. 检查 page_id 是否有效且在缓冲池中。
@@ -169,19 +195,21 @@ namespace buffer
         std::lock_guard<std::mutex> guard(latch_);
         auto it = page_table_.find(page_id);
         if (it == page_table_.end()) {
-            return false;
+            return MakeBpmErr(BufferPoolErrCode::PageNotFound, "FlushPage: page not found in buffer pool");
         }
         frame_id_t fid = it->second;
         storage::Page& page = pages_[fid];
         auto write = disk_manager_->WritePage(page.PageId(),page.Data());
         if (!write.has_value()) {
-            return std::unexpected(false);
+            return MakeBpmErr(
+                BufferPoolErrCode::DiskWriteFailed,
+                "FlushPage: write page failed: " + write.error().msg);
         }
         page.ClearDirty();
-        return true;
+        return {};
     }
 
-    std::expected<bool,bool> BufferPoolManager::FlushAllPages()
+    std::expected<void,BufferPoolErr> BufferPoolManager::FlushAllPages()
     {
         // TODO: 遍历 page_table_，对每个有效的 page_id 调用 FlushPage。
         std::lock_guard<std::mutex> guard(latch_);
@@ -193,11 +221,13 @@ namespace buffer
             }
             auto write = disk_manager_->WritePage(page.PageId(),page.Data());
             if (!write.has_value()) {
-                return std::unexpected(false);
+                return MakeBpmErr(
+                    BufferPoolErrCode::DiskWriteFailed,
+                    "FlushAllPages: write page failed: " + write.error().msg);
             }
             page.ClearDirty();
         }
-        return true;
+        return {};
     }
     bool BufferPoolManager::DeletePage(page_id_t page_id) {
         std::lock_guard<std::mutex> guard(latch_);
@@ -234,7 +264,7 @@ namespace buffer
     }
 
 
-    std::expected<frame_id_t, bool> BufferPoolManager::GetVictimFrame()
+    std::expected<frame_id_t, BufferPoolErr> BufferPoolManager::GetVictimFrame()
     {
 
         frame_id_t fid;
@@ -250,7 +280,7 @@ namespace buffer
             return fid;
         }
 
-        return std::unexpected(false);
+        return MakeBpmErr(BufferPoolErrCode::NoAvailableFrame, "GetVictimFrame: no evictable frame available");
     }
 } // namespace buffer
 } // namespace HaruhiDB

@@ -82,16 +82,16 @@ namespace storage
      */
     void Page::Pin() noexcept
     {
-        pin_count_.fetch_add(1,std::memory_order_relaxed);
+        pin_count_.fetch_add(1,std::memory_order_acq_rel);
     }
     void Page::UnPin() noexcept
     {
-        int old = pin_count_.fetch_sub(1, std::memory_order_relaxed);
+        int old = pin_count_.fetch_sub(1, std::memory_order_acq_rel);
         assert(old > 0 && "UnPin called when pin_count == 0");
     }
     int Page::PinCount() const noexcept
     {
-        return pin_count_.load(std::memory_order_relaxed);
+        return pin_count_.load(std::memory_order_acquire);
     }
 
     /**
@@ -105,7 +105,7 @@ namespace storage
      */
     void Page::MarkDirty() noexcept
     {
-        is_dirty_.store(true,std::memory_order_relaxed);
+        is_dirty_.store(true,std::memory_order_release);
     }
      /**     
      * English:
@@ -116,11 +116,11 @@ namespace storage
      */
     void Page::ClearDirty() noexcept
     {
-        is_dirty_.store(false,std::memory_order_relaxed);
+        is_dirty_.store(false,std::memory_order_release);
     }
     bool Page::IsDirty() const noexcept
     {
-        return is_dirty_.load(std::memory_order_relaxed);
+        return is_dirty_.load(std::memory_order_acquire);
     }
 
     /**

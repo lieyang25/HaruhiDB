@@ -116,8 +116,8 @@ TEST_F(BufferPoolManagerTest, InvalidAndMissingPageOperationsReturnExpectedSigna
     EXPECT_FALSE(invalid_fetch.has_value());
 
     auto flush_missing = bpm.FlushPage(777777);
-    ASSERT_TRUE(flush_missing.has_value());
-    EXPECT_FALSE(flush_missing.value());
+    ASSERT_FALSE(flush_missing.has_value());
+    EXPECT_EQ(flush_missing.error().err_code, BufferPoolErrCode::PageNotFound);
 }
 
 TEST_F(BufferPoolManagerTest, DataPersistsAcrossManagerRestart) {
@@ -134,7 +134,6 @@ TEST_F(BufferPoolManagerTest, DataPersistsAcrossManagerRestart) {
 
         auto flush_all = bpm.FlushAllPages();
         ASSERT_TRUE(flush_all.has_value());
-        ASSERT_TRUE(flush_all.value());
     }
 
     {

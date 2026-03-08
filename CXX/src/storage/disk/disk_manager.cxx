@@ -520,6 +520,12 @@ namespace storage
                 HaruhiDB::ErrorCode::FileNotOpen});
         }
 
+        if (page_id == INVALID_PAGE_ID || page_id == 0 || page_id >= next_page_id_) {
+            return std::unexpected(IOErr{
+                "DeallocatePage: invalid page_id",
+                HaruhiDB::ErrorCode::ReadPageOutOfRange});
+        }
+
         std::array<std::byte, PAGE_SIZE> buffer{};
 
         uint64_t cur_head_raw = static_cast<uint64_t>(free_list_head_);

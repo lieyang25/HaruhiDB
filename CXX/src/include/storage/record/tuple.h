@@ -2,11 +2,12 @@
  * CXX/src/include/storage/record/tuple.h
  */
 
+#pragma once
+
 #include "common/config.h"
-#include "rid.h"
+#include "storage/record/rid.h"
 
 #include <span>
-#include <cassert>
 namespace HaruhiDB
 {
 namespace record
@@ -19,8 +20,9 @@ namespace record
             : data_(data){
         }
 
-        uint16_t Size(){return data_.size();}
-        std::byte* Data(){return data_.data();}
+        uint16_t Size() const noexcept {return static_cast<uint16_t>(data_.size());}
+        std::byte* Data() noexcept {return data_.data();}
+        const std::byte* Data() const noexcept {return data_.data();}
     private:
         std::span<std::byte> data_;
     };

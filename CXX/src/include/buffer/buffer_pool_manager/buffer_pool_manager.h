@@ -12,27 +12,44 @@
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 namespace HaruhiDB
 {
 namespace buffer
 {
+    enum class BufferPoolErrCode : int {
+        InvalidPageId = 1,
+        NullPageIdOutput,
+        PageNotFound,
+        NoAvailableFrame,
+        DiskReadFailed,
+        DiskWriteFailed,
+        DiskAllocateFailed,
+        DiskDeallocateFailed
+    };
+
+    struct BufferPoolErr {
+        std::string msg;
+        BufferPoolErrCode err_code;
+    };
+
     class BufferPoolManager
     {
     public:
         BufferPoolManager(size_t pool_size,storage::DiskManager* disk_manager,size_t k =2);
         ~BufferPoolManager() = default;
 
-        std::expected<storage::Page*,bool> FetchPage(page_id_t page_id);
-        std::expected<storage::Page*,bool> NewPage(page_id_t *page_id);
+        std::expected<storage::Page*,BufferPoolErr> FetchPage(page_id_t page_id);
+        std::expected<storage::Page*,BufferPoolErr> NewPage(page_id_t *page_id);
         bool UnpinPage(page_id_t page_id,bool is_dirty);
         bool DeletePage(page_id_t page_id);
-        std::expected<bool,bool> FlushPage(page_id_t page_id);
-        std::expected<bool,bool> FlushAllPages();
+        std::expected<void,BufferPoolErr> FlushPage(page_id_t page_id);
+        std::expected<void,BufferPoolErr> FlushAllPages();
 
     private:
-        std::expected<frame_id_t,bool> GetVictimFrame();
+        std::expected<frame_id_t,BufferPoolErr> GetVictimFrame();
 
     private:
         /** 缓冲池中页面的最大数量（即 Frame 的总数） */
