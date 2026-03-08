@@ -21,9 +21,9 @@ namespace HaruhiDB
     using slot_id_t = uint16_t;
     using lsn_t = uint64_t;
     
-    static constexpr uint16_t SIZE = 0x0FFF;
-    static constexpr uint16_t FLAG_DEL = 0x8000;   
-    static constexpr uint16_t FLAG_MOV = 0x4000;       
+    static constexpr uint16_t TUPLE_LENGTH = 0x0FFF;
+    static constexpr uint16_t TUPLE_FLAG_DEL = 0x8000;   
+    static constexpr uint16_t TUPLE_FLAG_MOV = 0x4000;       
     
     static constexpr page_id_t INVALID_PAGE_ID = std::numeric_limits<page_id_t>::max();
     static constexpr slot_id_t INVALID_SLOT_ID = std::numeric_limits<slot_id_t>::max();
