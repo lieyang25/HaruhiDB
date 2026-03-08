@@ -5,7 +5,7 @@
 #include "common/config.h"
 #include "rid.h"
 
-#include <vector>
+#include <span>
 #include <cassert>
 namespace HaruhiDB
 {
@@ -15,13 +15,14 @@ namespace record
     public:
         Tuple() = default;
 
-        Tuple(std::vector<std::byte> data) 
-            : data_(std::move(data)){
+        Tuple(std::span<std::byte> data) 
+            : data_(data){
         }
 
         uint16_t Size(){return data_.size();}
+        std::byte* Data(){return data_.data();}
     private:
-        std::vector<std::byte> data_;
+        std::span<std::byte> data_;
     };
     
 } // namespace record
