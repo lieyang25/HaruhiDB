@@ -6,6 +6,7 @@
 #include "rid.h"
 
 #include <vector>
+#include <cassert>
 namespace HaruhiDB
 {
 namespace record
@@ -14,11 +15,12 @@ namespace record
     public:
         Tuple() = default;
 
-        Tuple(RID rid, std::vector<std::byte> data) 
-            : rid_(rid), data_(std::move(data)){}
+        Tuple(std::vector<std::byte> data) 
+            : data_(std::move(data)){
+        }
 
+        uint16_t Size(){return data_.size();}
     private:
-        RID rid_;
         std::vector<std::byte> data_;
     };
     
