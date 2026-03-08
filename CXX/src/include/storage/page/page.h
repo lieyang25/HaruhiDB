@@ -118,13 +118,15 @@ namespace storage
         // 中文：空闲空间的起始偏移
         uint16_t free_space_offset;
 
+        uint16_t free_list_head;
+
         // English: logical page type
         // 中文：页面逻辑类型
         PageType page_type;
 
         // English: reserved space for future extension
         // 中文：预留字段用于未来扩展
-        uint8_t reserved[15];
+        uint8_t reserved[13];
     };
 
     // Ensure the structure can be directly copied to disk

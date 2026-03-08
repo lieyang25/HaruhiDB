@@ -10,18 +10,10 @@ namespace HaruhiDB
 {
 namespace storage
 {
-    /**
-     * Constructor
-     *
-     * English:
-     * Initialize an empty page. Pin count is 0 and page is not dirty.
-     *
-     * 中文：
-     * 构造函数，初始化一个空页面，pin_count 为 0，页面未标记为脏。
-     */
     Page::Page() : pin_count_(0),is_dirty_(false)
     {
         std::memset(data_.data(),0,PAGE_SIZE);
+        Header()->free_list_head = INVALID_SLOT_ID;
         Header()->page_id = INVALID_PAGE_ID;
         Header()->page_type = PageType::INVALID;
         Header()->slot_count = 0;
@@ -32,6 +24,7 @@ namespace storage
     void Page::InitBlank(page_id_t page_id,PageType page_type)
     {
         PersistentHeader* header = Header();
+        header->free_list_head = INVALID_SLOT_ID;
         header->page_id = page_id;
         header->page_type = page_type;
         header->slot_count = 0;
@@ -48,15 +41,7 @@ namespace storage
         pin_count_.store(0);
         is_dirty_.store(false);
     }
-    /**
-     * Header accessors
-     *
-     * English:
-     * Return pointer to persistent header in page data.
-     *
-     * 中文：
-     * 返回页面中 PersistentHeader 的指针。
-     */
+
     PersistentHeader* Page::Header() noexcept
     {
         return reinterpret_cast<PersistentHeader*>(data_.data());
