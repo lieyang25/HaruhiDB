@@ -19,10 +19,14 @@ namespace type
 {
     class Value {
     public:
+        /**
+         * @note monostate 是NULL
+         */
         using Container = std::variant<std::monostate, bool, int8_t, int16_t, int32_t, int64_t, float, double,
                                        std::string>;
 
         Value() = default;
+        //初始化赋值
         explicit Value(bool v) : data_(v) {}
         explicit Value(int8_t v) : data_(v) {}
         explicit Value(int16_t v) : data_(v) {}
@@ -32,6 +36,7 @@ namespace type
         explicit Value(double v) : data_(v) {}
         explicit Value(std::string v) : data_(std::move(v)) {}
 
+        //返回值
         static Value Null() { return Value(); }
         static Value Boolean(bool b) { return Value(b); }
         static Value Int8(int8_t i) { return Value(i); }
@@ -42,8 +47,16 @@ namespace type
         static Value Double(double d) { return Value(d); }
         static Value VarChar(std::string s) { return Value(std::move(s)); }
 
+        /**
+         * 判断是否为NULL
+         * @note std::holds_alternative可以检查 std::variant的值
+         */
         bool IsNull() const noexcept { return std::holds_alternative<std::monostate>(data_); }
 
+        /**
+         * @param data_ 判断此变量类型
+         * @note std::decay_t用于清洗类型，std::is_same_v用于判断值是否相同
+         */
         TypeId Type() const noexcept
         {
             return std::visit(
@@ -81,8 +94,12 @@ namespace type
                 data_);
         }
 
+        //返回data值
         const Container& Raw() const noexcept { return data_; }
 
+        /**
+         * @note std::get_if返回T类的地址，否则年
+         */
         template <typename T>
         const T* TryAs() const noexcept
         {
