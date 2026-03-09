@@ -31,16 +31,19 @@ namespace type
     struct TypeUtil {
         static constexpr int VARIABLE_LENGTH = -1;
 
+        //在有效值范围内
         static constexpr bool IsValid(TypeId t) noexcept
         {
             return t > TypeId::INVALID && t <= TypeId::VARCHAR;
         }
 
+        //是否可变长度
         static constexpr bool IsVariableLength(TypeId t) noexcept
         {
             return t == TypeId::VARCHAR;
         }
 
+        //是否为整数
         static constexpr bool IsIntegral(TypeId t) noexcept
         {
             switch (t) {
@@ -55,16 +58,19 @@ namespace type
             }
         }
 
+        //是否为浮点数
         static constexpr bool IsFloatingPoint(TypeId t) noexcept
         {
             return t == TypeId::FLOAT || t == TypeId::DOUBLE || t == TypeId::DECIMAL;
         }
 
+        //是否为数字
         static constexpr bool IsNumeric(TypeId t) noexcept
         {
             return IsIntegral(t) || IsFloatingPoint(t);
         }
 
+        //返回特定大小
         static constexpr int FixedLengthSize(TypeId t) noexcept
         {
             switch (t) {
@@ -80,6 +86,7 @@ namespace type
             }
         }
 
+        //返回类型名 -> string_view
         static constexpr std::string_view TypeName(TypeId t) noexcept
         {
             switch (t) {
@@ -97,6 +104,7 @@ namespace type
             return "INVALID";
         }
 
+        //解析字符串
         static inline std::optional<TypeId> ParseType(std::string_view name)
         {
             std::array<char, 32> lowered_buf{};
