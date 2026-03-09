@@ -10,6 +10,7 @@
 
 namespace HaruhiDB
 {
+
     constexpr size_t HEADER_SIZE = 32;
     constexpr size_t PAGE_SIZE = 4096;
 
@@ -21,6 +22,9 @@ namespace HaruhiDB
     using slot_id_t = uint16_t;
     using lsn_t = uint64_t;
     
+    static constexpr uint32_t DB_MAGIC = 0x48415255;
+    static constexpr uint32_t DB_VERSION = 1;
+
     static constexpr uint16_t TUPLE_LENGTH = 0x0FFF;
     static constexpr uint16_t TUPLE_FLAG_DEL = 0x8000;   
     static constexpr uint16_t TUPLE_FLAG_MOV = 0x4000;       

@@ -53,10 +53,10 @@ namespace storage
         explicit TablePage(Page* page):page_(page){}
         ~TablePage() = default;
 
-        std::expected<slot_id_t, TablePageErr> InsertTuple(const record::Tuple& tuple);
-        std::expected<void, TablePageErr> UpdateTuple(slot_id_t slot_id,const record::Tuple& tuple);
-        std::expected<void, TablePageErr> MarkDelTuple(slot_id_t slot_id);
-        std::expected<void, TablePageErr> GetTuple(slot_id_t slot_id,record::Tuple& tuple) const;
+        auto InsertTuple(const record::Tuple& tuple) -> std::expected<slot_id_t, TablePageErr>;
+        auto UpdateTuple(slot_id_t slot_id,const record::Tuple& tuple) -> std::expected<void, TablePageErr>;
+        auto MarkDelTuple(slot_id_t slot_id) -> std::expected<void, TablePageErr>;
+        auto GetTuple(slot_id_t slot_id,record::Tuple& tuple) const -> std::expected<void, TablePageErr>;
 
         Slot* SlotArray();
         const Slot* SlotArray() const;

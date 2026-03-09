@@ -88,58 +88,32 @@ namespace storage
 {
 
     /**
-     * English:
-     * DBHeader is stored in the first page (page 0) of the database file.
-     * It contains global metadata required to manage the database storage.
-     *
-     * 中文：
-     * DBHeader 存储在数据库文件的第 0 页，用于记录数据库文件
-     * 的全局元数据信息。
+     * 作为文件头页使用
+     * @param magic_number 是表示本数据库文件的标识
+     * @param version 是数据库版本
+     * @param next_page_id 指向下一个可分配的页
+     * @param free_list_head 是隐式链表头
      */
     struct DBHeader
     {
-        // English: Magic number used to verify that the file is a valid database file
-        // 中文：数据库文件魔数，用于判断文件是否合法
         uint32_t magic_number;
 
-        // English: Database file format version
-        // 中文：数据库文件格式版本
         uint32_t version;
 
-        // English: Next page id that can be allocated
-        // 中文：下一个可分配的 page_id
         page_id_t next_page_id;
 
-        // English: Head of the free page linked list
-        // 中文：空闲页链表头指针
         page_id_t free_list_head;
     };
 
-    // English: Ensure DBHeader can be directly written to disk
-    // 中文：确保 DBHeader 可以直接进行二进制写入磁盘
     static_assert(std::is_trivially_copyable_v<DBHeader>);
-
-    // English: Ensure header size is exactly 16 bytes
-    // 中文：确保头部大小固定为 16 字节
     static_assert(sizeof(DBHeader) == 16, "DBHeader size must be 16 bytes");
 
-
     /**
-     * English:
-     * IOErr represents disk IO errors. It contains both a human-readable
-     * error message and an internal error code.
-     *
-     * 中文：
-     * IOErr 用于表示磁盘 IO 相关错误，
-     * 包含错误信息字符串以及内部错误码。
+     * 
      */
     struct IOErr {
-        // English: descriptive error message
-        // 中文：错误描述信息
         std::string msg;
 
-        // English: internal error code
-        // 中文：内部错误码
         HaruhiDB::ErrorCode err_code;
     };
 
@@ -171,11 +145,7 @@ namespace storage
     public:
 
         /**
-         * English:
-         * Constructor. Opens or creates the database file.
-         *
-         * 中文：
-         * 构造函数。打开或创建数据库文件。
+         * @param path
          */
         explicit DiskManager(const std::filesystem::path& path);
 
@@ -201,7 +171,7 @@ namespace storage
          * @param page_id 页面编号
          * @param data 用于存储页面数据的内存缓冲区
          */
-        std::expected<void,IOErr> ReadPage(page_id_t page_id , page_data_t& data);
+        auto ReadPage(page_id_t page_id , page_data_t& data) -> std::expected<void,IOErr>;
 
         /**
          * English:
@@ -210,7 +180,7 @@ namespace storage
          * 中文：
          * 将内存中的页面数据写回磁盘。
          */
-        std::expected<void,IOErr> WritePage(page_id_t page_id , const page_data_t& data);
+        auto WritePage(page_id_t page_id , const page_data_t& data) -> std::expected<void,IOErr>;
 
         /**
          * English:
@@ -221,7 +191,7 @@ namespace storage
          * 分配一个新的 page_id。
          * 如果存在空闲页，则优先复用空闲页。
          */
-        std::expected<page_id_t,IOErr> AllocatePage();
+        auto AllocatePage() -> std::expected<page_id_t,IOErr>;
 
         /**
          * English:
@@ -230,7 +200,7 @@ namespace storage
          * 中文：
          * 释放一个页面，并将其加入空闲页链表。
          */
-        std::expected<void,IOErr> DeallocatePage(page_id_t page_id);
+        auto DeallocatePage(page_id_t page_id) -> std::expected<void,IOErr>;
 
         /**
          * English:
@@ -239,7 +209,7 @@ namespace storage
          * 中文：
          * 将文件缓冲区刷新到磁盘，保证数据持久化。
          */
-        std::expected<void,IOErr> Flush();
+        auto Flush() -> std::expected<void,IOErr>;
 
     private:
 
@@ -250,7 +220,7 @@ namespace storage
          * 中文：
          * 打开数据库文件。
          */
-        std::expected<void,IOErr> OpenFile();
+        auto OpenFile() -> std::expected<void,IOErr>;
 
         /**
          * English:
@@ -259,7 +229,7 @@ namespace storage
          * 中文：
          * 如果数据库文件是新创建的，则初始化 DBHeader。
          */
-        std::expected<void,IOErr> InitHeaderIfNeeded();
+        auto InitHeaderIfNeeded() -> std::expected<void,IOErr>;
 
         /**
          * English:
@@ -268,7 +238,7 @@ namespace storage
          * 中文：
          * 从磁盘加载数据库头部信息。
          */
-        std::expected<void,IOErr> LoadHeader();
+        auto LoadHeader() -> std::expected<void,IOErr>;
 
         /**
          * English:
@@ -277,7 +247,7 @@ namespace storage
          * 中文：
          * 将内存中的 DBHeader 写回磁盘。
          */
-        std::expected<void,IOErr> PersistHeader();
+        auto PersistHeader() -> std::expected<void,IOErr>;
 
     private:
 
@@ -296,14 +266,6 @@ namespace storage
         // English: head of the free page list
         // 中文：空闲页链表头
         page_id_t free_list_head_{INVALID_PAGE_ID};
-
-        // English: database file magic number
-        // 中文：数据库文件魔数
-        static constexpr uint32_t DB_MAGIC = 0x48415255;
-
-        // English: database file version
-        // 中文：数据库文件版本
-        static constexpr uint32_t DB_VERSION = 1;
     };
 
 } // namespace storage
