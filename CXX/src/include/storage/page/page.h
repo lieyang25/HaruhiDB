@@ -34,6 +34,7 @@ namespace storage
 
         page_id_t page_id;
 
+        
         page_id_t next_page_id;
 
         slot_id_t slot_count;

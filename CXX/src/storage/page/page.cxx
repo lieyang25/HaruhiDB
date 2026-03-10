@@ -15,6 +15,7 @@ namespace storage
         std::memset(data_.data(),0,PAGE_SIZE);
         Header()->free_list_head = INVALID_SLOT_ID;
         Header()->page_id = INVALID_PAGE_ID;
+        Header()->next_page_id = INVALID_PAGE_ID;
         Header()->page_type = PageType::INVALID;
         Header()->slot_count = 0;
         Header()->lsn = 0;
@@ -26,6 +27,11 @@ namespace storage
         PersistentHeader* header = Header();
         header->free_list_head = INVALID_SLOT_ID;
         header->page_id = page_id;
+        /**
+         * TODO
+         * 注意检查next_page_id的初始化
+         */
+        header->next_page_id = INVALID_PAGE_ID;
         header->page_type = page_type;
         header->slot_count = 0;
         header->lsn = 0;
