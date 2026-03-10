@@ -54,7 +54,8 @@ TableIterator::TableIterator()
     : heap_(nullptr),
       cur_page_id_(INVALID_PAGE_ID),
       cur_slot_(INVALID_SLOT_ID),
-      at_end_(true)
+      at_end_(true),
+      tuple_cached_(false)
 {
 }
 
@@ -62,7 +63,8 @@ TableIterator::TableIterator(TableHeap *heap, page_id_t start_page, slot_id_t st
     : heap_(heap),
       cur_page_id_(start_page),
       cur_slot_(start_slot),
-      at_end_(false)
+      at_end_(false),
+      tuple_cached_(false)
 {
     if (heap_ == nullptr || cur_page_id_ == INVALID_PAGE_ID) {
         at_end_ = true;
@@ -80,6 +82,10 @@ record::Tuple TableIterator::operator*() const
         return {};
     }
 
+    if (tuple_cached_) {
+        return record::Tuple(std::span<const std::byte>(tuple_buffer_.data(), tuple_buffer_.size()));
+    }
+
     std::shared_lock lock(heap_->table_latch_);
     auto page_exp = heap_->bpm_->FetchPage(cur_page_id_);
     if (!page_exp.has_value()) {
@@ -87,10 +93,11 @@ record::Tuple TableIterator::operator*() const
     }
 
     storage::Page *page = page_exp.value();
+    const page_id_t pid_snapshot = cur_page_id_;
     page->RLock();
     auto guard = MakeScopeGuard([&]() {
         page->RUnLock();
-        heap_->bpm_->UnpinPage(cur_page_id_, false);
+        heap_->bpm_->UnpinPage(pid_snapshot, false);
     });
 
     const auto *header = page->Header();
@@ -111,8 +118,9 @@ record::Tuple TableIterator::operator*() const
     }
 
     const std::byte *begin = page->RawData() + offset;
-    std::vector<std::byte> data(begin, begin + length);
-    return record::Tuple(std::move(data));
+    tuple_buffer_.assign(begin, begin + length);
+    tuple_cached_ = true;
+    return record::Tuple(std::span<const std::byte>(tuple_buffer_.data(), tuple_buffer_.size()));
 }
 
 TableIterator &TableIterator::operator++()
@@ -121,6 +129,7 @@ TableIterator &TableIterator::operator++()
         return *this;
     }
 
+    tuple_cached_ = false;
     std::shared_lock lock(heap_->table_latch_);
     if (cur_slot_ != INVALID_SLOT_ID) {
         cur_slot_ = static_cast<slot_id_t>(cur_slot_ + 1);
@@ -168,10 +177,11 @@ bool TableIterator::AdvanceToNextValid()
         }
 
         storage::Page *page = page_exp.value();
+        const page_id_t pid_snapshot = pid;
         page->RLock();
         auto release = MakeScopeGuard([&]() {
             page->RUnLock();
-            heap_->bpm_->UnpinPage(pid, false);
+            heap_->bpm_->UnpinPage(pid_snapshot, false);
         });
 
         const auto *header = page->Header();
@@ -186,6 +196,7 @@ bool TableIterator::AdvanceToNextValid()
             if (!table_page.GetSlot(s)->IsDeleted()) {
                 cur_page_id_ = pid;
                 cur_slot_ = s;
+                tuple_cached_ = false;
                 return true;
             }
         }
@@ -194,6 +205,7 @@ bool TableIterator::AdvanceToNextValid()
         slot = 0;
     }
 
+    tuple_cached_ = false;
     return false;
 }
 

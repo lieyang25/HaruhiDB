@@ -9,6 +9,7 @@
 
 #include <ranges>
 #include <shared_mutex>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -97,30 +98,39 @@ bool TableHeap::InsertTuple(const record::Tuple &tuple, record::RID *out_rid)
         return res;
     };
 
-    std::optional<page_id_t> target = FindPageWithFreeSpace(need);
-    if (!target.has_value()) {
-        target = AllocateNewPage();
-    }
-    if (!target.has_value()) {
-        return false;
-    }
-
-    auto res = try_insert(target.value());
-    if (!res.has_value() &&
-        res.error().err_code == storage::TablePageErrCode::InsufficientSpace) {
-        target = AllocateNewPage();
+    std::unordered_set<page_id_t> tried_pages;
+    while (true) {
+        auto target = FindPageWithFreeSpace(need);
         if (!target.has_value()) {
+            break;
+        }
+        if (tried_pages.contains(target.value())) {
+            break;
+        }
+        tried_pages.insert(target.value());
+
+        auto res = try_insert(target.value());
+        if (res.has_value()) {
+            if (out_rid != nullptr) {
+                out_rid->SetRID(target.value(), res.value());
+            }
+            return true;
+        }
+        if (res.error().err_code != storage::TablePageErrCode::InsufficientSpace) {
             return false;
         }
-        res = try_insert(target.value());
     }
 
+    auto new_target = AllocateNewPage();
+    if (!new_target.has_value()) {
+        return false;
+    }
+    auto res = try_insert(new_target.value());
     if (!res.has_value()) {
         return false;
     }
-
     if (out_rid != nullptr) {
-        out_rid->SetRID(target.value(), res.value());
+        out_rid->SetRID(new_target.value(), res.value());
     }
     return true;
 }
@@ -303,13 +313,37 @@ std::optional<page_id_t> TableHeap::FindPageWithFreeSpace(uint32_t need)
         return std::nullopt;
     }
 
+    std::vector<page_id_t> candidates;
     {
         std::scoped_lock lock(free_space_mutex_);
-        auto it = std::ranges::find_if(
-            free_space_map_,
-            [need](const auto &entry) { return entry.second >= need; });
-        if (it != free_space_map_.end()) {
-            return it->first;
+        for (const auto &entry : free_space_map_) {
+            if (entry.second >= need) {
+                candidates.push_back(entry.first);
+            }
+        }
+    }
+
+    for (page_id_t pid : candidates) {
+        auto page_exp = bpm_->FetchPage(pid);
+        if (!page_exp.has_value()) {
+            std::scoped_lock lock(free_space_mutex_);
+            free_space_map_.erase(pid);
+            continue;
+        }
+
+        storage::Page *page = page_exp.value();
+        storage::TablePage table_page(page);
+        page->RLock();
+        const uint32_t free_space = table_page.FreeSpace();
+        page->RUnLock();
+        bpm_->UnpinPage(pid, false);
+
+        {
+            std::scoped_lock lock(free_space_mutex_);
+            free_space_map_[pid] = free_space;
+        }
+        if (free_space >= need) {
+            return pid;
         }
     }
 
@@ -326,10 +360,11 @@ std::optional<page_id_t> TableHeap::FindPageWithFreeSpace(uint32_t need)
         page_id_t next_pid = INVALID_PAGE_ID;
 
         {
+            const page_id_t pid_snapshot = pid;
             page->RLock();
             auto guard = MakeScopeGuard([&]() {
                 page->RUnLock();
-                bpm_->UnpinPage(pid, false);
+                bpm_->UnpinPage(pid_snapshot, false);
             });
 
             storage::TablePage table_page(page);
@@ -470,13 +505,14 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
         return false;
     }
 
-    {
-        std::scoped_lock map_lock(free_space_mutex_);
-        free_space_map_.erase(page_id);
-    }
+    bool detached = false;
+    bool detached_from_head = false;
+    page_id_t prev_pid = INVALID_PAGE_ID;
 
     if (first_page_id_ == page_id) {
         first_page_id_ = next_pid;
+        detached = true;
+        detached_from_head = true;
     } else {
         page_id_t pid = first_page_id_;
         while (pid != INVALID_PAGE_ID) {
@@ -493,6 +529,8 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
                 page->MarkDirty();
                 page->WUnLock();
                 bpm_->UnpinPage(pid, true);
+                detached = true;
+                prev_pid = pid;
                 break;
             }
             page_id_t next = header->next_page_id;
@@ -502,7 +540,38 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
         }
     }
 
-    return bpm_->DeletePage(page_id);
+    if (!detached) {
+        return false;
+    }
+
+    if (bpm_->DeletePage(page_id)) {
+        std::scoped_lock map_lock(free_space_mutex_);
+        free_space_map_.erase(page_id);
+        return true;
+    }
+
+    // Best-effort rollback to keep page-link topology unchanged on delete failure.
+    if (detached_from_head) {
+        first_page_id_ = page_id;
+    } else if (prev_pid != INVALID_PAGE_ID) {
+        auto prev_exp = bpm_->FetchPage(prev_pid);
+        if (prev_exp.has_value()) {
+            storage::Page *prev_page = prev_exp.value();
+            prev_page->WLock();
+            auto *prev_header = prev_page->Header();
+            if (prev_header->next_page_id == next_pid) {
+                prev_header->next_page_id = page_id;
+                prev_page->MarkDirty();
+                prev_page->WUnLock();
+                bpm_->UnpinPage(prev_pid, true);
+            } else {
+                prev_page->WUnLock();
+                bpm_->UnpinPage(prev_pid, false);
+            }
+        }
+    }
+
+    return false;
 }
 
 } // namespace table

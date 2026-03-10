@@ -11,6 +11,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -102,6 +103,52 @@ TEST_F(TableHeapTest, IteratorSkipsDeletedTuples)
     ASSERT_EQ(scanned.size(), 2u);
     EXPECT_EQ(scanned[0], "a");
     EXPECT_EQ(scanned[1], "c");
+}
+
+TEST_F(TableHeapTest, ReclaimMiddlePageKeepsChainConsistent)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(8, &dm);
+    TableHeap heap(&bpm);
+
+    struct Row {
+        record::RID rid;
+        std::string payload;
+    };
+
+    std::vector<Row> rows;
+    std::set<page_id_t> pages;
+    for (int i = 0; i < 1000 && pages.size() < 3; ++i) {
+        const std::string payload = std::string(900, static_cast<char>('a' + (i % 26))) + "#" + std::to_string(i);
+        record::RID rid;
+        ASSERT_TRUE(heap.InsertTuple(MakeTupleFromString(payload), &rid));
+        rows.push_back(Row{rid, payload});
+        pages.insert(rid.GetPageId());
+    }
+    ASSERT_GE(pages.size(), 3u);
+
+    auto it_page = pages.begin();
+    ++it_page;
+    const page_id_t victim_page = *it_page;
+
+    size_t deleted_rows = 0;
+    std::set<std::string> expected_payloads;
+    for (const auto &row : rows) {
+        if (row.rid.GetPageId() == victim_page) {
+            ASSERT_TRUE(heap.DeleteTuple(row.rid));
+            deleted_rows++;
+        } else {
+            expected_payloads.insert(row.payload);
+        }
+    }
+    ASSERT_GT(deleted_rows, 0u);
+
+    std::set<std::string> scanned_payloads;
+    for (auto it = heap.Begin(); it != heap.End(); ++it) {
+        scanned_payloads.insert(TupleToString(*it));
+    }
+
+    EXPECT_EQ(scanned_payloads, expected_payloads);
 }
 
 } // namespace HaruhiDB::table

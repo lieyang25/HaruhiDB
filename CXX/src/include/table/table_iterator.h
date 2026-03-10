@@ -53,27 +53,15 @@ public:
     bool IsEnd() const noexcept { return at_end_; }
 
 private:
-    // 封装 Fetch + Pin + RLock 的简易 guard（在 iterator 中管理）
-    struct PageHandle {
-        storage::Page *page{nullptr};
-        page_id_t pid{INVALID_PAGE_ID};
-        bool locked{false};
-        PageHandle() = default;
-        ~PageHandle() = default;
-    };
-
-    // helper: 加载当前 page（若未加载），并确保 pin + RLock
-    void EnsurePageLoaded() const;
-
     // helper: 尝试移动到下一个有效位置（slot）；返回 true 表示有有效条目
     bool AdvanceToNextValid();
 
     TableHeap *heap_;
-    mutable PageHandle cur_handle_; // mutable 因为 operator* 是 const
     page_id_t cur_page_id_;
     slot_id_t cur_slot_;
     bool at_end_;
     mutable std::vector<std::byte> tuple_buffer_;
+    mutable bool tuple_cached_{false};
 };
 
 } // namespace table
