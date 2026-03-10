@@ -17,12 +17,12 @@ namespace storage
 {
 
     enum class PageType : uint8_t {
-        INVALID = 0,   // Invalid or uninitialized page / 无效页面
-        HEAP,          // Heap table page / 表数据页
-        INTERNAL,      // B+Tree internal node / B+树内部节点
-        LEAF,          // B+Tree leaf node / B+树叶节点
-        HEADER,        // Database header page / 数据库头页
-        FREELIST       // Free list page / 空闲页链表
+        INVALID = 0,   
+        HEAP,          
+        INTERNAL,      
+        LEAF,          
+        HEADER,        
+        FREELIST    
     };
 
 
@@ -34,6 +34,8 @@ namespace storage
 
         page_id_t page_id;
 
+        page_id_t next_page_id;
+
         slot_id_t slot_count;
 
         uint16_t free_space_offset;
@@ -42,7 +44,7 @@ namespace storage
 
         PageType page_type;
 
-        uint8_t reserved[13];
+        uint8_t reserved[9];
     };
 
     static_assert(std::is_trivially_copyable_v<PersistentHeader>);
