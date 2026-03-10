@@ -8,6 +8,8 @@
 #include "storage/page/table_page.h"
 
 #include <utility>
+#include <shared_mutex>
+#include <vector>
 
 namespace HaruhiDB {
 namespace table {
@@ -66,6 +68,7 @@ TableIterator::TableIterator(TableHeap *heap, page_id_t start_page, slot_id_t st
         at_end_ = true;
         return;
     }
+    std::shared_lock lock(heap_->table_latch_);
     if (!AdvanceToNextValid()) {
         at_end_ = true;
     }
@@ -77,6 +80,7 @@ record::Tuple TableIterator::operator*() const
         return {};
     }
 
+    std::shared_lock lock(heap_->table_latch_);
     auto page_exp = heap_->bpm_->FetchPage(cur_page_id_);
     if (!page_exp.has_value()) {
         return {};
@@ -107,8 +111,8 @@ record::Tuple TableIterator::operator*() const
     }
 
     const std::byte *begin = page->RawData() + offset;
-    tuple_buffer_.assign(begin, begin + length);
-    return record::Tuple(std::span<std::byte>(tuple_buffer_.data(), tuple_buffer_.size()));
+    std::vector<std::byte> data(begin, begin + length);
+    return record::Tuple(std::move(data));
 }
 
 TableIterator &TableIterator::operator++()
@@ -117,6 +121,7 @@ TableIterator &TableIterator::operator++()
         return *this;
     }
 
+    std::shared_lock lock(heap_->table_latch_);
     if (cur_slot_ != INVALID_SLOT_ID) {
         cur_slot_ = static_cast<slot_id_t>(cur_slot_ + 1);
     }
@@ -144,34 +149,6 @@ bool TableIterator::operator!=(const TableIterator &other) const noexcept
     return !(*this == other);
 }
 
-void TableIterator::EnsurePageLoaded() const
-{
-    if (heap_ == nullptr || at_end_ || cur_page_id_ == INVALID_PAGE_ID) {
-        return;
-    }
-
-    if (cur_handle_.page != nullptr && cur_handle_.pid == cur_page_id_) {
-        return;
-    }
-
-    if (cur_handle_.page != nullptr) {
-        if (cur_handle_.locked) {
-            cur_handle_.page->RUnLock();
-        }
-        heap_->bpm_->UnpinPage(cur_handle_.pid, false);
-        cur_handle_ = {};
-    }
-
-    auto page_exp = heap_->bpm_->FetchPage(cur_page_id_);
-    if (!page_exp.has_value()) {
-        return;
-    }
-    cur_handle_.page = page_exp.value();
-    cur_handle_.pid = cur_page_id_;
-    cur_handle_.page->RLock();
-    cur_handle_.locked = true;
-}
-
 bool TableIterator::AdvanceToNextValid()
 {
     if (heap_ == nullptr) {
@@ -185,29 +162,26 @@ bool TableIterator::AdvanceToNextValid()
         cur_page_id_ = pid;
         cur_slot_ = slot;
 
-        EnsurePageLoaded();
-        if (cur_handle_.page == nullptr) {
+        auto page_exp = heap_->bpm_->FetchPage(pid);
+        if (!page_exp.has_value()) {
             return false;
         }
 
+        storage::Page *page = page_exp.value();
+        page->RLock();
         auto release = MakeScopeGuard([&]() {
-            if (cur_handle_.page != nullptr) {
-                if (cur_handle_.locked) {
-                    cur_handle_.page->RUnLock();
-                }
-                heap_->bpm_->UnpinPage(cur_handle_.pid, false);
-                cur_handle_ = {};
-            }
+            page->RUnLock();
+            heap_->bpm_->UnpinPage(pid, false);
         });
 
-        const auto *header = cur_handle_.page->Header();
+        const auto *header = page->Header();
         if (cur_slot_ >= header->slot_count) {
             pid = header->next_page_id;
             slot = 0;
             continue;
         }
 
-        storage::TablePage table_page(cur_handle_.page);
+        storage::TablePage table_page(page);
         for (slot_id_t s = cur_slot_; s < header->slot_count; ++s) {
             if (!table_page.GetSlot(s)->IsDeleted()) {
                 cur_page_id_ = pid;

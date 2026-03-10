@@ -8,7 +8,9 @@
 #include "storage/page/table_page.h"
 
 #include <ranges>
+#include <shared_mutex>
 #include <utility>
+#include <vector>
 
 namespace HaruhiDB {
 namespace table {
@@ -232,6 +234,7 @@ std::optional<page_id_t> TableHeap::FindPageWithFreeSpace(uint32_t need)
             return std::nullopt;
         }
 
+<<<<<<< HEAD
         storage::Page *page = page_exp.value();
         uint32_t free_space = 0;
         page_id_t next_pid = INVALID_PAGE_ID;
@@ -373,6 +376,123 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
     {
         std::scoped_lock lock(meta_mutex_);
         free_space_map_.erase(page_id);
+=======
+        storage::Page *new_page = page_exp.value();
+        {
+            new_page->WLock();
+            auto guard = MakeScopeGuard([&]() { new_page->WUnLock(); });
+            new_page->Header()->next_page_id = INVALID_PAGE_ID;
+            new_page->MarkDirty();
+        }
+
+        bool linked = false;
+        {
+            std::unique_lock lock(table_latch_);
+            if (first_page_id_ == INVALID_PAGE_ID) {
+                first_page_id_ = new_page_id;
+                linked = true;
+            } else {
+                page_id_t pid = first_page_id_;
+                while (pid != INVALID_PAGE_ID) {
+                    auto page_cur = bpm_->FetchPage(pid);
+                    if (!page_cur.has_value()) {
+                        break;
+                    }
+
+                    storage::Page *page = page_cur.value();
+                    page->WLock();
+                    auto *header = page->Header();
+                    if (header->next_page_id == INVALID_PAGE_ID) {
+                        header->next_page_id = new_page_id;
+                        page->MarkDirty();
+                        page->WUnLock();
+                        bpm_->UnpinPage(pid, true);
+                        linked = true;
+                        break;
+                    }
+
+                    page_id_t next_pid = header->next_page_id;
+                    page->WUnLock();
+                    bpm_->UnpinPage(pid, false);
+                    pid = next_pid;
+                }
+            }
+        }
+
+        if (!linked) {
+            bpm_->UnpinPage(new_page_id, true);
+            bpm_->DeletePage(new_page_id);
+            return std::nullopt;
+        }
+
+        storage::TablePage table_page(new_page);
+        uint32_t free_space = 0;
+        new_page->RLock();
+        free_space = table_page.FreeSpace();
+        new_page->RUnLock();
+        UpdateFreeSpaceMap(new_page_id, free_space);
+        bpm_->UnpinPage(new_page_id, true);
+        return new_page_id;
+    }
+
+    void TableHeap::UpdateFreeSpaceMap(page_id_t page_id, uint32_t free_space)
+    {
+        if (page_id == INVALID_PAGE_ID) {
+            return;
+        }
+        std::scoped_lock lock(free_space_mutex_);
+        free_space_map_[page_id] = free_space;
+    }
+
+    bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
+    {
+        if (bpm_ == nullptr || page_id == INVALID_PAGE_ID) {
+            return false;
+        }
+
+        std::unique_lock lock(table_latch_);
+        auto page_exp = bpm_->FetchPage(page_id);
+        if (!page_exp.has_value()) {
+            return false;
+        }
+
+        storage::Page *page = page_exp.value();
+        bool all_deleted = true;
+        page_id_t next_pid = INVALID_PAGE_ID;
+        bool pin_ok = false;
+
+        {
+            page->WLock();
+            auto guard = MakeScopeGuard([&]() {
+                page->WUnLock();
+                bpm_->UnpinPage(page_id, false);
+            });
+
+            pin_ok = (page->PinCount() == 1);
+            const auto *header = page->Header();
+            next_pid = header->next_page_id;
+            if (pin_ok) {
+                storage::TablePage table_page(page);
+                for (slot_id_t slot = 0; slot < header->slot_count; ++slot) {
+                    if (!table_page.GetSlot(slot)->IsDeleted()) {
+                        all_deleted = false;
+                        break;
+                    }
+                }
+            } else {
+                all_deleted = false;
+            }
+        }
+
+        if (!all_deleted) {
+            return false;
+        }
+
+        {
+            std::scoped_lock map_lock(free_space_mutex_);
+            free_space_map_.erase(page_id);
+        }
+>>>>>>> master
 
         if (first_page_id_ == page_id) {
             first_page_id_ = next_pid;
@@ -400,10 +520,16 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
                 pid = next;
             }
         }
+<<<<<<< HEAD
     }
 
     return bpm_->DeletePage(page_id);
 }
+=======
+
+        return bpm_->DeletePage(page_id);
+    }
+>>>>>>> master
 
 } // namespace table
 } // namespace HaruhiDB

@@ -8,6 +8,7 @@
 #include "storage/record/rid.h"
 
 #include <span>
+#include <vector>
 namespace HaruhiDB
 {
 namespace record

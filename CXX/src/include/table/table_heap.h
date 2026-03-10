@@ -9,6 +9,7 @@
 #include "storage/record/tuple.h"
 
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <unordered_map>
 #include <cstdint>
@@ -45,17 +46,25 @@ public:
     // 标记删除（逻辑删除）对应 slot
     bool DeleteTuple(const record::RID &rid);
 
-    // 更新 tuple；若 page 内无法原地更新，TablePage 可能返回需要迁移的错误，
-    // TableHeap 会尝试将 tuple 移动到有空间的 page 并更新 record::RID（若需要）
-    bool UpdateTuple(const record::RID &rid, const record::Tuple &new_tuple);
+    // 更新 tuple；若 page 内无法原地更新，TableHeap 会将 tuple 迁移到新位置
+    // 并通过 out_rid 返回新的 RID（若原地更新则与传入一致）。
+    bool UpdateTuple(const record::RID &rid, const record::Tuple &new_tuple, record::RID *out_rid = nullptr);
 
     // 迭代器接口
     TableIterator Begin();
     TableIterator End();
 
     // 获取首页 id
-    page_id_t FirstPageId() const noexcept { return first_page_id_; }
-    void SetFirstPageId(page_id_t pid) noexcept { first_page_id_ = pid; }
+    page_id_t FirstPageId() const noexcept
+    {
+        std::shared_lock lock(table_latch_);
+        return first_page_id_;
+    }
+    void SetFirstPageId(page_id_t pid) noexcept
+    {
+        std::unique_lock lock(table_latch_);
+        first_page_id_ = pid;
+    }
 
 private:
     friend class TableIterator;
@@ -82,8 +91,11 @@ private:
     // 需要在插入/删除后更新
     std::unordered_map<page_id_t, uint32_t> free_space_map_;
 
-    // 保护 free_space_map_ 和 页链更新的 mutex
-    mutable std::mutex meta_mutex_;
+    // 保护页链与 first_page_id_
+    mutable std::shared_mutex table_latch_;
+
+    // 保护 free_space_map_
+    mutable std::mutex free_space_mutex_;
 };
 
 } // namespace table

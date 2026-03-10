@@ -8,7 +8,6 @@
 #include "storage/record/tuple.h"
 
 #include <cstddef>
-#include <vector>
 
 namespace HaruhiDB {
 namespace storage {
