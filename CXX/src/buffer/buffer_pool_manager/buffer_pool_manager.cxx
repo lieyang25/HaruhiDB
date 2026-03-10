@@ -37,7 +37,7 @@ namespace buffer
         // 4. 更新 page_table_，从磁盘读取 page 存储到该 frame。
         // 5. 设置该 Page 的元数据，调用 replacer_->RecordAccess()。
         std::lock_guard<std::mutex> guard(latch_);
-        if (page_id == INVALID_PAGE_ID) {
+        if (page_id == INVALID_PAGE_ID || page_id == 0) {
             return MakeBpmErr(BufferPoolErrCode::InvalidPageId, "FetchPage: invalid page id");
         }
 
@@ -231,7 +231,7 @@ namespace buffer
     }
     bool BufferPoolManager::DeletePage(page_id_t page_id) {
         std::lock_guard<std::mutex> guard(latch_);
-        if (page_id == INVALID_PAGE_ID) {
+        if (page_id == INVALID_PAGE_ID || page_id == 0) {
             return false;
         }
 

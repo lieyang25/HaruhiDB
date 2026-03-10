@@ -8,6 +8,7 @@
 #include "storage/record/rid.h"
 
 #include <span>
+#include <utility>
 #include <vector>
 namespace HaruhiDB
 {
@@ -17,15 +18,23 @@ namespace record
     public:
         Tuple() = default;
 
-        Tuple(std::span<std::byte> data) 
-            : data_(data){
+        // Own tuple bytes by default. This avoids dangling references once page
+        // locks/pins are released by upper layers.
+        explicit Tuple(std::span<const std::byte> data)
+            : data_(data.begin(), data.end())
+        {
+        }
+
+        explicit Tuple(std::vector<std::byte> data)
+            : data_(std::move(data))
+        {
         }
 
         uint16_t Size() const noexcept {return static_cast<uint16_t>(data_.size());}
         std::byte* Data() noexcept {return data_.data();}
         const std::byte* Data() const noexcept {return data_.data();}
     private:
-        std::span<std::byte> data_;
+        std::vector<std::byte> data_;
     };
     
 } // namespace record

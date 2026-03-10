@@ -382,32 +382,43 @@ TEST_F(DiskManagerTest, InvalidPageIdAccessTest) {
     auto res2 = dm.ReadPage(INVALID_PAGE_ID, buf);
     EXPECT_FALSE(res2.has_value());
     
-    // 试图 Deallocate INVALID_PAGE_ID（这在逻辑上是灾难性的，会破坏 Free List）
-    // 注意：当前你的代码中没有阻止 DeallocatePage(INVALID_PAGE_ID)，这是一个隐患暴露测试！
+    // 试图 Deallocate INVALID_PAGE_ID（应该被拒绝）
     auto res3 = dm.DeallocatePage(INVALID_PAGE_ID);
-    // 取决于你的 file_size 检查，这里可能会被 WritePage 拦截并返回 false
-    EXPECT_FALSE(res3.has_value()) << "Deallocating INVALID_PAGE_ID should ideally fail out of bounds.";
+    EXPECT_FALSE(res3.has_value());
 }
 
 /* Test: Header 页保护测试 (Header Page Protection Check)
- * 验证：Page 0 是 Header 页，代码是否允许通过普通的 WritePage 覆盖它？
- * 这是一个防御性测试，用于暴露你代码中的潜在危险：目前 WritePage 没有禁止写入 Page 0！
+ * 验证：Page 0 是 Header 页，普通 WritePage 必须禁止写入。
  */
-TEST_F(DiskManagerTest, HeaderPageOverwriteVulnerabilityTest) {
+TEST_F(DiskManagerTest, HeaderPageWriteIsProtected) {
     page_id_t header_pid = 0;
     page_data_t zero_buf{}; // 全 0 数据
     
     {
         DiskManager dm(test_path_);
         auto res = dm.WritePage(header_pid, zero_buf);
-        // 如果你的设计中不允许普通组件改写 Header，这里本应该拦住，但当前代码允许。
-        EXPECT_TRUE(res.has_value()) << "Warning: DiskManager currently allows overriding Header page (page 0)!";
+        EXPECT_FALSE(res.has_value());
+        EXPECT_EQ(res.error().err_code, ErrorCode::WriteIOError);
     }
     
-    // 因为 Header 被全 0 覆盖了，Magic Number 丢失，下次打开必然失败
-    EXPECT_THROW({
+    // Header 未被破坏，重新打开应成功。
+    EXPECT_NO_THROW({
         DiskManager dm(test_path_);
-    }, std::runtime_error);
+        (void)dm;
+    });
+}
+
+/* Test: 重复释放同一页应该失败，防止 free-list 重复节点 */
+TEST_F(DiskManagerTest, DoubleDeallocateShouldFail) {
+    DiskManager dm(test_path_);
+    auto pid = dm.AllocatePage();
+    ASSERT_TRUE(pid.has_value());
+
+    auto first = dm.DeallocatePage(pid.value());
+    ASSERT_TRUE(first.has_value());
+
+    auto second = dm.DeallocatePage(pid.value());
+    EXPECT_FALSE(second.has_value());
 }
 
 /* Test: 自动创建嵌套目录 (Auto Directory Creation Test)

@@ -400,6 +400,11 @@ namespace storage
                 "WritePage: invalid page_id",
                 HaruhiDB::ErrorCode::WriteIOError});
         }
+        if (page_id == 0) {
+            return std::unexpected(IOErr{
+                "WritePage: page 0 is reserved for DB header",
+                HaruhiDB::ErrorCode::WriteIOError});
+        }
 
         uint64_t offset = static_cast<uint64_t>(page_id) * PAGE_SIZE;
 
@@ -524,6 +529,49 @@ namespace storage
             return std::unexpected(IOErr{
                 "DeallocatePage: invalid page_id",
                 HaruhiDB::ErrorCode::ReadPageOutOfRange});
+        }
+
+        // Guard against accidental double-free and broken free-list chains.
+        // This keeps AllocatePage from reusing the same page id repeatedly.
+        page_id_t cur = free_list_head_;
+        size_t hops = 0;
+        std::array<std::byte, PAGE_SIZE> cursor_buf{};
+        while (cur != INVALID_PAGE_ID) {
+            if (cur == page_id) {
+                return std::unexpected(IOErr{
+                    "DeallocatePage: page is already in free list",
+                    HaruhiDB::ErrorCode::DeallocateWriteFailed});
+            }
+            if (cur == 0 || cur >= next_page_id_) {
+                return std::unexpected(IOErr{
+                    "DeallocatePage: free list corrupted (page id out of range)",
+                    HaruhiDB::ErrorCode::DeallocateWriteFailed});
+            }
+            auto read_cur = ReadPage(cur, cursor_buf);
+            if (!read_cur.has_value()) {
+                return std::unexpected(IOErr{
+                    "DeallocatePage: read free-list node failed: " + read_cur.error().msg,
+                    HaruhiDB::ErrorCode::DeallocateWriteFailed});
+            }
+
+            uint64_t next_raw = 0;
+            std::memcpy(&next_raw, cursor_buf.data(), sizeof(uint64_t));
+            if (next_raw == static_cast<uint64_t>(INVALID_PAGE_ID)) {
+                cur = INVALID_PAGE_ID;
+            } else if (next_raw >= static_cast<uint64_t>(next_page_id_)) {
+                return std::unexpected(IOErr{
+                    "DeallocatePage: free list corrupted (next pointer out of range)",
+                    HaruhiDB::ErrorCode::DeallocateWriteFailed});
+            } else {
+                cur = static_cast<page_id_t>(next_raw);
+            }
+
+            hops++;
+            if (hops > static_cast<size_t>(next_page_id_)) {
+                return std::unexpected(IOErr{
+                    "DeallocatePage: free list corrupted (cycle detected)",
+                    HaruhiDB::ErrorCode::DeallocateWriteFailed});
+            }
         }
 
         std::array<std::byte, PAGE_SIZE> buffer{};

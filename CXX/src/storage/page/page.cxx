@@ -24,6 +24,7 @@ namespace storage
 
     void Page::InitBlank(page_id_t page_id,PageType page_type)
     {
+        std::memset(data_.data(), 0, PAGE_SIZE);
         PersistentHeader* header = Header();
         header->free_list_head = INVALID_SLOT_ID;
         header->page_id = page_id;
