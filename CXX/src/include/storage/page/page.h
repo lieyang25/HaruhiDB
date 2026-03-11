@@ -31,9 +31,7 @@ namespace storage
 
         lsn_t lsn;
 
-
         page_id_t page_id;
-
         
         page_id_t next_page_id;
 
