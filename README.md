@@ -14,3 +14,8 @@
 可以优化ReclaimPageIfEmpty(),
 加入deleted_tuple_count可以做页内合并优化
 备注：此优化完成
+
+3.12:
+1.现在想到diskmanager中似乎存在，可能不太需要的刷盘，这个想法的由来是
+有地方似乎只用写某些位置,不太确定，可能不是重要问题，或者想法出错。
+2.建议给 Schema 加一个 ToString()

@@ -18,9 +18,10 @@ namespace HaruhiDB
     using page_id_t = uint32_t;
     using frame_id_t = size_t;
     using seq_t = uint64_t;
-
     using slot_id_t = uint16_t;
     using lsn_t = uint64_t;
+    using table_oid_t = uint32_t;
+    using index_oid_t = uint32_t;
     
     static constexpr uint32_t DB_MAGIC = 0x48415255;
     static constexpr uint32_t DB_VERSION = 1;
