@@ -2,6 +2,7 @@
 add_executable(catalog_test
     column_test.cxx
     schema_test.cxx
+    catalog_table_info_test.cxx
 )
 
 target_link_libraries(catalog_test PRIVATE
