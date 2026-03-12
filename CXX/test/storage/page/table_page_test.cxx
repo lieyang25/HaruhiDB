@@ -297,3 +297,57 @@ TEST_F(TablePageTest, CombinedInsertUpdateDeleteFlow) {
     ASSERT_TRUE(bool(table_page_->GetTuple(sc, outc)));
     ASSERT_EQ(outc.Size(), c.Size());
 }
+
+TEST_F(TablePageTest, TupleCountersTrackInsertDeleteAndReuse) {
+    auto t1 = MakeTupleFromString("tuple_1");
+    auto t2 = MakeTupleFromString("tuple_2");
+    auto t3 = MakeTupleFromString("tuple_3");
+
+    auto r1 = table_page_->InsertTuple(t1);
+    auto r2 = table_page_->InsertTuple(t2);
+    auto r3 = table_page_->InsertTuple(t3);
+    ASSERT_TRUE(bool(r1));
+    ASSERT_TRUE(bool(r2));
+    ASSERT_TRUE(bool(r3));
+
+    const auto* h1 = page_->Header();
+    EXPECT_EQ(h1->slot_count, 3);
+    EXPECT_EQ(h1->alive_tuple_count, 3);
+    EXPECT_EQ(h1->deleted_tuple_count, 0);
+
+    ASSERT_TRUE(bool(table_page_->MarkDelTuple(r2.value())));
+    const auto* h2 = page_->Header();
+    EXPECT_EQ(h2->slot_count, 3);
+    EXPECT_EQ(h2->alive_tuple_count, 2);
+    EXPECT_EQ(h2->deleted_tuple_count, 1);
+
+    auto reused = table_page_->InsertTuple(MakeTupleFromString("tuple_reuse"));
+    ASSERT_TRUE(bool(reused));
+    EXPECT_EQ(reused.value(), r2.value());
+
+    const auto* h3 = page_->Header();
+    EXPECT_EQ(h3->slot_count, 3);
+    EXPECT_EQ(h3->alive_tuple_count, 3);
+    EXPECT_EQ(h3->deleted_tuple_count, 0);
+}
+
+TEST_F(TablePageTest, LegacyCounterFallbackAndRepair) {
+    auto r1 = table_page_->InsertTuple(MakeTupleFromString("alpha"));
+    auto r2 = table_page_->InsertTuple(MakeTupleFromString("beta"));
+    ASSERT_TRUE(bool(r1));
+    ASSERT_TRUE(bool(r2));
+    ASSERT_TRUE(bool(table_page_->MarkDelTuple(r1.value())));
+
+    auto* header = page_->Header();
+    header->alive_tuple_count = 0;
+    header->deleted_tuple_count = 0;
+
+    EXPECT_FALSE(table_page_->TupleCountersConsistent());
+    EXPECT_EQ(table_page_->AliveTupleCount(), 1);
+    EXPECT_EQ(table_page_->DeletedTupleCount(), 1);
+
+    ASSERT_TRUE(bool(table_page_->MarkDelTuple(r2.value())));
+    EXPECT_TRUE(table_page_->TupleCountersConsistent());
+    EXPECT_EQ(header->alive_tuple_count, 0);
+    EXPECT_EQ(header->deleted_tuple_count, header->slot_count);
+}

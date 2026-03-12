@@ -120,6 +120,48 @@ TEST_F(BufferPoolManagerTest, InvalidAndMissingPageOperationsReturnExpectedSigna
     EXPECT_EQ(flush_missing.error().err_code, BufferPoolErrCode::PageNotFound);
 }
 
+TEST_F(BufferPoolManagerTest, NewPageSupportsExplicitPageType) {
+    auto dm = MakeDiskManager();
+    BufferPoolManager bpm(2, dm.get());
+
+    page_id_t pid = INVALID_PAGE_ID;
+    auto leaf_page = bpm.NewPage(&pid, storage::PageType::LEAF);
+    ASSERT_TRUE(leaf_page.has_value());
+    EXPECT_EQ(leaf_page.value()->Type(), storage::PageType::LEAF);
+    EXPECT_TRUE(bpm.UnpinPage(pid, false));
+
+    auto invalid_type = bpm.NewPage(&pid, storage::PageType::INVALID);
+    ASSERT_FALSE(invalid_type.has_value());
+    EXPECT_EQ(invalid_type.error().err_code, BufferPoolErrCode::InvalidPageType);
+}
+
+TEST_F(BufferPoolManagerTest, ExpectedApisReturnDetailedErrors) {
+    auto dm = MakeDiskManager();
+    BufferPoolManager bpm(2, dm.get());
+
+    page_id_t pid = INVALID_PAGE_ID;
+    auto page = bpm.NewPage(&pid);
+    ASSERT_TRUE(page.has_value());
+
+    auto delete_while_pinned = bpm.DeletePageEx(pid);
+    ASSERT_FALSE(delete_while_pinned.has_value());
+    EXPECT_EQ(delete_while_pinned.error().err_code, BufferPoolErrCode::PagePinned);
+
+    auto unpin_ok = bpm.UnpinPageEx(pid, false);
+    ASSERT_TRUE(unpin_ok.has_value());
+
+    auto unpin_again = bpm.UnpinPageEx(pid, false);
+    ASSERT_FALSE(unpin_again.has_value());
+    EXPECT_EQ(unpin_again.error().err_code, BufferPoolErrCode::PageNotPinned);
+
+    auto delete_ok = bpm.DeletePageEx(pid);
+    ASSERT_TRUE(delete_ok.has_value());
+
+    auto invalid_unpin = bpm.UnpinPageEx(INVALID_PAGE_ID, false);
+    ASSERT_FALSE(invalid_unpin.has_value());
+    EXPECT_EQ(invalid_unpin.error().err_code, BufferPoolErrCode::InvalidPageId);
+}
+
 TEST_F(BufferPoolManagerTest, DataPersistsAcrossManagerRestart) {
     page_id_t persisted_pid = INVALID_PAGE_ID;
 

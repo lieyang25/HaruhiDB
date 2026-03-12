@@ -12,6 +12,32 @@ namespace storage
 {
     namespace
     {
+        struct TupleCounters
+        {
+            uint16_t alive{0};
+            uint16_t deleted{0};
+        };
+
+        bool IsTupleCountersConsistent(const PersistentHeader* header)
+        {
+            return static_cast<uint32_t>(header->alive_tuple_count) +
+                    static_cast<uint32_t>(header->deleted_tuple_count) ==
+                static_cast<uint32_t>(header->slot_count);
+        }
+
+        TupleCounters ComputeTupleCounters(const TablePage& table_page, const PersistentHeader* header)
+        {
+            uint32_t deleted = 0;
+            for (slot_id_t slot = 0; slot < header->slot_count; ++slot) {
+                if (table_page.GetSlot(slot)->IsDeleted()) {
+                    ++deleted;
+                }
+            }
+            const auto deleted_count = static_cast<uint16_t>(deleted);
+            const auto alive_count = static_cast<uint16_t>(header->slot_count - deleted_count);
+            return TupleCounters{alive_count, deleted_count};
+        }
+
         class WritePageGuard
         {
         public:
@@ -53,8 +79,10 @@ namespace storage
         }
 
         auto* header = page_->Header();
+        RepairTupleCounters();
 
         slot_id_t reuse_slot = INVALID_SLOT_ID;
+        slot_id_t reuse_next = INVALID_SLOT_ID;
         if (header->free_list_head != INVALID_SLOT_ID) {
             reuse_slot = header->free_list_head;
             if (reuse_slot >= header->slot_count) {
@@ -62,7 +90,16 @@ namespace storage
                     TablePageErr{"TablePage::InsertTuple: free list corrupted", TablePageErrCode::FreeListCorrupted});
             }
             const Slot* reusable = GetSlot(reuse_slot);
-            header->free_list_head = reusable->GetOffset();
+            if (!reusable->IsDeleted()) {
+                return std::unexpected(
+                    TablePageErr{"TablePage::InsertTuple: free list corrupted", TablePageErrCode::FreeListCorrupted});
+            }
+
+            reuse_next = reusable->GetOffset();
+            if (reuse_next != INVALID_SLOT_ID && reuse_next >= header->slot_count) {
+                return std::unexpected(
+                    TablePageErr{"TablePage::InsertTuple: free list corrupted", TablePageErrCode::FreeListCorrupted});
+            }
         }
 
         const bool adding_new_slot = (reuse_slot == INVALID_SLOT_ID);
@@ -73,6 +110,15 @@ namespace storage
         if (FreeSpace() < needed) {
             return std::unexpected(
                 TablePageErr{"TablePage::InsertTuple: not enough free space", TablePageErrCode::InsufficientSpace});
+        }
+
+        if (!adding_new_slot) {
+            if (header->deleted_tuple_count == 0) {
+                return std::unexpected(
+                    TablePageErr{"TablePage::InsertTuple: free list corrupted", TablePageErrCode::FreeListCorrupted});
+            }
+            header->free_list_head = reuse_next;
+            header->deleted_tuple_count = static_cast<uint16_t>(header->deleted_tuple_count - 1);
         }
 
         const uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - tuple_size);
@@ -86,6 +132,7 @@ namespace storage
         if (adding_new_slot) {
             header->slot_count = static_cast<slot_id_t>(header->slot_count + 1);
         }
+        header->alive_tuple_count = static_cast<uint16_t>(header->alive_tuple_count + 1);
 
         page_->MarkDirty();
         return slot_id;
@@ -99,6 +146,7 @@ namespace storage
 
         WritePageGuard guard(page_);
         auto* header = page_->Header();
+        RepairTupleCounters();
         if (slot_id >= header->slot_count) {
             return std::unexpected(
                 TablePageErr{"TablePage::UpdateTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
@@ -147,6 +195,7 @@ namespace storage
 
         WritePageGuard guard(page_);
         auto* header = page_->Header();
+        RepairTupleCounters();
         if (slot_id >= header->slot_count) {
             return std::unexpected(
                 TablePageErr{"TablePage::MarkDelTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
@@ -161,6 +210,10 @@ namespace storage
         slot->SetOffset(header->free_list_head);
         slot->SetDeleted();
         header->free_list_head = slot_id;
+        if (header->alive_tuple_count > 0) {
+            header->alive_tuple_count = static_cast<uint16_t>(header->alive_tuple_count - 1);
+        }
+        header->deleted_tuple_count = static_cast<uint16_t>(header->deleted_tuple_count + 1);
         page_->MarkDirty();
         return {};
     }
@@ -194,6 +247,53 @@ namespace storage
         std::byte* data_ptr = page_->RawData() + offset;
         tuple = record::Tuple(std::span<std::byte>(data_ptr, length));
         return {};
+    }
+
+    bool TablePage::TupleCountersConsistent() const
+    {
+        if (page_ == nullptr) {
+            return false;
+        }
+        return IsTupleCountersConsistent(page_->Header());
+    }
+
+    uint16_t TablePage::AliveTupleCount() const
+    {
+        if (page_ == nullptr) {
+            return 0;
+        }
+        const auto* header = page_->Header();
+        if (IsTupleCountersConsistent(header)) {
+            return header->alive_tuple_count;
+        }
+        return ComputeTupleCounters(*this, header).alive;
+    }
+
+    uint16_t TablePage::DeletedTupleCount() const
+    {
+        if (page_ == nullptr) {
+            return 0;
+        }
+        const auto* header = page_->Header();
+        if (IsTupleCountersConsistent(header)) {
+            return header->deleted_tuple_count;
+        }
+        return ComputeTupleCounters(*this, header).deleted;
+    }
+
+    void TablePage::RepairTupleCounters()
+    {
+        if (page_ == nullptr) {
+            return;
+        }
+        auto* header = page_->Header();
+        if (IsTupleCountersConsistent(header)) {
+            return;
+        }
+        const auto counts = ComputeTupleCounters(*this, header);
+        header->alive_tuple_count = counts.alive;
+        header->deleted_tuple_count = counts.deleted;
+        page_->MarkDirty();
     }
 
     Slot* TablePage::SlotArray()

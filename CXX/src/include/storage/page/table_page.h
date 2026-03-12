@@ -58,6 +58,11 @@ namespace storage
         auto MarkDelTuple(slot_id_t slot_id) -> std::expected<void, TablePageErr>;
         auto GetTuple(slot_id_t slot_id,record::Tuple& tuple) const -> std::expected<void, TablePageErr>;
 
+        bool TupleCountersConsistent() const;
+        uint16_t AliveTupleCount() const;
+        uint16_t DeletedTupleCount() const;
+        void RepairTupleCounters();
+
         Slot* SlotArray();
         const Slot* SlotArray() const;
         Slot* GetSlot(slot_id_t slot_id);

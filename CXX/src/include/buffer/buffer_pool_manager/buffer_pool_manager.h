@@ -21,8 +21,11 @@ namespace buffer
 {
     enum class BufferPoolErrCode : int {
         InvalidPageId = 1,
+        InvalidPageType,
         NullPageIdOutput,
         PageNotFound,
+        PagePinned,
+        PageNotPinned,
         NoAvailableFrame,
         DiskReadFailed,
         DiskWriteFailed,
@@ -43,8 +46,11 @@ namespace buffer
 
         std::expected<storage::Page*,BufferPoolErr> FetchPage(page_id_t page_id);
         std::expected<storage::Page*,BufferPoolErr> NewPage(page_id_t *page_id);
+        std::expected<storage::Page*,BufferPoolErr> NewPage(page_id_t *page_id, storage::PageType page_type);
         bool UnpinPage(page_id_t page_id,bool is_dirty);
         bool DeletePage(page_id_t page_id);
+        std::expected<void,BufferPoolErr> UnpinPageEx(page_id_t page_id,bool is_dirty);
+        std::expected<void,BufferPoolErr> DeletePageEx(page_id_t page_id);
         std::expected<void,BufferPoolErr> FlushPage(page_id_t page_id);
         std::expected<void,BufferPoolErr> FlushAllPages();
 

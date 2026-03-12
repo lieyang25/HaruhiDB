@@ -18,6 +18,8 @@ namespace storage
         Header()->next_page_id = INVALID_PAGE_ID;
         Header()->page_type = PageType::INVALID;
         Header()->slot_count = 0;
+        Header()->alive_tuple_count = 0;
+        Header()->deleted_tuple_count = 0;
         Header()->lsn = 0;
         Header()->free_space_offset = PAGE_SIZE;
     }
@@ -35,6 +37,8 @@ namespace storage
         header->next_page_id = INVALID_PAGE_ID;
         header->page_type = page_type;
         header->slot_count = 0;
+        header->alive_tuple_count = 0;
+        header->deleted_tuple_count = 0;
         header->lsn = 0;
         header->free_space_offset = PAGE_SIZE;
 

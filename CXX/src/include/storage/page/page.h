@@ -37,18 +37,21 @@ namespace storage
 
         slot_id_t slot_count;
 
+        uint16_t alive_tuple_count;
+        uint16_t deleted_tuple_count;
+
         uint16_t free_space_offset;
 
         uint16_t free_list_head;
 
         PageType page_type;
 
-        uint8_t reserved[9];
+        uint8_t reserved[5];
     };
 
     static_assert(std::is_trivially_copyable_v<PersistentHeader>);
 
-    static_assert(sizeof(PersistentHeader) <= HEADER_SIZE,"PersistentHeader size must lower HEADER_SIZE");
+    static_assert(sizeof(PersistentHeader) == HEADER_SIZE,"PersistentHeader size must equal HEADER_SIZE");
 
 
     class Page

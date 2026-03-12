@@ -59,7 +59,9 @@ namespace {
 } // namespace
 
 TableHeap::TableHeap(buffer::BufferPoolManager *bpm, page_id_t first_page_id)
-    : bpm_(bpm), first_page_id_(first_page_id)
+    : bpm_(bpm),
+      first_page_id_(first_page_id),
+      tail_page_id_(INVALID_PAGE_ID)
 {
 }
 
@@ -389,7 +391,7 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
     }
 
     page_id_t new_page_id = INVALID_PAGE_ID;
-    auto page_exp = bpm_->NewPage(&new_page_id);
+    auto page_exp = bpm_->NewPage(&new_page_id, storage::PageType::HEAP);
     if (!page_exp.has_value()) {
         return std::nullopt;
     }
@@ -407,9 +409,14 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
         std::unique_lock lock(table_latch_);
         if (first_page_id_ == INVALID_PAGE_ID) {
             first_page_id_ = new_page_id;
+            tail_page_id_ = new_page_id;
             linked = true;
         } else {
-            page_id_t pid = first_page_id_;
+            if (tail_page_id_ == INVALID_PAGE_ID) {
+                tail_page_id_ = RefreshTailPageIdLocked();
+            }
+
+            page_id_t pid = tail_page_id_;
             while (pid != INVALID_PAGE_ID) {
                 auto page_cur = bpm_->FetchPage(pid);
                 if (!page_cur.has_value()) {
@@ -424,6 +431,7 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
                     page->MarkDirty();
                     page->WUnLock();
                     bpm_->UnpinPage(pid, true);
+                    tail_page_id_ = new_page_id;
                     linked = true;
                     break;
                 }
@@ -432,6 +440,7 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
                 page->WUnLock();
                 bpm_->UnpinPage(pid, false);
                 pid = next_pid;
+                tail_page_id_ = next_pid;
             }
         }
     }
@@ -450,6 +459,36 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
     UpdateFreeSpaceMap(new_page_id, free_space);
     bpm_->UnpinPage(new_page_id, true);
     return new_page_id;
+}
+
+page_id_t TableHeap::RefreshTailPageIdLocked()
+{
+    if (bpm_ == nullptr || first_page_id_ == INVALID_PAGE_ID) {
+        tail_page_id_ = INVALID_PAGE_ID;
+        return tail_page_id_;
+    }
+
+    page_id_t pid = first_page_id_;
+    page_id_t last = INVALID_PAGE_ID;
+    while (pid != INVALID_PAGE_ID) {
+        auto page_exp = bpm_->FetchPage(pid);
+        if (!page_exp.has_value()) {
+            break;
+        }
+
+        storage::Page* page = page_exp.value();
+        page_id_t next_pid = INVALID_PAGE_ID;
+        page->RLock();
+        next_pid = page->Header()->next_page_id;
+        page->RUnLock();
+        bpm_->UnpinPage(pid, false);
+
+        last = pid;
+        pid = next_pid;
+    }
+
+    tail_page_id_ = last;
+    return tail_page_id_;
 }
 
 void TableHeap::UpdateFreeSpaceMap(page_id_t page_id, uint32_t free_space)
@@ -490,12 +529,10 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
         next_pid = header->next_page_id;
         if (pin_ok) {
             storage::TablePage table_page(page);
-            for (slot_id_t slot = 0; slot < header->slot_count; ++slot) {
-                if (!table_page.GetSlot(slot)->IsDeleted()) {
-                    all_deleted = false;
-                    break;
-                }
+            if (!table_page.TupleCountersConsistent()) {
+                table_page.RepairTupleCounters();
             }
+            all_deleted = (table_page.AliveTupleCount() == 0);
         } else {
             all_deleted = false;
         }
@@ -545,6 +582,11 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
     }
 
     if (bpm_->DeletePage(page_id)) {
+        if (first_page_id_ == INVALID_PAGE_ID) {
+            tail_page_id_ = INVALID_PAGE_ID;
+        } else if (tail_page_id_ == page_id) {
+            tail_page_id_ = (prev_pid != INVALID_PAGE_ID) ? prev_pid : RefreshTailPageIdLocked();
+        }
         std::scoped_lock map_lock(free_space_mutex_);
         free_space_map_.erase(page_id);
         return true;
@@ -569,6 +611,9 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
                 bpm_->UnpinPage(prev_pid, false);
             }
         }
+    }
+    if (tail_page_id_ == INVALID_PAGE_ID && first_page_id_ != INVALID_PAGE_ID) {
+        RefreshTailPageIdLocked();
     }
 
     return false;

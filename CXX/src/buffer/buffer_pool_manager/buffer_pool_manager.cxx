@@ -91,15 +91,18 @@ namespace buffer
 
     std::expected<storage::Page*,BufferPoolErr> BufferPoolManager::NewPage(page_id_t *page_id)
     {
-        // TODO:
-        // 1. 调用 GetVictimFrame()。如果没有可用 frame，返回 nullptr。
-        // 2. 调用 disk_manager_->AllocatePage() 分配新的物理页 ID。
-        // 3. 如果 Victim 是脏页，写回磁盘。
-        // 4. 清空该 frame 对应的 Page 对象（ResetMemory）。
-        // 5. 更新 page_table_ 和 replacer_ 的状态。
+        return NewPage(page_id, storage::PageType::HEAP);
+    }
+
+    std::expected<storage::Page*,BufferPoolErr> BufferPoolManager::NewPage(
+        page_id_t *page_id, storage::PageType page_type)
+    {
         std::lock_guard<std::mutex> guard(latch_);
         if (page_id == nullptr) {
             return MakeBpmErr(BufferPoolErrCode::NullPageIdOutput, "NewPage: output page_id pointer is null");
+        }
+        if (page_type == storage::PageType::INVALID) {
+            return MakeBpmErr(BufferPoolErrCode::InvalidPageType, "NewPage: page type must be valid");
         }
 
         auto new_page_id = disk_manager_->AllocatePage();
@@ -144,7 +147,7 @@ namespace buffer
             page_table_.erase(old_page_id);
         }
 
-        page.InitBlank(new_page_id.value(),storage::PageType::HEAP);
+        page.InitBlank(new_page_id.value(),page_type);
         page.Pin();
         replacer_->SetEvictable(fid,false);
         replacer_->RecordAccess(fid);
@@ -155,21 +158,24 @@ namespace buffer
 
     bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty)
     {
-        // TODO:
-        // 1. 如果 page_id 不在 page_table_ 中，直接返回 false。
-        // 2. 获取该 Page 对象，将其 pin_count 减 1。
-        // 3. 如果 pin_count 减到 0，调用 replacer_->SetEvictable(fid, true)。
-        // 4. 如果参数 is_dirty 为 true，更新该 Page 的脏标记。
+        return UnpinPageEx(page_id, is_dirty).has_value();
+    }
+
+    std::expected<void,BufferPoolErr> BufferPoolManager::UnpinPageEx(page_id_t page_id, bool is_dirty)
+    {
         std::lock_guard<std::mutex> guard(latch_);
+        if (page_id == INVALID_PAGE_ID || page_id == 0) {
+            return MakeBpmErr(BufferPoolErrCode::InvalidPageId, "UnpinPage: invalid page id");
+        }
         auto it = page_table_.find(page_id);
         if (it == page_table_.end()) {
-            return false;
+            return MakeBpmErr(BufferPoolErrCode::PageNotFound, "UnpinPage: page not found in buffer pool");
         }
         frame_id_t fid = it->second;
         storage::Page &page = pages_[fid];
 
         if (page.PinCount() <= 0) {
-            return false;
+            return MakeBpmErr(BufferPoolErrCode::PageNotPinned, "UnpinPage: page pin count already zero");
         }
 
         if (is_dirty) {
@@ -177,13 +183,11 @@ namespace buffer
         }
         page.UnPin();
 
-
         if (page.PinCount() == 0) {
             replacer_->SetEvictable(fid,true);
         }
 
-
-        return true;
+        return {};
     }
 
     std::expected<void,BufferPoolErr> BufferPoolManager::FlushPage(page_id_t page_id)
@@ -229,29 +233,44 @@ namespace buffer
         }
         return {};
     }
-    bool BufferPoolManager::DeletePage(page_id_t page_id) {
+    bool BufferPoolManager::DeletePage(page_id_t page_id)
+    {
+        return DeletePageEx(page_id).has_value();
+    }
+
+    std::expected<void,BufferPoolErr> BufferPoolManager::DeletePageEx(page_id_t page_id)
+    {
         std::lock_guard<std::mutex> guard(latch_);
         if (page_id == INVALID_PAGE_ID || page_id == 0) {
-            return false;
+            return MakeBpmErr(BufferPoolErrCode::InvalidPageId, "DeletePage: invalid page id");
         }
 
         auto it = page_table_.find(page_id);
         
         // 逻辑：不在内存就去磁盘回收；在内存就先检查 PinCount，再回收磁盘，最后清理内存。
         if (it == page_table_.end()) {
-            return disk_manager_->DeallocatePage(page_id).has_value();
+            auto dealloc = disk_manager_->DeallocatePage(page_id);
+            if (!dealloc.has_value()) {
+                return MakeBpmErr(
+                    BufferPoolErrCode::DiskDeallocateFailed,
+                    "DeletePage: deallocate page failed: " + dealloc.error().msg);
+            }
+            return {};
         }
 
         frame_id_t fid = it->second;
         storage::Page& page = pages_[fid];
 
         if (page.PinCount() > 0) {
-            return false; 
+            return MakeBpmErr(BufferPoolErrCode::PagePinned, "DeletePage: page is currently pinned");
         }
 
         // 磁盘先行：如果磁盘都没法回收这个 ID，内存映射就该保留
-        if (!disk_manager_->DeallocatePage(page_id).has_value()) {
-            return false;
+        auto dealloc = disk_manager_->DeallocatePage(page_id);
+        if (!dealloc.has_value()) {
+            return MakeBpmErr(
+                BufferPoolErrCode::DiskDeallocateFailed,
+                "DeletePage: deallocate page failed: " + dealloc.error().msg);
         }
 
         // 内存清理
@@ -260,7 +279,7 @@ namespace buffer
         page.ResetMetaData(INVALID_PAGE_ID);
         frame_list_.push_back(fid);
 
-        return true;
+        return {};
     }
 
 

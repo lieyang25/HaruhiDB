@@ -151,4 +151,55 @@ TEST_F(TableHeapTest, ReclaimMiddlePageKeepsChainConsistent)
     EXPECT_EQ(scanned_payloads, expected_payloads);
 }
 
+TEST_F(TableHeapTest, ReclaimTailThenAppendKeepsChainConsistent)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(8, &dm);
+    TableHeap heap(&bpm);
+
+    struct Row {
+        record::RID rid;
+        std::string payload;
+    };
+
+    std::vector<Row> rows;
+    std::set<page_id_t> pages;
+    page_id_t tail_page = INVALID_PAGE_ID;
+    for (int i = 0; i < 1200 && pages.size() < 3; ++i) {
+        const std::string payload = std::string(900, static_cast<char>('a' + (i % 26))) + "#" + std::to_string(i);
+        record::RID rid;
+        ASSERT_TRUE(heap.InsertTuple(MakeTupleFromString(payload), &rid));
+        rows.push_back(Row{rid, payload});
+        pages.insert(rid.GetPageId());
+        tail_page = rid.GetPageId();
+    }
+    ASSERT_GE(pages.size(), 3u);
+    ASSERT_NE(tail_page, INVALID_PAGE_ID);
+
+    std::set<std::string> expected_payloads;
+    size_t deleted_rows = 0;
+    for (const auto &row : rows) {
+        if (row.rid.GetPageId() == tail_page) {
+            ASSERT_TRUE(heap.DeleteTuple(row.rid));
+            deleted_rows++;
+        } else {
+            expected_payloads.insert(row.payload);
+        }
+    }
+    ASSERT_GT(deleted_rows, 0u);
+
+    record::RID tail_insert_rid;
+    const std::string appended = "tail_after_reclaim";
+    ASSERT_TRUE(heap.InsertTuple(MakeTupleFromString(appended), &tail_insert_rid));
+    EXPECT_NE(tail_insert_rid.GetPageId(), INVALID_PAGE_ID);
+    expected_payloads.insert(appended);
+
+    std::set<std::string> scanned_payloads;
+    for (auto it = heap.Begin(); it != heap.End(); ++it) {
+        scanned_payloads.insert(TupleToString(*it));
+    }
+
+    EXPECT_EQ(scanned_payloads, expected_payloads);
+}
+
 } // namespace HaruhiDB::table

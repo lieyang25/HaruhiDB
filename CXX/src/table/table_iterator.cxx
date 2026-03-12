@@ -185,13 +185,19 @@ bool TableIterator::AdvanceToNextValid()
         });
 
         const auto *header = page->Header();
+        storage::TablePage table_page(page);
+        if (header->slot_count == 0 || table_page.AliveTupleCount() == 0) {
+            pid = header->next_page_id;
+            slot = 0;
+            continue;
+        }
+
         if (cur_slot_ >= header->slot_count) {
             pid = header->next_page_id;
             slot = 0;
             continue;
         }
 
-        storage::TablePage table_page(page);
         for (slot_id_t s = cur_slot_; s < header->slot_count; ++s) {
             if (!table_page.GetSlot(s)->IsDeleted()) {
                 cur_page_id_ = pid;

@@ -80,12 +80,16 @@ private:
     // 更新 free-space map（内部调用，带锁）
     void UpdateFreeSpaceMap(page_id_t page_id, uint32_t free_space);
 
+    // 重新扫描页链并刷新 tail_page_id_（调用方需持有 table_latch_）
+    page_id_t RefreshTailPageIdLocked();
+
     // 删除 page（回收）并修正页链（仅在安全可回收时调用）
     // 返回 true 代表删除成功
     bool ReclaimPageIfEmpty(page_id_t page_id);
 
     buffer::BufferPoolManager *bpm_;
     page_id_t first_page_id_;
+    page_id_t tail_page_id_;
 
     // 简单 free-space map（内存缓存），记录 page_id -> free_bytes
     // 需要在插入/删除后更新
