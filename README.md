@@ -3,6 +3,7 @@
 虽然在buffer_pool_manager中的函数，都使用了大锁，这让不保证顺序的原子操作变得不那么危险
 但如果改进性能，则要审查一下是否修改。
 2.现在写下的std::expected存在部分没有完善，例如在buffer_pool_manager中的部分函数
+备注：此优化完成
 
 3.11:
 1.我现在想到的一个改进点在tableheap，因为这里使用了单链表组织，或许可以改进性能
@@ -12,3 +13,4 @@
 5.在页头中加入alive_tuple_count，即记录当前有多少未删除的他tuple，可以优化tableiterator
 可以优化ReclaimPageIfEmpty(),
 加入deleted_tuple_count可以做页内合并优化
+备注：此优化完成
