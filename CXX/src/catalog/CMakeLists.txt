@@ -3,6 +3,8 @@
 add_library(haruhi_catalog
     column.cxx
     schema.cxx
+    table_info.cxx
+    catalog.cxx
 )
 
 target_link_libraries(haruhi_catalog PUBLIC
