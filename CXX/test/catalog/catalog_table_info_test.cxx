@@ -83,6 +83,7 @@ TEST_F(CatalogTableInfoTest, CreateAndLookupTable)
     EXPECT_TRUE(catalog.HasTable("student"));
     EXPECT_TRUE(catalog.HasTable("STUDENT"));
     EXPECT_EQ(catalog.TableCount(), 1u);
+    EXPECT_EQ(catalog.NextTableOid(), 1u);
 
     TableInfo* by_name = catalog.GetTable("Student");
     ASSERT_NE(by_name, nullptr);
@@ -104,6 +105,12 @@ TEST_F(CatalogTableInfoTest, DuplicateTableNameIsRejectedCaseInsensitive)
     auto second = catalog.CreateTable("STUDENT", schema);
     ASSERT_FALSE(second.has_value());
     EXPECT_EQ(catalog.TableCount(), 1u);
+    EXPECT_EQ(catalog.NextTableOid(), 1u);
+
+    auto third = catalog.CreateTable("teacher", schema);
+    ASSERT_TRUE(third.has_value());
+    ASSERT_NE(third.value(), nullptr);
+    EXPECT_EQ(third.value()->Oid(), 1u);
 }
 
 TEST_F(CatalogTableInfoTest, TableInfoIndexOidDeduplicates)

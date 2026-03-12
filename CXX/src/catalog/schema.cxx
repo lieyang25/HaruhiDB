@@ -152,6 +152,19 @@ namespace catalog
         return names;
     }
 
+    std::string Schema::ToString() const
+    {
+        std::string text = "Schema[";
+        for (size_t i = 0; i < columns_.size(); ++i) {
+            if (i > 0) {
+                text += ", ";
+            }
+            text += columns_[i].ToString();
+        }
+        text += "]";
+        return text;
+    }
+
     /**
      * Schema 投影
      *

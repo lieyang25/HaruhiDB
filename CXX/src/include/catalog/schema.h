@@ -213,6 +213,11 @@ namespace catalog
         std::vector<std::string> ColumnNames() const;
 
         /**
+         * 返回 schema 的可读字符串
+         */
+        std::string ToString() const;
+
+        /**
          * Schema 投影
          *
          * SELECT a,b FROM table

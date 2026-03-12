@@ -8,11 +8,14 @@
 #include "storage/record/rid.h"
 #include "storage/record/tuple.h"
 
+#include <expected>
+#include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <optional>
-#include <unordered_map>
+#include <shared_mutex>
+#include <string>
 #include <cstdint>
+#include <unordered_map>
 
 namespace HaruhiDB {
 namespace table {
@@ -34,6 +37,10 @@ class TableIterator;
  */
 class TableHeap {
 public:
+    // 创建一个合法的空 TableHeap（包含合法首页）
+    static std::expected<std::unique_ptr<TableHeap>, std::string>
+    Create(buffer::BufferPoolManager *bpm);
+
     explicit TableHeap(buffer::BufferPoolManager *bpm, page_id_t first_page_id = INVALID_PAGE_ID);
 
     // 插入 tuple，成功返回 true，并把 RID 写到 out_rid

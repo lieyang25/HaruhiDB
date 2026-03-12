@@ -145,3 +145,16 @@ TEST(SchemaTest, ProjectOutOfRangeThrows)
     const std::array<uint32_t, 2> bad_indices{0u, 99u};
     EXPECT_THROW(static_cast<void>(schema.Project(bad_indices)), std::out_of_range);
 }
+
+TEST(SchemaTest, ToStringFormatsColumns)
+{
+    Schema schema({
+        Column("id", TypeId::INTEGER, false),
+        Column("name", TypeId::VARCHAR, 16, true),
+    });
+
+    const std::string text = schema.ToString();
+    EXPECT_NE(text.find("Schema["), std::string::npos);
+    EXPECT_NE(text.find("id INTEGER"), std::string::npos);
+    EXPECT_NE(text.find("name VARCHAR(16)"), std::string::npos);
+}

@@ -25,6 +25,21 @@ namespace catalog
             });
             return normalized;
         }
+
+        void BestEffortRecycleNewTableHeap(
+            buffer::BufferPoolManager* bpm, std::unique_ptr<table::TableHeap>& table_heap)
+        {
+            if (bpm == nullptr || table_heap == nullptr) {
+                return;
+            }
+
+            const page_id_t first_page_id = table_heap->FirstPageId();
+            table_heap.reset();
+
+            if (first_page_id != INVALID_PAGE_ID) {
+                (void)bpm->DeletePage(first_page_id);
+            }
+        }
     } // namespace
 
     Catalog::Catalog(buffer::BufferPoolManager* bpm)
@@ -40,25 +55,29 @@ namespace catalog
             return std::unexpected(validated.error());
         }
 
-        std::unique_lock lock(latch_);
-
         const std::string normalized_name = NormalizeTableName(table_name);
-        if (name_to_oid_.contains(normalized_name)) {
-            return std::unexpected("Catalog: table already exists: " + table_name);
+        {
+            std::shared_lock lock(latch_);
+            if (name_to_oid_.contains(normalized_name)) {
+                return std::unexpected("Catalog: table already exists: " + table_name);
+            }
         }
 
         auto table_heap_exp = CreateTableHeap();
         if (!table_heap_exp.has_value()) {
             return std::unexpected(table_heap_exp.error());
         }
+        std::unique_ptr<table::TableHeap> table_heap = std::move(table_heap_exp.value());
+
+        std::unique_lock lock(latch_);
+        if (name_to_oid_.contains(normalized_name)) {
+            BestEffortRecycleNewTableHeap(bpm_, table_heap);
+            return std::unexpected("Catalog: table already exists: " + table_name);
+        }
 
         const table_oid_t table_oid = AllocateTableOid();
-
         auto table_info = std::make_unique<TableInfo>(
-            table_oid,
-            std::move(table_name),
-            schema,
-            std::move(table_heap_exp.value()));
+            table_oid, std::move(table_name), schema, std::move(table_heap));
 
         TableInfo* table_info_ptr = table_info.get();
         name_to_oid_[normalized_name] = table_oid;
@@ -152,28 +171,15 @@ namespace catalog
         return tables_.size();
     }
 
+    table_oid_t Catalog::NextTableOid() const noexcept
+    {
+        std::shared_lock lock(latch_);
+        return next_table_oid_;
+    }
+
     std::expected<std::unique_ptr<table::TableHeap>, std::string> Catalog::CreateTableHeap()
     {
-        if (bpm_ == nullptr) {
-            return std::unexpected("Catalog: buffer pool manager is null");
-        }
-
-        page_id_t first_page_id = INVALID_PAGE_ID;
-        auto first_page_exp = bpm_->NewPage(&first_page_id);
-        if (!first_page_exp.has_value()) {
-            return std::unexpected(
-                "Catalog: failed to create first table page: " + first_page_exp.error().msg);
-        }
-
-        storage::Page* first_page = first_page_exp.value();
-        first_page->MarkDirty();
-
-        if (!bpm_->UnpinPage(first_page_id, true)) {
-            bpm_->DeletePage(first_page_id);
-            return std::unexpected("Catalog: failed to unpin first table page");
-        }
-
-        return std::make_unique<table::TableHeap>(bpm_, first_page_id);
+        return table::TableHeap::Create(bpm_);
     }
 
     table_oid_t Catalog::AllocateTableOid() noexcept

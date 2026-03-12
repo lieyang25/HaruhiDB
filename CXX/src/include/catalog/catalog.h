@@ -106,8 +106,8 @@ namespace catalog
         /**
          * 允许移动
          */
-        Catalog(Catalog&&) noexcept = default;
-        Catalog& operator=(Catalog&&) noexcept = default;
+        Catalog(Catalog&&) = delete;
+        Catalog& operator=(Catalog&&) = delete;
 
         /**
          * 创建表
@@ -135,11 +135,18 @@ namespace catalog
          * 按表名查找表
          *
          * 不存在返回 nullptr。
+         *
+         * 生命周期说明：
+         *
+         * 返回指针为借用指针，不拥有对象。
+         * 在 Catalog 与对应 TableInfo 仍然存活期间有效。
          */
         TableInfo* GetTable(std::string_view table_name) noexcept;
 
         /**
          * 按表名查找表（const 版本）
+         *
+         * 生命周期说明同上。
          */
         const TableInfo* GetTable(std::string_view table_name) const noexcept;
 
@@ -147,11 +154,15 @@ namespace catalog
          * 按 oid 查找表
          *
          * 不存在返回 nullptr。
+         *
+         * 生命周期说明同上。
          */
         TableInfo* GetTable(table_oid_t table_oid) noexcept;
 
         /**
          * 按 oid 查找表（const 版本）
+         *
+         * 生命周期说明同上。
          */
         const TableInfo* GetTable(table_oid_t table_oid) const noexcept;
 
@@ -167,11 +178,14 @@ namespace catalog
          *
          * 返回的是裸指针列表，
          * 拥有关系仍由 Catalog 内部维护。
+         * 指针仅在 Catalog 与对应表对象仍存活期间有效。
          */
         std::vector<TableInfo*> GetAllTables();
 
         /**
          * const 版本
+         *
+         * 生命周期说明同上。
          */
         std::vector<const TableInfo*> GetAllTables() const;
 
@@ -185,18 +199,15 @@ namespace catalog
          *
          * 主要用于调试或测试。
          */
-        table_oid_t NextTableOid() const noexcept { return next_table_oid_; }
+        table_oid_t NextTableOid() const noexcept;
 
     private:
 
         /**
          * 创建一张新的 table heap
          *
-         * 当前阶段把创建逻辑封装在 Catalog 内部，
-         * 避免外部感知过多细节。
-         *
-         * 如果后续你更喜欢工厂模式，
-         * 也可以把它迁移到 TableHeap::Create(...)。
+         * 当前实现会委托给 TableHeap::Create(...)，
+         * 由 TableHeap 自己负责首页合法性初始化细节。
          */
         std::expected<std::unique_ptr<table::TableHeap>, std::string>
         CreateTableHeap();

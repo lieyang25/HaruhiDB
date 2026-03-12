@@ -7,6 +7,7 @@
 
 #include "storage/page/table_page.h"
 
+#include <cstring>
 #include <ranges>
 #include <shared_mutex>
 #include <unordered_set>
@@ -63,6 +64,43 @@ TableHeap::TableHeap(buffer::BufferPoolManager *bpm, page_id_t first_page_id)
       first_page_id_(first_page_id),
       tail_page_id_(INVALID_PAGE_ID)
 {
+}
+
+std::expected<std::unique_ptr<TableHeap>, std::string> TableHeap::Create(buffer::BufferPoolManager *bpm)
+{
+    if (bpm == nullptr) {
+        return std::unexpected("TableHeap::Create: buffer pool manager is null");
+    }
+
+    page_id_t first_page_id = INVALID_PAGE_ID;
+    auto first_page_exp = bpm->NewPage(&first_page_id, storage::PageType::HEAP);
+    if (!first_page_exp.has_value()) {
+        return std::unexpected(
+            "TableHeap::Create: failed to create first table page: " + first_page_exp.error().msg);
+    }
+
+    storage::Page *first_page = first_page_exp.value();
+    first_page->WLock();
+    std::memset(first_page->RawData(), 0, PAGE_SIZE);
+    auto *header = first_page->Header();
+    header->lsn = 0;
+    header->page_id = first_page_id;
+    header->next_page_id = INVALID_PAGE_ID;
+    header->slot_count = 0;
+    header->alive_tuple_count = 0;
+    header->deleted_tuple_count = 0;
+    header->free_space_offset = PAGE_SIZE;
+    header->free_list_head = INVALID_SLOT_ID;
+    header->page_type = storage::PageType::HEAP;
+    first_page->MarkDirty();
+    first_page->WUnLock();
+
+    if (!bpm->UnpinPage(first_page_id, true)) {
+        bpm->DeletePage(first_page_id);
+        return std::unexpected("TableHeap::Create: failed to unpin first table page");
+    }
+
+    return std::make_unique<TableHeap>(bpm, first_page_id);
 }
 
 bool TableHeap::InsertTuple(const record::Tuple &tuple, record::RID *out_rid)
