@@ -29,6 +29,9 @@ namespace storage
     class BPlusTreePage
     {
     public:
+        // Concurrency contract:
+        // Callers must hold appropriate page latches before mutating/reading the
+        // page content. This wrapper does not acquire latches internally.
         explicit BPlusTreePage(Page* page) : page_(page) {}
 
         Page* GetPage() noexcept { return page_; }

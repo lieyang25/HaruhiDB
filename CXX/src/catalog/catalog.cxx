@@ -177,6 +177,101 @@ namespace catalog
         return next_table_oid_;
     }
 
+    std::expected<storage::BPlusTree*, std::string> Catalog::CreateIndex(
+        table_oid_t table_oid, std::string index_name)
+    {
+        std::unique_lock lock(latch_);
+        const auto it = tables_.find(table_oid);
+        if (it == tables_.end() || it->second == nullptr) {
+            return std::unexpected("Catalog::CreateIndex: table oid not found");
+        }
+
+        const index_oid_t index_oid = AllocateIndexOid();
+        return it->second->CreateIndex(index_oid, std::move(index_name), bpm_);
+    }
+
+    std::expected<storage::BPlusTree*, std::string> Catalog::CreateIndex(
+        std::string_view table_name, std::string index_name)
+    {
+        std::shared_lock lock(latch_);
+        const auto name_it = name_to_oid_.find(NormalizeTableName(table_name));
+        if (name_it == name_to_oid_.end()) {
+            return std::unexpected("Catalog::CreateIndex: table not found");
+        }
+        const table_oid_t table_oid = name_it->second;
+        lock.unlock();
+        return CreateIndex(table_oid, std::move(index_name));
+    }
+
+    std::expected<storage::BPlusTree*, std::string> Catalog::LoadIndex(
+        table_oid_t table_oid,
+        index_oid_t index_oid,
+        std::string index_name,
+        page_id_t header_page_id)
+    {
+        std::unique_lock lock(latch_);
+        const auto it = tables_.find(table_oid);
+        if (it == tables_.end() || it->second == nullptr) {
+            return std::unexpected("Catalog::LoadIndex: table oid not found");
+        }
+
+        auto loaded = it->second->LoadIndex(
+            index_oid,
+            std::move(index_name),
+            header_page_id,
+            bpm_);
+        if (!loaded.has_value()) {
+            return std::unexpected(loaded.error());
+        }
+
+        if (index_oid >= next_index_oid_) {
+            next_index_oid_ = index_oid + 1;
+        }
+        return loaded;
+    }
+
+    std::expected<storage::BPlusTree*, std::string> Catalog::LoadIndex(
+        std::string_view table_name,
+        index_oid_t index_oid,
+        std::string index_name,
+        page_id_t header_page_id)
+    {
+        std::shared_lock lock(latch_);
+        const auto name_it = name_to_oid_.find(NormalizeTableName(table_name));
+        if (name_it == name_to_oid_.end()) {
+            return std::unexpected("Catalog::LoadIndex: table not found");
+        }
+        const table_oid_t table_oid = name_it->second;
+        lock.unlock();
+        return LoadIndex(table_oid, index_oid, std::move(index_name), header_page_id);
+    }
+
+    storage::BPlusTree* Catalog::GetIndex(table_oid_t table_oid, index_oid_t index_oid) noexcept
+    {
+        std::shared_lock lock(latch_);
+        const auto it = tables_.find(table_oid);
+        if (it == tables_.end() || it->second == nullptr) {
+            return nullptr;
+        }
+        return it->second->GetIndex(index_oid);
+    }
+
+    const storage::BPlusTree* Catalog::GetIndex(table_oid_t table_oid, index_oid_t index_oid) const noexcept
+    {
+        std::shared_lock lock(latch_);
+        const auto it = tables_.find(table_oid);
+        if (it == tables_.end() || it->second == nullptr) {
+            return nullptr;
+        }
+        return it->second->GetIndex(index_oid);
+    }
+
+    index_oid_t Catalog::NextIndexOid() const noexcept
+    {
+        std::shared_lock lock(latch_);
+        return next_index_oid_;
+    }
+
     std::expected<std::unique_ptr<table::TableHeap>, std::string> Catalog::CreateTableHeap()
     {
         return table::TableHeap::Create(bpm_);
@@ -185,6 +280,11 @@ namespace catalog
     table_oid_t Catalog::AllocateTableOid() noexcept
     {
         return next_table_oid_++;
+    }
+
+    index_oid_t Catalog::AllocateIndexOid() noexcept
+    {
+        return next_index_oid_++;
     }
 
     std::expected<void, std::string> Catalog::ValidateTableName(std::string_view table_name)

@@ -181,6 +181,39 @@ namespace storage
         return true;
     }
 
+    bool BPlusTreeLeafPage::Remove(const KeyType& key) noexcept
+    {
+        if (page_ == nullptr) {
+            return false;
+        }
+
+        const uint16_t size = GetSize();
+        if (size == 0) {
+            return false;
+        }
+
+        auto* array = Array();
+        if (array == nullptr) {
+            return false;
+        }
+
+        const uint16_t idx = KeyIndex(key);
+        if (idx >= size || array[idx].key != key) {
+            return false;
+        }
+
+        if (idx + 1 < size) {
+            std::memmove(
+                array + idx,
+                array + idx + 1,
+                sizeof(MappingType) * (size - idx - 1));
+        }
+
+        std::memset(array + (size - 1), 0, sizeof(MappingType));
+        SetSize(static_cast<uint16_t>(size - 1));
+        return true;
+    }
+
     void BPlusTreeLeafPage::MoveHalfTo(BPlusTreeLeafPage* recipient) noexcept
     {
         // Caller must hold write latches for both source and recipient pages.
@@ -228,6 +261,126 @@ namespace storage
 
         recipient->SetNextPageId(GetNextPageId());
         SetNextPageId(recipient->GetPageId());
+    }
+
+    void BPlusTreeLeafPage::MoveAllTo(BPlusTreeLeafPage* recipient) noexcept
+    {
+        // Caller must hold write latches for both source and recipient pages.
+        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+            return;
+        }
+        if (recipient == this) {
+            return;
+        }
+        if (GetPageType() != PageType::LEAF || recipient->GetPageType() != PageType::LEAF) {
+            return;
+        }
+
+        const uint16_t src_size = GetSize();
+        if (src_size == 0) {
+            recipient->SetNextPageId(GetNextPageId());
+            return;
+        }
+
+        const uint16_t dst_size = recipient->GetSize();
+        if (static_cast<uint32_t>(dst_size) + src_size > recipient->GetMaxSize()) {
+            return;
+        }
+
+        auto* src = Array();
+        auto* dst = recipient->Array();
+        if (src == nullptr || dst == nullptr) {
+            return;
+        }
+
+        std::memcpy(
+            dst + dst_size,
+            src,
+            sizeof(MappingType) * src_size);
+        std::memset(src, 0, sizeof(MappingType) * src_size);
+
+        recipient->SetSize(static_cast<uint16_t>(dst_size + src_size));
+        SetSize(0);
+        recipient->SetNextPageId(GetNextPageId());
+        SetNextPageId(INVALID_PAGE_ID);
+    }
+
+    bool BPlusTreeLeafPage::MoveFirstToEndOf(BPlusTreeLeafPage* recipient) noexcept
+    {
+        // Caller must hold write latches for both source and recipient pages.
+        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+            return false;
+        }
+        if (recipient == this) {
+            return false;
+        }
+        if (GetPageType() != PageType::LEAF || recipient->GetPageType() != PageType::LEAF) {
+            return false;
+        }
+
+        const uint16_t src_size = GetSize();
+        const uint16_t dst_size = recipient->GetSize();
+        if (src_size == 0 || dst_size >= recipient->GetMaxSize()) {
+            return false;
+        }
+
+        auto* src = Array();
+        auto* dst = recipient->Array();
+        if (src == nullptr || dst == nullptr) {
+            return false;
+        }
+
+        dst[dst_size] = src[0];
+        if (src_size > 1) {
+            std::memmove(
+                src,
+                src + 1,
+                sizeof(MappingType) * (src_size - 1));
+        }
+        std::memset(src + (src_size - 1), 0, sizeof(MappingType));
+
+        recipient->SetSize(static_cast<uint16_t>(dst_size + 1));
+        SetSize(static_cast<uint16_t>(src_size - 1));
+        return true;
+    }
+
+    bool BPlusTreeLeafPage::MoveLastToFrontOf(BPlusTreeLeafPage* recipient) noexcept
+    {
+        // Caller must hold write latches for both source and recipient pages.
+        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+            return false;
+        }
+        if (recipient == this) {
+            return false;
+        }
+        if (GetPageType() != PageType::LEAF || recipient->GetPageType() != PageType::LEAF) {
+            return false;
+        }
+
+        const uint16_t src_size = GetSize();
+        const uint16_t dst_size = recipient->GetSize();
+        if (src_size == 0 || dst_size >= recipient->GetMaxSize()) {
+            return false;
+        }
+
+        auto* src = Array();
+        auto* dst = recipient->Array();
+        if (src == nullptr || dst == nullptr) {
+            return false;
+        }
+
+        if (dst_size > 0) {
+            std::memmove(
+                dst + 1,
+                dst,
+                sizeof(MappingType) * dst_size);
+        }
+        dst[0] = src[src_size - 1];
+        std::memset(src + (src_size - 1), 0, sizeof(MappingType));
+
+        recipient->SetSize(static_cast<uint16_t>(dst_size + 1));
+        SetSize(static_cast<uint16_t>(src_size - 1));
+        return true;
     }
 
     BPlusTreeLeafExtraHeader* BPlusTreeLeafPage::LeafHeader() noexcept

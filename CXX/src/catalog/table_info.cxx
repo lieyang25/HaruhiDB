@@ -5,6 +5,7 @@
 #include "catalog/table_info.h"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -13,6 +14,17 @@ namespace HaruhiDB
 {
 namespace catalog
 {
+    namespace
+    {
+        std::string NormalizeIndexName(std::string_view index_name)
+        {
+            std::string normalized(index_name);
+            std::ranges::transform(normalized, normalized.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return normalized;
+        }
+    } // namespace
 
     TableInfo::TableInfo(
         table_oid_t oid,
@@ -38,6 +50,115 @@ namespace catalog
         if (!std::ranges::contains(index_oids_, index_oid)) {
             index_oids_.push_back(index_oid);
         }
+    }
+
+    std::expected<storage::BPlusTree*, std::string> TableInfo::CreateIndex(
+        index_oid_t index_oid,
+        std::string index_name,
+        buffer::BufferPoolManager* bpm)
+    {
+        if (bpm == nullptr) {
+            return std::unexpected("TableInfo::CreateIndex: buffer pool manager is null");
+        }
+        if (index_name.empty()) {
+            return std::unexpected("TableInfo::CreateIndex: index name must not be empty");
+        }
+
+        const std::string normalized = NormalizeIndexName(index_name);
+        for (const auto& entry : indexes_) {
+            if (entry.index_oid == index_oid) {
+                return std::unexpected("TableInfo::CreateIndex: index oid already exists");
+            }
+            if (NormalizeIndexName(entry.index_name) == normalized) {
+                return std::unexpected("TableInfo::CreateIndex: index name already exists");
+            }
+        }
+
+        auto index = std::make_unique<storage::BPlusTree>(bpm);
+        const page_id_t header_page_id = index->HeaderPageId();
+        if (header_page_id == INVALID_PAGE_ID) {
+            return std::unexpected("TableInfo::CreateIndex: failed to allocate index header page");
+        }
+
+        AddIndexOid(index_oid);
+        indexes_.push_back(IndexEntry{
+            .index_oid = index_oid,
+            .index_name = std::move(index_name),
+            .header_page_id = header_page_id,
+            .index = std::move(index),
+        });
+        return indexes_.back().index.get();
+    }
+
+    std::expected<storage::BPlusTree*, std::string> TableInfo::LoadIndex(
+        index_oid_t index_oid,
+        std::string index_name,
+        page_id_t header_page_id,
+        buffer::BufferPoolManager* bpm)
+    {
+        if (bpm == nullptr) {
+            return std::unexpected("TableInfo::LoadIndex: buffer pool manager is null");
+        }
+        if (index_name.empty()) {
+            return std::unexpected("TableInfo::LoadIndex: index name must not be empty");
+        }
+        if (header_page_id == INVALID_PAGE_ID) {
+            return std::unexpected("TableInfo::LoadIndex: header page id is invalid");
+        }
+
+        const std::string normalized = NormalizeIndexName(index_name);
+        for (const auto& entry : indexes_) {
+            if (entry.index_oid == index_oid) {
+                return std::unexpected("TableInfo::LoadIndex: index oid already exists");
+            }
+            if (NormalizeIndexName(entry.index_name) == normalized) {
+                return std::unexpected("TableInfo::LoadIndex: index name already exists");
+            }
+        }
+
+        auto index = std::make_unique<storage::BPlusTree>(bpm, header_page_id);
+        if (index->HeaderPageId() != header_page_id) {
+            return std::unexpected("TableInfo::LoadIndex: header page id mismatch");
+        }
+
+        AddIndexOid(index_oid);
+        indexes_.push_back(IndexEntry{
+            .index_oid = index_oid,
+            .index_name = std::move(index_name),
+            .header_page_id = header_page_id,
+            .index = std::move(index),
+        });
+        return indexes_.back().index.get();
+    }
+
+    storage::BPlusTree* TableInfo::GetIndex(index_oid_t index_oid) noexcept
+    {
+        for (auto& entry : indexes_) {
+            if (entry.index_oid == index_oid) {
+                return entry.index.get();
+            }
+        }
+        return nullptr;
+    }
+
+    const storage::BPlusTree* TableInfo::GetIndex(index_oid_t index_oid) const noexcept
+    {
+        for (const auto& entry : indexes_) {
+            if (entry.index_oid == index_oid) {
+                return entry.index.get();
+            }
+        }
+        return nullptr;
+    }
+
+    std::optional<page_id_t> TableInfo::GetIndexHeaderPageId(index_oid_t index_oid) const noexcept
+    {
+        for (const auto& entry : indexes_) {
+            if (entry.index_oid == index_oid) {
+                return entry.header_page_id;
+            }
+        }
+        return std::nullopt;
     }
 
     std::string TableInfo::ToString() const

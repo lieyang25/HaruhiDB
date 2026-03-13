@@ -64,8 +64,12 @@ namespace storage
         uint16_t KeyIndex(const KeyType& key) const noexcept;
         bool Lookup(const KeyType& key, ValueType* out_value) const noexcept;
         bool Insert(const KeyType& key, const ValueType& value) noexcept;
+        bool Remove(const KeyType& key) noexcept;
 
         void MoveHalfTo(BPlusTreeLeafPage* recipient) noexcept;
+        void MoveAllTo(BPlusTreeLeafPage* recipient) noexcept;
+        bool MoveFirstToEndOf(BPlusTreeLeafPage* recipient) noexcept;
+        bool MoveLastToFrontOf(BPlusTreeLeafPage* recipient) noexcept;
 
     private:
         BPlusTreeLeafExtraHeader* LeafHeader() noexcept;

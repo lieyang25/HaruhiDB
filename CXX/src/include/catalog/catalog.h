@@ -38,7 +38,7 @@
  * - 不做持久化 catalog
  * - 不做系统表恢复
  * - 不做复杂 DDL
- * - 不做索引 catalog
+ * - 提供最小索引登记/恢复入口（索引内容由 B+Tree header page 持久化）
  *
  * 先服务于最基本的表对象管理。
  *
@@ -201,6 +201,31 @@ namespace catalog
          */
         table_oid_t NextTableOid() const noexcept;
 
+        std::expected<storage::BPlusTree*, std::string>
+        CreateIndex(table_oid_t table_oid, std::string index_name);
+
+        std::expected<storage::BPlusTree*, std::string>
+        CreateIndex(std::string_view table_name, std::string index_name);
+
+        std::expected<storage::BPlusTree*, std::string>
+        LoadIndex(
+            table_oid_t table_oid,
+            index_oid_t index_oid,
+            std::string index_name,
+            page_id_t header_page_id);
+
+        std::expected<storage::BPlusTree*, std::string>
+        LoadIndex(
+            std::string_view table_name,
+            index_oid_t index_oid,
+            std::string index_name,
+            page_id_t header_page_id);
+
+        storage::BPlusTree* GetIndex(table_oid_t table_oid, index_oid_t index_oid) noexcept;
+        const storage::BPlusTree* GetIndex(table_oid_t table_oid, index_oid_t index_oid) const noexcept;
+
+        index_oid_t NextIndexOid() const noexcept;
+
     private:
 
         /**
@@ -216,6 +241,7 @@ namespace catalog
          * 为新表分配一个 table oid
          */
         table_oid_t AllocateTableOid() noexcept;
+        index_oid_t AllocateIndexOid() noexcept;
 
         /**
          * 校验表名是否合法
@@ -236,6 +262,7 @@ namespace catalog
          * 下一个可分配的 table oid
          */
         table_oid_t next_table_oid_{0};
+        index_oid_t next_index_oid_{0};
 
         /**
          * name -> oid

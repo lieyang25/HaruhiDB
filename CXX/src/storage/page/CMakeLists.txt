@@ -5,6 +5,7 @@ add_library(haruhi_page
     table_page.cxx
     b_plus_tree_page.cxx
     b_plus_tree_leaf_page.cxx
+    b_plus_tree_internal_page.cxx
 )
 
 target_link_libraries(haruhi_page   PUBLIC

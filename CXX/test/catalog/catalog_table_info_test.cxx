@@ -133,4 +133,92 @@ TEST_F(CatalogTableInfoTest, TableInfoIndexOidDeduplicates)
     EXPECT_EQ(index_oids[1], 9u);
 }
 
+TEST_F(CatalogTableInfoTest, CatalogCreateIndexAndLookup)
+{
+    Catalog catalog(buffer_pool_manager_.get());
+    Schema schema = MakeSimpleSchema();
+
+    auto created = catalog.CreateTable("score", schema);
+    ASSERT_TRUE(created.has_value());
+    TableInfo* table_info = created.value();
+    ASSERT_NE(table_info, nullptr);
+
+    auto index_exp = catalog.CreateIndex("score", "idx_score_id");
+    ASSERT_TRUE(index_exp.has_value());
+    storage::BPlusTree* index = index_exp.value();
+    ASSERT_NE(index, nullptr);
+
+    EXPECT_EQ(catalog.NextIndexOid(), 1u);
+    ASSERT_EQ(table_info->IndexOids().size(), 1u);
+    EXPECT_EQ(table_info->IndexOids()[0], 0u);
+
+    ASSERT_TRUE(index->Insert(10, record::RID(100, 10)));
+    ASSERT_TRUE(index->Insert(20, record::RID(100, 20)));
+
+    record::RID out;
+    ASSERT_TRUE(index->GetValue(10, &out));
+    EXPECT_EQ(out, record::RID(100, 10));
+    ASSERT_TRUE(index->GetValue(20, &out));
+    EXPECT_EQ(out, record::RID(100, 20));
+}
+
+TEST_F(CatalogTableInfoTest, CatalogLoadIndexFromHeaderPageId)
+{
+    page_id_t index_header_page_id = INVALID_PAGE_ID;
+    constexpr index_oid_t kIndexOid = 7;
+
+    {
+        Catalog catalog(buffer_pool_manager_.get());
+        Schema schema = MakeSimpleSchema();
+
+        auto created = catalog.CreateTable("student", schema);
+        ASSERT_TRUE(created.has_value());
+
+        auto index_exp = catalog.CreateIndex("student", "idx_student_id");
+        ASSERT_TRUE(index_exp.has_value());
+        storage::BPlusTree* index = index_exp.value();
+        ASSERT_NE(index, nullptr);
+
+        ASSERT_TRUE(index->Insert(1, record::RID(77, 1)));
+        ASSERT_TRUE(index->Insert(2, record::RID(77, 2)));
+        ASSERT_TRUE(index->Insert(3, record::RID(77, 3)));
+
+        auto header_page_id = created.value()->GetIndexHeaderPageId(0);
+        ASSERT_TRUE(header_page_id.has_value());
+        index_header_page_id = header_page_id.value();
+        ASSERT_NE(index_header_page_id, INVALID_PAGE_ID);
+        ASSERT_TRUE(buffer_pool_manager_->FlushAllPages().has_value());
+    }
+
+    buffer_pool_manager_.reset();
+    disk_manager_.reset();
+    disk_manager_ = std::make_unique<storage::DiskManager>(db_path_);
+    buffer_pool_manager_ = std::make_unique<buffer::BufferPoolManager>(8, disk_manager_.get());
+
+    {
+        Catalog recovered_catalog(buffer_pool_manager_.get());
+        Schema schema = MakeSimpleSchema();
+        auto created = recovered_catalog.CreateTable("student", schema);
+        ASSERT_TRUE(created.has_value());
+        const table_oid_t recovered_table_oid = created.value()->Oid();
+
+        auto load_exp = recovered_catalog.LoadIndex(
+            recovered_table_oid,
+            kIndexOid,
+            "idx_student_id_recovered",
+            index_header_page_id);
+        ASSERT_TRUE(load_exp.has_value());
+        storage::BPlusTree* recovered_index = load_exp.value();
+        ASSERT_NE(recovered_index, nullptr);
+
+        record::RID out;
+        ASSERT_TRUE(recovered_index->GetValue(1, &out));
+        EXPECT_EQ(out, record::RID(77, 1));
+        ASSERT_TRUE(recovered_index->GetValue(2, &out));
+        EXPECT_EQ(out, record::RID(77, 2));
+        ASSERT_TRUE(recovered_index->GetValue(3, &out));
+        EXPECT_EQ(out, record::RID(77, 3));
+    }
+}
+
 } // namespace HaruhiDB::catalog

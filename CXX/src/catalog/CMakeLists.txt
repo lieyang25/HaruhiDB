@@ -10,6 +10,7 @@ add_library(haruhi_catalog
 target_link_libraries(haruhi_catalog PUBLIC
     compile_version_cxx23
     haruhi_type
+    haruhi_index
 )
 
 target_include_directories(haruhi_catalog PUBLIC

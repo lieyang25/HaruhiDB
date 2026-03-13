@@ -48,7 +48,7 @@
  * 当前设计为“最小运行时版本”：
  *
  * - 不处理持久化 catalog
- * - 不处理索引元数据
+ * - 处理最小索引运行时元数据（index oid / name / header page id）
  * - 不处理复杂 DDL（DROP/ALTER）
  *
  * 先服务于：
@@ -61,10 +61,14 @@
 #pragma once
 
 #include "catalog/schema.h"
+#include "buffer/buffer_pool_manager/buffer_pool_manager.h"
 #include "common/config.h"
+#include "storage/index/b_plus_tree.h"
 #include "table/table_heap.h"
 
+#include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -155,6 +159,31 @@ namespace catalog
          */
         void AddIndexOid(index_oid_t index_oid);
 
+        struct IndexEntry
+        {
+            index_oid_t index_oid{0};
+            std::string index_name;
+            page_id_t header_page_id{INVALID_PAGE_ID};
+            std::unique_ptr<storage::BPlusTree> index;
+        };
+
+        std::expected<storage::BPlusTree*, std::string> CreateIndex(
+            index_oid_t index_oid,
+            std::string index_name,
+            buffer::BufferPoolManager* bpm);
+
+        std::expected<storage::BPlusTree*, std::string> LoadIndex(
+            index_oid_t index_oid,
+            std::string index_name,
+            page_id_t header_page_id,
+            buffer::BufferPoolManager* bpm);
+
+        storage::BPlusTree* GetIndex(index_oid_t index_oid) noexcept;
+        const storage::BPlusTree* GetIndex(index_oid_t index_oid) const noexcept;
+
+        std::optional<page_id_t> GetIndexHeaderPageId(index_oid_t index_oid) const noexcept;
+        const std::vector<IndexEntry>& IndexEntries() const noexcept { return indexes_; }
+
         /**
          * 返回便于调试的字符串描述
          */
@@ -188,6 +217,7 @@ namespace catalog
          * 当前阶段只做预留，不必过度使用。
          */
         std::vector<index_oid_t> index_oids_;
+        std::vector<IndexEntry> indexes_;
     };
 
 } // namespace catalog
