@@ -30,10 +30,6 @@ namespace storage
         PersistentHeader* header = Header();
         header->free_list_head = INVALID_SLOT_ID;
         header->page_id = page_id;
-        /**
-         * TODO
-         * 注意检查next_page_id的初始化
-         */
         header->next_page_id = INVALID_PAGE_ID;
         header->page_type = page_type;
         header->slot_count = 0;
