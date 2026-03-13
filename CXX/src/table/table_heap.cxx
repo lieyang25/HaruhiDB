@@ -7,7 +7,6 @@
 
 #include "storage/page/table_page.h"
 
-#include <cstring>
 #include <ranges>
 #include <shared_mutex>
 #include <unordered_set>
@@ -80,20 +79,8 @@ std::expected<std::unique_ptr<TableHeap>, std::string> TableHeap::Create(buffer:
     }
 
     storage::Page *first_page = first_page_exp.value();
-    first_page->WLock();
-    std::memset(first_page->RawData(), 0, PAGE_SIZE);
-    auto *header = first_page->Header();
-    header->lsn = 0;
-    header->page_id = first_page_id;
-    header->next_page_id = INVALID_PAGE_ID;
-    header->slot_count = 0;
-    header->alive_tuple_count = 0;
-    header->deleted_tuple_count = 0;
-    header->free_space_offset = PAGE_SIZE;
-    header->free_list_head = INVALID_SLOT_ID;
-    header->page_type = storage::PageType::HEAP;
-    first_page->MarkDirty();
-    first_page->WUnLock();
+    storage::TablePage first_table_page(first_page);
+    first_table_page.InitForNewPage(first_page_id);
 
     if (!bpm->UnpinPage(first_page_id, true)) {
         bpm->DeletePage(first_page_id);
@@ -199,12 +186,10 @@ bool TableHeap::GetTuple(const record::RID &rid, record::Tuple *out_tuple)
         bpm_->UnpinPage(pid, false);
     });
 
-    const auto *header = page->Header();
-    if (rid.GetSlotId() >= header->slot_count) {
+    storage::TablePage table_page(page);
+    if (rid.GetSlotId() >= table_page.SlotCount()) {
         return false;
     }
-
-    storage::TablePage table_page(page);
     const storage::Slot *slot = table_page.GetSlot(rid.GetSlotId());
     if (slot == nullptr || slot->IsDeleted()) {
         return false;
@@ -409,7 +394,7 @@ std::optional<page_id_t> TableHeap::FindPageWithFreeSpace(uint32_t need)
 
             storage::TablePage table_page(page);
             free_space = table_page.FreeSpace();
-            next_pid = page->Header()->next_page_id;
+            next_pid = table_page.NextPageId();
         }
 
         UpdateFreeSpaceMap(pid, free_space);
@@ -435,12 +420,8 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
     }
 
     storage::Page *new_page = page_exp.value();
-    {
-        new_page->WLock();
-        auto guard = MakeScopeGuard([&]() { new_page->WUnLock(); });
-        new_page->Header()->next_page_id = INVALID_PAGE_ID;
-        new_page->MarkDirty();
-    }
+    storage::TablePage new_table_page(new_page);
+    new_table_page.InitForNewPage(new_page_id);
 
     bool linked = false;
     {
@@ -462,10 +443,10 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
                 }
 
                 storage::Page *page = page_cur.value();
+                storage::TablePage table_page(page);
                 page->WLock();
-                auto *header = page->Header();
-                if (header->next_page_id == INVALID_PAGE_ID) {
-                    header->next_page_id = new_page_id;
+                if (table_page.NextPageId() == INVALID_PAGE_ID) {
+                    table_page.SetNextPageId(new_page_id);
                     page->MarkDirty();
                     page->WUnLock();
                     bpm_->UnpinPage(pid, true);
@@ -474,7 +455,7 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
                     break;
                 }
 
-                page_id_t next_pid = header->next_page_id;
+                page_id_t next_pid = table_page.NextPageId();
                 page->WUnLock();
                 bpm_->UnpinPage(pid, false);
                 pid = next_pid;
@@ -517,7 +498,8 @@ page_id_t TableHeap::RefreshTailPageIdLocked()
         storage::Page* page = page_exp.value();
         page_id_t next_pid = INVALID_PAGE_ID;
         page->RLock();
-        next_pid = page->Header()->next_page_id;
+        storage::TablePage table_page(page);
+        next_pid = table_page.NextPageId();
         page->RUnLock();
         bpm_->UnpinPage(pid, false);
 
@@ -563,10 +545,9 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
         });
 
         pin_ok = (page->PinCount() == 1);
-        const auto *header = page->Header();
-        next_pid = header->next_page_id;
+        storage::TablePage table_page(page);
+        next_pid = table_page.NextPageId();
         if (pin_ok) {
-            storage::TablePage table_page(page);
             if (!table_page.TupleCountersConsistent()) {
                 table_page.RepairTupleCounters();
             }
@@ -597,10 +578,10 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
             }
 
             storage::Page *page = page_cur.value();
+            storage::TablePage table_page(page);
             page->WLock();
-            auto *header = page->Header();
-            if (header->next_page_id == page_id) {
-                header->next_page_id = next_pid;
+            if (table_page.NextPageId() == page_id) {
+                table_page.SetNextPageId(next_pid);
                 page->MarkDirty();
                 page->WUnLock();
                 bpm_->UnpinPage(pid, true);
@@ -608,7 +589,7 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
                 prev_pid = pid;
                 break;
             }
-            page_id_t next = header->next_page_id;
+            page_id_t next = table_page.NextPageId();
             page->WUnLock();
             bpm_->UnpinPage(pid, false);
             pid = next;
@@ -637,10 +618,10 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
         auto prev_exp = bpm_->FetchPage(prev_pid);
         if (prev_exp.has_value()) {
             storage::Page *prev_page = prev_exp.value();
+            storage::TablePage prev_table_page(prev_page);
             prev_page->WLock();
-            auto *prev_header = prev_page->Header();
-            if (prev_header->next_page_id == next_pid) {
-                prev_header->next_page_id = page_id;
+            if (prev_table_page.NextPageId() == next_pid) {
+                prev_table_page.SetNextPageId(page_id);
                 prev_page->MarkDirty();
                 prev_page->WUnLock();
                 bpm_->UnpinPage(prev_pid, true);

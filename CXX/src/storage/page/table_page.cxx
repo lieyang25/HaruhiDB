@@ -18,14 +18,14 @@ namespace storage
             uint16_t deleted{0};
         };
 
-        bool IsTupleCountersConsistent(const PersistentHeader* header)
+        bool IsTupleCountersConsistent(const TablePageHeaderData* header)
         {
             return static_cast<uint32_t>(header->alive_tuple_count) +
                     static_cast<uint32_t>(header->deleted_tuple_count) ==
                 static_cast<uint32_t>(header->slot_count);
         }
 
-        TupleCounters ComputeTupleCounters(const TablePage& table_page, const PersistentHeader* header)
+        TupleCounters ComputeTupleCounters(const TablePage& table_page, const TablePageHeaderData* header)
         {
             uint32_t deleted = 0;
             for (slot_id_t slot = 0; slot < header->slot_count; ++slot) {
@@ -65,6 +65,54 @@ namespace storage
         };
     } // namespace
 
+    void TablePage::InitForNewPage(page_id_t page_id)
+    {
+        if (page_ == nullptr) {
+            return;
+        }
+
+        WritePageGuard guard(page_);
+        auto* base_header = page_->Header();
+        base_header->lsn = 0;
+        base_header->page_id = page_id;
+        base_header->page_type = PageType::HEAP;
+
+        auto* table_header = HeaderData();
+        table_header->next_page_id = INVALID_PAGE_ID;
+        table_header->slot_count = 0;
+        table_header->alive_tuple_count = 0;
+        table_header->deleted_tuple_count = 0;
+        table_header->free_space_offset = PAGE_SIZE;
+        table_header->free_list_head = INVALID_SLOT_ID;
+        table_header->reserved = 0;
+        page_->MarkDirty();
+    }
+
+    TablePageHeaderData* TablePage::HeaderData()
+    {
+        return reinterpret_cast<TablePageHeaderData*>(page_->Header()->opaque);
+    }
+
+    const TablePageHeaderData* TablePage::HeaderData() const
+    {
+        return reinterpret_cast<const TablePageHeaderData*>(page_->Header()->opaque);
+    }
+
+    page_id_t TablePage::NextPageId() const
+    {
+        return HeaderData()->next_page_id;
+    }
+
+    void TablePage::SetNextPageId(page_id_t next_page_id)
+    {
+        HeaderData()->next_page_id = next_page_id;
+    }
+
+    slot_id_t TablePage::SlotCount() const
+    {
+        return HeaderData()->slot_count;
+    }
+
     std::expected<slot_id_t, TablePageErr> TablePage::InsertTuple(const record::Tuple& tuple)
     {
         if (page_ == nullptr) {
@@ -78,7 +126,7 @@ namespace storage
                 TablePageErr{"TablePage::InsertTuple: invalid tuple size", TablePageErrCode::InvalidTupleSize});
         }
 
-        auto* header = page_->Header();
+        auto* header = HeaderData();
         RepairTupleCounters();
 
         slot_id_t reuse_slot = INVALID_SLOT_ID;
@@ -145,7 +193,7 @@ namespace storage
         }
 
         WritePageGuard guard(page_);
-        auto* header = page_->Header();
+        auto* header = HeaderData();
         RepairTupleCounters();
         if (slot_id >= header->slot_count) {
             return std::unexpected(
@@ -194,7 +242,7 @@ namespace storage
         }
 
         WritePageGuard guard(page_);
-        auto* header = page_->Header();
+        auto* header = HeaderData();
         RepairTupleCounters();
         if (slot_id >= header->slot_count) {
             return std::unexpected(
@@ -225,7 +273,7 @@ namespace storage
         }
 
         ReadPageGuard guard(page_);
-        const auto* header = page_->Header();
+        const auto* header = HeaderData();
         if (slot_id >= header->slot_count) {
             return std::unexpected(
                 TablePageErr{"TablePage::GetTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
@@ -254,7 +302,7 @@ namespace storage
         if (page_ == nullptr) {
             return false;
         }
-        return IsTupleCountersConsistent(page_->Header());
+        return IsTupleCountersConsistent(HeaderData());
     }
 
     uint16_t TablePage::AliveTupleCount() const
@@ -262,7 +310,7 @@ namespace storage
         if (page_ == nullptr) {
             return 0;
         }
-        const auto* header = page_->Header();
+        const auto* header = HeaderData();
         if (IsTupleCountersConsistent(header)) {
             return header->alive_tuple_count;
         }
@@ -274,7 +322,7 @@ namespace storage
         if (page_ == nullptr) {
             return 0;
         }
-        const auto* header = page_->Header();
+        const auto* header = HeaderData();
         if (IsTupleCountersConsistent(header)) {
             return header->deleted_tuple_count;
         }
@@ -286,7 +334,7 @@ namespace storage
         if (page_ == nullptr) {
             return;
         }
-        auto* header = page_->Header();
+        auto* header = HeaderData();
         if (IsTupleCountersConsistent(header)) {
             return;
         }
@@ -318,7 +366,7 @@ namespace storage
 
     uint16_t TablePage::FreeSpace()
     {
-        const auto* header = page_->Header();
+        const auto* header = HeaderData();
         const uint32_t slot_area_end =
             static_cast<uint32_t>(sizeof(PersistentHeader)) +
             static_cast<uint32_t>(header->slot_count) * static_cast<uint32_t>(sizeof(Slot));

@@ -219,15 +219,17 @@ TEST_F(TableHeapTest, CreateFactoryInitializesFirstPage)
     ASSERT_TRUE(page_exp.has_value());
     storage::Page* page = page_exp.value();
     page->RLock();
-    const auto* header = page->Header();
-    EXPECT_EQ(header->page_id, first_page_id);
-    EXPECT_EQ(header->next_page_id, INVALID_PAGE_ID);
-    EXPECT_EQ(header->page_type, storage::PageType::HEAP);
-    EXPECT_EQ(header->slot_count, 0);
-    EXPECT_EQ(header->alive_tuple_count, 0);
-    EXPECT_EQ(header->deleted_tuple_count, 0);
-    EXPECT_EQ(header->free_space_offset, PAGE_SIZE);
-    EXPECT_EQ(header->free_list_head, INVALID_SLOT_ID);
+    const auto* base_header = page->Header();
+    storage::TablePage table_page(page);
+    const auto* table_header = table_page.HeaderData();
+    EXPECT_EQ(base_header->page_id, first_page_id);
+    EXPECT_EQ(base_header->page_type, storage::PageType::HEAP);
+    EXPECT_EQ(table_header->next_page_id, INVALID_PAGE_ID);
+    EXPECT_EQ(table_header->slot_count, 0);
+    EXPECT_EQ(table_header->alive_tuple_count, 0);
+    EXPECT_EQ(table_header->deleted_tuple_count, 0);
+    EXPECT_EQ(table_header->free_space_offset, PAGE_SIZE);
+    EXPECT_EQ(table_header->free_list_head, INVALID_SLOT_ID);
     page->RUnLock();
     EXPECT_TRUE(bpm.UnpinPage(first_page_id, false));
 

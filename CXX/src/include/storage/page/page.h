@@ -25,6 +25,7 @@ namespace storage
         FREELIST    
     };
 
+    constexpr size_t PAGE_HEADER_OPAQUE_SIZE = 16;
 
     struct PersistentHeader
     {
@@ -32,21 +33,12 @@ namespace storage
         lsn_t lsn;
 
         page_id_t page_id;
-        
-        page_id_t next_page_id;
-
-        slot_id_t slot_count;
-
-        uint16_t alive_tuple_count;
-        uint16_t deleted_tuple_count;
-
-        uint16_t free_space_offset;
-
-        uint16_t free_list_head;
 
         PageType page_type;
 
-        uint8_t reserved[5];
+        uint8_t reserved0[3];
+
+        uint8_t opaque[PAGE_HEADER_OPAQUE_SIZE];
     };
 
     static_assert(std::is_trivially_copyable_v<PersistentHeader>);

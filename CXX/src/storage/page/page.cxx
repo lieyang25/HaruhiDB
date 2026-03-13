@@ -13,30 +13,22 @@ namespace storage
     Page::Page() : pin_count_(0),is_dirty_(false)
     {
         std::memset(data_.data(),0,PAGE_SIZE);
-        Header()->free_list_head = INVALID_SLOT_ID;
         Header()->page_id = INVALID_PAGE_ID;
-        Header()->next_page_id = INVALID_PAGE_ID;
         Header()->page_type = PageType::INVALID;
-        Header()->slot_count = 0;
-        Header()->alive_tuple_count = 0;
-        Header()->deleted_tuple_count = 0;
         Header()->lsn = 0;
-        Header()->free_space_offset = PAGE_SIZE;
+        std::memset(Header()->reserved0, 0, sizeof(Header()->reserved0));
+        std::memset(Header()->opaque, 0, sizeof(Header()->opaque));
     }
 
     void Page::InitBlank(page_id_t page_id,PageType page_type)
     {
         std::memset(data_.data(), 0, PAGE_SIZE);
         PersistentHeader* header = Header();
-        header->free_list_head = INVALID_SLOT_ID;
         header->page_id = page_id;
-        header->next_page_id = INVALID_PAGE_ID;
         header->page_type = page_type;
-        header->slot_count = 0;
-        header->alive_tuple_count = 0;
-        header->deleted_tuple_count = 0;
         header->lsn = 0;
-        header->free_space_offset = PAGE_SIZE;
+        std::memset(header->reserved0, 0, sizeof(header->reserved0));
+        std::memset(header->opaque, 0, sizeof(header->opaque));
 
         pin_count_.store(0);
         is_dirty_.store(false);

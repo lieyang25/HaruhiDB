@@ -8,6 +8,7 @@
 #include "storage/page/page.h"
 #include "common/config.h"
 
+#include <cstddef>
 #include <expected>
 #include <string>
 namespace HaruhiDB
@@ -28,6 +29,21 @@ namespace storage
         std::string msg;
         TablePageErrCode err_code;
     };
+
+    struct TablePageHeaderData
+    {
+        page_id_t next_page_id;
+        slot_id_t slot_count;
+        uint16_t alive_tuple_count;
+        uint16_t deleted_tuple_count;
+        uint16_t free_space_offset;
+        uint16_t free_list_head;
+        uint16_t reserved;
+    };
+
+    static_assert(std::is_trivially_copyable_v<TablePageHeaderData>);
+    static_assert(sizeof(TablePageHeaderData) == PAGE_HEADER_OPAQUE_SIZE);
+    static_assert((offsetof(PersistentHeader, opaque) % alignof(TablePageHeaderData)) == 0);
 
     struct Slot
     {
@@ -52,6 +68,15 @@ namespace storage
     public:
         explicit TablePage(Page* page):page_(page){}
         ~TablePage() = default;
+
+        void InitForNewPage(page_id_t page_id);
+
+        TablePageHeaderData* HeaderData();
+        const TablePageHeaderData* HeaderData() const;
+
+        page_id_t NextPageId() const;
+        void SetNextPageId(page_id_t next_page_id);
+        slot_id_t SlotCount() const;
 
         auto InsertTuple(const record::Tuple& tuple) -> std::expected<slot_id_t, TablePageErr>;
         auto UpdateTuple(slot_id_t slot_id,const record::Tuple& tuple) -> std::expected<void, TablePageErr>;

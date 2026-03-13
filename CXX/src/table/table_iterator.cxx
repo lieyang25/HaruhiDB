@@ -100,12 +100,10 @@ record::Tuple TableIterator::operator*() const
         heap_->bpm_->UnpinPage(pid_snapshot, false);
     });
 
-    const auto *header = page->Header();
-    if (cur_slot_ >= header->slot_count) {
+    storage::TablePage table_page(page);
+    if (cur_slot_ >= table_page.SlotCount()) {
         return {};
     }
-
-    storage::TablePage table_page(page);
     const storage::Slot *slot = table_page.GetSlot(cur_slot_);
     if (slot == nullptr || slot->IsDeleted()) {
         return {};
@@ -184,21 +182,20 @@ bool TableIterator::AdvanceToNextValid()
             heap_->bpm_->UnpinPage(pid_snapshot, false);
         });
 
-        const auto *header = page->Header();
         storage::TablePage table_page(page);
-        if (header->slot_count == 0 || table_page.AliveTupleCount() == 0) {
-            pid = header->next_page_id;
+        if (table_page.SlotCount() == 0 || table_page.AliveTupleCount() == 0) {
+            pid = table_page.NextPageId();
             slot = 0;
             continue;
         }
 
-        if (cur_slot_ >= header->slot_count) {
-            pid = header->next_page_id;
+        if (cur_slot_ >= table_page.SlotCount()) {
+            pid = table_page.NextPageId();
             slot = 0;
             continue;
         }
 
-        for (slot_id_t s = cur_slot_; s < header->slot_count; ++s) {
+        for (slot_id_t s = cur_slot_; s < table_page.SlotCount(); ++s) {
             if (!table_page.GetSlot(s)->IsDeleted()) {
                 cur_page_id_ = pid;
                 cur_slot_ = s;
@@ -207,7 +204,7 @@ bool TableIterator::AdvanceToNextValid()
             }
         }
 
-        pid = header->next_page_id;
+        pid = table_page.NextPageId();
         slot = 0;
     }
 

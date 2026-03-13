@@ -38,8 +38,10 @@ protected:
     void SetUp() override {
         page_ = NewPageForTest();
         ASSERT_NE(page_, nullptr);
+        page_->InitBlank(1, PageType::HEAP);
         table_page_ = new TablePage(page_);
         ASSERT_NE(table_page_, nullptr);
+        table_page_->InitForNewPage(1);
         owned_buffers_.clear();
     }
 
@@ -310,13 +312,13 @@ TEST_F(TablePageTest, TupleCountersTrackInsertDeleteAndReuse) {
     ASSERT_TRUE(bool(r2));
     ASSERT_TRUE(bool(r3));
 
-    const auto* h1 = page_->Header();
+    const auto* h1 = table_page_->HeaderData();
     EXPECT_EQ(h1->slot_count, 3);
     EXPECT_EQ(h1->alive_tuple_count, 3);
     EXPECT_EQ(h1->deleted_tuple_count, 0);
 
     ASSERT_TRUE(bool(table_page_->MarkDelTuple(r2.value())));
-    const auto* h2 = page_->Header();
+    const auto* h2 = table_page_->HeaderData();
     EXPECT_EQ(h2->slot_count, 3);
     EXPECT_EQ(h2->alive_tuple_count, 2);
     EXPECT_EQ(h2->deleted_tuple_count, 1);
@@ -325,7 +327,7 @@ TEST_F(TablePageTest, TupleCountersTrackInsertDeleteAndReuse) {
     ASSERT_TRUE(bool(reused));
     EXPECT_EQ(reused.value(), r2.value());
 
-    const auto* h3 = page_->Header();
+    const auto* h3 = table_page_->HeaderData();
     EXPECT_EQ(h3->slot_count, 3);
     EXPECT_EQ(h3->alive_tuple_count, 3);
     EXPECT_EQ(h3->deleted_tuple_count, 0);
@@ -338,7 +340,7 @@ TEST_F(TablePageTest, LegacyCounterFallbackAndRepair) {
     ASSERT_TRUE(bool(r2));
     ASSERT_TRUE(bool(table_page_->MarkDelTuple(r1.value())));
 
-    auto* header = page_->Header();
+    auto* header = table_page_->HeaderData();
     header->alive_tuple_count = 0;
     header->deleted_tuple_count = 0;
 
