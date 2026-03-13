@@ -22,6 +22,7 @@ namespace buffer
     enum class BufferPoolErrCode : int {
         InvalidPageId = 1,
         InvalidPageType,
+        NullDiskManager,
         NullPageIdOutput,
         PageNotFound,
         PagePinned,

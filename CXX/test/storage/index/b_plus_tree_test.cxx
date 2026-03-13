@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <cstring>
 
 namespace HaruhiDB::storage
 {
@@ -221,6 +222,44 @@ TEST_F(BPlusTreeTest, HeaderPagePersistsRootAndRecoversTree)
         EXPECT_EQ(out, record::RID(50001, 1));
         ASSERT_TRUE(recovered.GetValue(1499, &out));
         EXPECT_EQ(out, record::RID(51499, 1499));
+    }
+}
+
+TEST_F(BPlusTreeTest, CorruptedHeaderMetadataIsRejectedOnRecovery)
+{
+    page_id_t header_page_id = INVALID_PAGE_ID;
+
+    {
+        DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(128, &dm);
+        BPlusTree tree(&bpm);
+
+        ASSERT_TRUE(tree.Insert(42, record::RID(70042, 42)));
+        header_page_id = tree.HeaderPageId();
+        ASSERT_NE(header_page_id, INVALID_PAGE_ID);
+
+        auto header_page_exp = bpm.FetchPage(header_page_id);
+        ASSERT_TRUE(header_page_exp.has_value());
+        Page* header_page = header_page_exp.value();
+        header_page->WLock();
+        std::memset(header_page->Header()->opaque, 0, PAGE_HEADER_OPAQUE_SIZE);
+        header_page->MarkDirty();
+        header_page->WUnLock();
+        ASSERT_TRUE(bpm.UnpinPage(header_page_id, true));
+        ASSERT_TRUE(bpm.FlushAllPages().has_value());
+    }
+
+    {
+        DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(128, &dm);
+        BPlusTree recovered(&bpm, header_page_id);
+
+        EXPECT_EQ(recovered.HeaderPageId(), INVALID_PAGE_ID);
+        EXPECT_EQ(recovered.RootPageId(), INVALID_PAGE_ID);
+        EXPECT_TRUE(recovered.IsEmpty());
+
+        record::RID out;
+        EXPECT_FALSE(recovered.GetValue(42, &out));
     }
 }
 

@@ -11,6 +11,7 @@
 #include <vector>
 #include <cstring>
 #include <optional>
+#include <string>
 
 using namespace HaruhiDB;
 using namespace HaruhiDB::storage;
@@ -248,6 +249,51 @@ TEST_F(TablePageTest, UpdateTupleToBiggerMayRequireMove) {
         ASSERT_EQ(out.Size(), big.Size());
         ASSERT_EQ(std::memcmp(out.Data(), big.Data(), out.Size()), 0);
     }
+}
+
+TEST_F(TablePageTest, MarkDeleteReclaimsTupleBodySpace) {
+    auto large = MakeTupleFromString(std::string(1000, 'L'));
+    auto keep = MakeTupleFromString(std::string(128, 'K'));
+
+    auto r_large = table_page_->InsertTuple(large);
+    auto r_keep = table_page_->InsertTuple(keep);
+    ASSERT_TRUE(bool(r_large));
+    ASSERT_TRUE(bool(r_keep));
+
+    const uint16_t free_before_delete = table_page_->FreeSpace();
+    ASSERT_TRUE(bool(table_page_->MarkDelTuple(r_large.value())));
+    const uint16_t free_after_delete = table_page_->FreeSpace();
+
+    ASSERT_GT(free_after_delete, free_before_delete);
+    EXPECT_GE(
+        static_cast<int>(free_after_delete) - static_cast<int>(free_before_delete),
+        900);
+
+    record::Tuple out_keep;
+    ASSERT_TRUE(bool(table_page_->GetTuple(r_keep.value(), out_keep)));
+    EXPECT_EQ(out_keep.Size(), keep.Size());
+}
+
+TEST_F(TablePageTest, UpdateLargerTupleCanReuseOldBodyAfterCompaction) {
+    auto t0 = MakeTupleFromString(std::string(1000, 'A'));
+    auto t1 = MakeTupleFromString(std::string(1000, 'B'));
+    auto t2 = MakeTupleFromString(std::string(1000, 'C'));
+
+    auto r0 = table_page_->InsertTuple(t0);
+    auto r1 = table_page_->InsertTuple(t1);
+    auto r2 = table_page_->InsertTuple(t2);
+    ASSERT_TRUE(bool(r0));
+    ASSERT_TRUE(bool(r1));
+    ASSERT_TRUE(bool(r2));
+
+    auto larger = MakeTupleFromString(std::string(1800, 'Z'));
+    auto update_res = table_page_->UpdateTuple(r0.value(), larger);
+    ASSERT_TRUE(bool(update_res));
+
+    record::Tuple out;
+    ASSERT_TRUE(bool(table_page_->GetTuple(r0.value(), out)));
+    ASSERT_EQ(out.Size(), larger.Size());
+    ASSERT_EQ(std::memcmp(out.Data(), larger.Data(), out.Size()), 0);
 }
 
 /* =========================================================================

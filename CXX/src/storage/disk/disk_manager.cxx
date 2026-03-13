@@ -327,7 +327,6 @@ namespace storage
                 HaruhiDB::ErrorCode::HeaderWriteFailed});
         }
 
-        file_.flush();
         return {};
     }
 
@@ -434,7 +433,6 @@ namespace storage
                 HaruhiDB::ErrorCode::WriteIOError});
         }
 
-        file_.flush();
         return {};
     }
 

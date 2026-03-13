@@ -7,6 +7,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -17,6 +18,17 @@ namespace HaruhiDB
 {
 namespace type
 {
+    enum class ValueDeserializeErrCode : int {
+        InvalidType = 1,
+        NullPointerWithNonZeroLength,
+        BufferTooShort
+    };
+
+    struct ValueDeserializeErr {
+        std::string msg;
+        ValueDeserializeErrCode err_code;
+    };
+
     class Value {
     public:
         /**
@@ -118,6 +130,7 @@ namespace type
         std::string ToString() const;
 
         std::vector<std::byte> Serialize(TypeId type) const;
+        static std::expected<Value, ValueDeserializeErr> TryDeserialize(TypeId type, const std::byte* ptr, size_t len);
         static Value Deserialize(TypeId type, const std::byte *ptr, size_t len);
 
         friend bool operator==(const Value&, const Value&) = default;

@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstring>
 #include <optional>
+#include <array>
 
 using namespace HaruhiDB::type;
 
@@ -89,6 +90,36 @@ TEST(ValueTest, SerializeDeserializeRoundtrip_VarChar) {
     EXPECT_EQ(s, sr);
     // also check ToString remains the same
     EXPECT_EQ(sr.ToString(), text);
+}
+
+TEST(ValueTest, TryDeserializeSeparatesNullFromCorruption) {
+    auto null_value = Value::TryDeserialize(TypeId::INTEGER, nullptr, 0);
+    ASSERT_TRUE(null_value.has_value());
+    EXPECT_TRUE(null_value.value().IsNull());
+
+    auto null_ptr_err = Value::TryDeserialize(TypeId::INTEGER, nullptr, sizeof(int32_t));
+    ASSERT_FALSE(null_ptr_err.has_value());
+    EXPECT_EQ(null_ptr_err.error().err_code, ValueDeserializeErrCode::NullPointerWithNonZeroLength);
+
+    std::array<std::byte, 1> short_buf{std::byte{0x01}};
+    auto short_len_err = Value::TryDeserialize(TypeId::INTEGER, short_buf.data(), short_buf.size());
+    ASSERT_FALSE(short_len_err.has_value());
+    EXPECT_EQ(short_len_err.error().err_code, ValueDeserializeErrCode::BufferTooShort);
+}
+
+TEST(ValueTest, DeserializeThrowsWhenInputIsCorrupted) {
+    EXPECT_THROW(Value::Deserialize(TypeId::INTEGER, nullptr, sizeof(int32_t)), std::invalid_argument);
+}
+
+TEST(ValueTest, DecimalIsExplicitlyUnsupportedForNow) {
+    Value v = Value::Double(12.34);
+    EXPECT_FALSE(v.CanCastTo(TypeId::DECIMAL));
+    EXPECT_THROW(v.Serialize(TypeId::DECIMAL), std::invalid_argument);
+
+    std::array<std::byte, sizeof(double)> buf{};
+    auto parsed = Value::TryDeserialize(TypeId::DECIMAL, buf.data(), buf.size());
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error().err_code, ValueDeserializeErrCode::InvalidType);
 }
 
 TEST(ValueTest, CompareOrdering) {

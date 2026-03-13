@@ -4,6 +4,8 @@
 
 #include "buffer/buffer_pool_manager/buffer_pool_manager.h"
 
+#include <stdexcept>
+
 namespace HaruhiDB
 {
 namespace buffer
@@ -19,6 +21,9 @@ namespace buffer
     BufferPoolManager::BufferPoolManager(
         size_t pool_size, storage::DiskManager* disk_manager, size_t k)
     {
+        if (disk_manager == nullptr) {
+            throw std::invalid_argument("BufferPoolManager: disk manager must not be null");
+        }
         pool_size_ = pool_size;
         disk_manager_ = disk_manager;
         pages_.resize(pool_size);
@@ -37,6 +42,9 @@ namespace buffer
         // 4. 更新 page_table_，从磁盘读取 page 存储到该 frame。
         // 5. 设置该 Page 的元数据，调用 replacer_->RecordAccess()。
         std::lock_guard<std::mutex> guard(latch_);
+        if (disk_manager_ == nullptr) {
+            return MakeBpmErr(BufferPoolErrCode::NullDiskManager, "FetchPage: disk manager is null");
+        }
         if (page_id == INVALID_PAGE_ID || page_id == 0) {
             return MakeBpmErr(BufferPoolErrCode::InvalidPageId, "FetchPage: invalid page id");
         }
@@ -98,6 +106,9 @@ namespace buffer
         page_id_t *page_id, storage::PageType page_type)
     {
         std::lock_guard<std::mutex> guard(latch_);
+        if (disk_manager_ == nullptr) {
+            return MakeBpmErr(BufferPoolErrCode::NullDiskManager, "NewPage: disk manager is null");
+        }
         if (page_id == nullptr) {
             return MakeBpmErr(BufferPoolErrCode::NullPageIdOutput, "NewPage: output page_id pointer is null");
         }
@@ -197,6 +208,9 @@ namespace buffer
         // 2. 调用 disk_manager_->WritePage() 将数据写入物理磁盘。
         // 3. 重置 Page 的 is_dirty 标记。
         std::lock_guard<std::mutex> guard(latch_);
+        if (disk_manager_ == nullptr) {
+            return MakeBpmErr(BufferPoolErrCode::NullDiskManager, "FlushPage: disk manager is null");
+        }
         auto it = page_table_.find(page_id);
         if (it == page_table_.end()) {
             return MakeBpmErr(BufferPoolErrCode::PageNotFound, "FlushPage: page not found in buffer pool");
@@ -217,6 +231,9 @@ namespace buffer
     {
         // TODO: 遍历 page_table_，对每个有效的 page_id 调用 FlushPage。
         std::lock_guard<std::mutex> guard(latch_);
+        if (disk_manager_ == nullptr) {
+            return MakeBpmErr(BufferPoolErrCode::NullDiskManager, "FlushAllPages: disk manager is null");
+        }
 
         for (auto const& [pid,fid] : page_table_) {
             storage::Page& page = pages_[fid];
@@ -241,6 +258,9 @@ namespace buffer
     std::expected<void,BufferPoolErr> BufferPoolManager::DeletePageEx(page_id_t page_id)
     {
         std::lock_guard<std::mutex> guard(latch_);
+        if (disk_manager_ == nullptr) {
+            return MakeBpmErr(BufferPoolErrCode::NullDiskManager, "DeletePage: disk manager is null");
+        }
         if (page_id == INVALID_PAGE_ID || page_id == 0) {
             return MakeBpmErr(BufferPoolErrCode::InvalidPageId, "DeletePage: invalid page id");
         }

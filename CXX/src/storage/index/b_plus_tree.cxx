@@ -43,9 +43,7 @@ namespace storage
             return;
         }
 
-        if (!InitOrLoadHeaderPage(header_page_id)) {
-            (void)InitOrLoadHeaderPage(INVALID_PAGE_ID);
-        }
+        (void)InitOrLoadHeaderPage(header_page_id);
     }
 
     bool BPlusTree::IsEmpty() const noexcept
@@ -696,24 +694,19 @@ namespace storage
             return false;
         }
 
-        bool dirty = false;
         BPlusTreeMetaOpaque meta{};
         std::memcpy(&meta, persistent->opaque, sizeof(meta));
         if (meta.magic != BPTREE_META_MAGIC || meta.version != BPTREE_META_VERSION) {
-            meta.magic = BPTREE_META_MAGIC;
-            meta.version = BPTREE_META_VERSION;
-            meta.root_page_id = INVALID_PAGE_ID;
-            meta.reserved = 0;
-            std::memcpy(persistent->opaque, &meta, sizeof(meta));
-            header_page->MarkDirty();
-            dirty = true;
+            header_page->WUnLock();
+            bpm_->UnpinPage(header_page_id_hint, false);
+            return false;
         }
 
         header_page_id_ = header_page_id_hint;
         root_page_id_ = meta.root_page_id;
 
         header_page->WUnLock();
-        return bpm_->UnpinPage(header_page_id_hint, dirty);
+        return bpm_->UnpinPage(header_page_id_hint, false);
     }
 
     bool BPlusTree::PersistRootPageIdLocked()

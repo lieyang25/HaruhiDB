@@ -95,6 +95,8 @@ namespace storage
         uint16_t FreeSpace();
 
     private:
+        bool CompactTupleBodies(slot_id_t skip_slot = INVALID_SLOT_ID);
+
         Page* page_;
     };
 

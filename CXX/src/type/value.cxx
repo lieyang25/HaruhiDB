@@ -9,6 +9,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace HaruhiDB
 {
@@ -105,6 +106,16 @@ namespace type
             oss << value;
             return oss.str();
         }
+
+        std::unexpected<ValueDeserializeErr> MakeDeserializeErr(
+            ValueDeserializeErrCode code,
+            std::string msg)
+        {
+            return std::unexpected(ValueDeserializeErr{
+                .msg = std::move(msg),
+                .err_code = code,
+            });
+        }
     } // namespace
 
     bool Value::CanCastTo(TypeId target) const noexcept
@@ -120,6 +131,9 @@ namespace type
         }
         if (target == TypeId::BOOLEAN) {
             return CastToNumeric<bool>(data_).has_value();
+        }
+        if (target == TypeId::DECIMAL) {
+            return false;
         }
         if (TypeUtil::IsNumeric(target)) {
             return std::visit(
@@ -234,7 +248,9 @@ namespace type
             case TypeId::DOUBLE:
                 return SerializePod(GetOrThrowCast<double>(*this, type));
             case TypeId::DECIMAL:
-                return SerializePod(GetOrThrowCast<double>(*this, type));
+                throw std::invalid_argument(
+                    "Value::Serialize: DECIMAL is not implemented yet; "
+                    "requires fixed-point semantics");
             case TypeId::VARCHAR: {
                 std::string text = std::visit(
                     Overloaded{
@@ -254,16 +270,23 @@ namespace type
         return {};
     }
 
-    Value Value::Deserialize(TypeId type, const std::byte* ptr, size_t len)
+    std::expected<Value, ValueDeserializeErr> Value::TryDeserialize(TypeId type, const std::byte* ptr, size_t len)
     {
         if (type == TypeId::INVALID) {
-            return Value::Null();
+            return MakeDeserializeErr(
+                ValueDeserializeErrCode::InvalidType,
+                "Value::TryDeserialize: invalid target type");
         }
-        if (ptr == nullptr) {
-            if (type == TypeId::VARCHAR && len == 0) {
+        if (len == 0) {
+            if (type == TypeId::VARCHAR) {
                 return Value::VarChar({});
             }
             return Value::Null();
+        }
+        if (ptr == nullptr) {
+            return MakeDeserializeErr(
+                ValueDeserializeErrCode::NullPointerWithNonZeroLength,
+                "Value::TryDeserialize: null pointer with non-zero length");
         }
 
         switch (type) {
@@ -271,49 +294,76 @@ namespace type
                 if (len >= sizeof(uint8_t)) {
                     return Value::Boolean(DeserializePod<uint8_t>(ptr) != 0);
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: BOOLEAN buffer too short");
             case TypeId::TINYINT:
                 if (len >= sizeof(int8_t)) {
                     return Value::Int8(DeserializePod<int8_t>(ptr));
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: TINYINT buffer too short");
             case TypeId::SMALLINT:
                 if (len >= sizeof(int16_t)) {
                     return Value::Int16(DeserializePod<int16_t>(ptr));
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: SMALLINT buffer too short");
             case TypeId::INTEGER:
                 if (len >= sizeof(int32_t)) {
                     return Value::Int32(DeserializePod<int32_t>(ptr));
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: INTEGER buffer too short");
             case TypeId::BIGINT:
                 if (len >= sizeof(int64_t)) {
                     return Value::Int64(DeserializePod<int64_t>(ptr));
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: BIGINT buffer too short");
             case TypeId::FLOAT:
                 if (len >= sizeof(float)) {
                     return Value::Float(DeserializePod<float>(ptr));
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: FLOAT buffer too short");
             case TypeId::DOUBLE:
-            case TypeId::DECIMAL:
                 if (len >= sizeof(double)) {
                     return Value::Double(DeserializePod<double>(ptr));
                 }
-                return Value::Null();
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::BufferTooShort,
+                    "Value::TryDeserialize: DOUBLE buffer too short");
+            case TypeId::DECIMAL:
+                return MakeDeserializeErr(
+                    ValueDeserializeErrCode::InvalidType,
+                    "Value::TryDeserialize: DECIMAL is not implemented yet");
             case TypeId::VARCHAR: {
                 std::string text(len, '\0');
-                if (len != 0) {
-                    std::memcpy(text.data(), ptr, len);
-                }
+                std::memcpy(text.data(), ptr, len);
                 return Value::VarChar(std::move(text));
             }
             case TypeId::INVALID:
                 break;
         }
-        return Value::Null();
+
+        return MakeDeserializeErr(
+            ValueDeserializeErrCode::InvalidType,
+            "Value::TryDeserialize: unsupported type");
+    }
+
+    Value Value::Deserialize(TypeId type, const std::byte* ptr, size_t len)
+    {
+        auto parsed = TryDeserialize(type, ptr, len);
+        if (!parsed.has_value()) {
+            throw std::invalid_argument(parsed.error().msg);
+        }
+        return parsed.value();
     }
 } // namespace type
 } // namespace HaruhiDB

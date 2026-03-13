@@ -4,6 +4,7 @@
 
 #include "storage/page/table_page.h"
 
+#include <array>
 #include <cstring>
 
 namespace HaruhiDB
@@ -156,8 +157,16 @@ namespace storage
             needed = static_cast<uint16_t>(needed + sizeof(Slot));
         }
         if (FreeSpace() < needed) {
-            return std::unexpected(
-                TablePageErr{"TablePage::InsertTuple: not enough free space", TablePageErrCode::InsufficientSpace});
+            if (!CompactTupleBodies()) {
+                return std::unexpected(
+                    TablePageErr{
+                        "TablePage::InsertTuple: invalid slot content during compaction",
+                        TablePageErrCode::InvalidSlotContent});
+            }
+            if (FreeSpace() < needed) {
+                return std::unexpected(
+                    TablePageErr{"TablePage::InsertTuple: not enough free space", TablePageErrCode::InsufficientSpace});
+            }
         }
 
         if (!adding_new_slot) {
@@ -221,8 +230,16 @@ namespace storage
         }
 
         if (FreeSpace() < new_len) {
-            return std::unexpected(
-                TablePageErr{"TablePage::UpdateTuple: not enough free space", TablePageErrCode::InsufficientSpace});
+            if (!CompactTupleBodies(slot_id)) {
+                return std::unexpected(
+                    TablePageErr{
+                        "TablePage::UpdateTuple: invalid slot content during compaction",
+                        TablePageErrCode::InvalidSlotContent});
+            }
+            if (FreeSpace() < new_len) {
+                return std::unexpected(
+                    TablePageErr{"TablePage::UpdateTuple: not enough free space", TablePageErrCode::InsufficientSpace});
+            }
         }
 
         const uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - new_len);
@@ -253,6 +270,13 @@ namespace storage
         if (slot->IsDeleted()) {
             return std::unexpected(
                 TablePageErr{"TablePage::MarkDelTuple: slot already deleted", TablePageErrCode::SlotAlreadyDeleted});
+        }
+
+        if (!CompactTupleBodies(slot_id)) {
+            return std::unexpected(
+                TablePageErr{
+                    "TablePage::MarkDelTuple: invalid slot content during compaction",
+                    TablePageErrCode::InvalidSlotContent});
         }
 
         slot->SetOffset(header->free_list_head);
@@ -375,6 +399,59 @@ namespace storage
             return 0;
         }
         return static_cast<uint16_t>(header->free_space_offset - slot_area_end);
+    }
+
+    bool TablePage::CompactTupleBodies(slot_id_t skip_slot)
+    {
+        if (page_ == nullptr) {
+            return false;
+        }
+
+        auto* header = HeaderData();
+        std::array<std::byte, PAGE_SIZE> compacted{};
+        uint16_t write_offset = PAGE_SIZE;
+
+        for (slot_id_t slot_id = 0; slot_id < header->slot_count; ++slot_id) {
+            Slot* slot = GetSlot(slot_id);
+            if (slot_id == skip_slot || slot->IsDeleted()) {
+                continue;
+            }
+
+            const uint16_t old_offset = slot->GetOffset();
+            const uint16_t tuple_len = slot->GetLength();
+            if (tuple_len == 0) {
+                return false;
+            }
+            if (old_offset < sizeof(PersistentHeader) ||
+                static_cast<size_t>(old_offset) + tuple_len > PAGE_SIZE ||
+                write_offset < tuple_len) {
+                return false;
+            }
+
+            write_offset = static_cast<uint16_t>(write_offset - tuple_len);
+            std::memcpy(
+                compacted.data() + write_offset,
+                page_->RawData() + old_offset,
+                tuple_len);
+            slot->SetOffset(write_offset);
+        }
+
+        const uint32_t slot_area_end =
+            static_cast<uint32_t>(sizeof(PersistentHeader)) +
+            static_cast<uint32_t>(header->slot_count) * static_cast<uint32_t>(sizeof(Slot));
+        if (write_offset < slot_area_end) {
+            return false;
+        }
+
+        if (write_offset < PAGE_SIZE) {
+            std::memcpy(
+                page_->RawData() + write_offset,
+                compacted.data() + write_offset,
+                PAGE_SIZE - write_offset);
+        }
+        header->free_space_offset = write_offset;
+        page_->MarkDirty();
+        return true;
     }
 
 } // namespace storage

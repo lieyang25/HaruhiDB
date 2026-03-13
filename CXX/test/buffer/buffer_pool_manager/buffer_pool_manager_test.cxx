@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 namespace HaruhiDB::buffer {
@@ -51,6 +52,10 @@ TEST_F(BufferPoolManagerTest, NewPageFetchAndUnpinLifecycle) {
 
     EXPECT_TRUE(bpm.UnpinPage(pid, false));
     EXPECT_TRUE(bpm.UnpinPage(pid, true));
+}
+
+TEST_F(BufferPoolManagerTest, ConstructorRejectsNullDiskManager) {
+    EXPECT_THROW(BufferPoolManager(2, nullptr), std::invalid_argument);
 }
 
 TEST_F(BufferPoolManagerTest, NewPageFailsWhenPoolIsFullyPinned) {
