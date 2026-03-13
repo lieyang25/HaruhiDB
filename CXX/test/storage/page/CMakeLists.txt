@@ -3,6 +3,7 @@
 add_executable(table_page_test
     table_page_test.cxx
     b_plus_tree_page_test.cxx
+    b_plus_tree_leaf_page_test.cxx
 )
 
 target_link_libraries(table_page_test PRIVATE
