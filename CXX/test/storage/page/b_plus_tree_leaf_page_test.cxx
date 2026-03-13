@@ -8,33 +8,16 @@
 
 namespace HaruhiDB::storage
 {
-namespace
-{
-    struct Int32Comparator
-    {
-        int operator()(int32_t lhs, int32_t rhs) const noexcept
-        {
-            if (lhs < rhs) {
-                return -1;
-            }
-            if (lhs > rhs) {
-                return 1;
-            }
-            return 0;
-        }
-    };
-} // namespace
-
 TEST(BPlusTreeLeafPageTest, InitClampsOversizedMaxSize)
 {
     Page page;
+    page.InitBlank(17, PageType::LEAF);
     BPlusTreeLeafPage leaf(&page);
     const uint16_t physical_max = leaf.ComputeMaxSize();
     ASSERT_GT(physical_max, 0u);
 
     ASSERT_TRUE(
         leaf.InitForNewLeaf(
-            17,
             static_cast<uint16_t>(physical_max + 100),
             9));
     EXPECT_EQ(leaf.GetPageId(), 17u);
@@ -48,14 +31,14 @@ TEST(BPlusTreeLeafPageTest, InitClampsOversizedMaxSize)
 TEST(BPlusTreeLeafPageTest, InsertLookupAndOrder)
 {
     Page page;
+    page.InitBlank(1, PageType::LEAF);
     BPlusTreeLeafPage leaf(&page);
-    ASSERT_TRUE(leaf.InitForNewLeaf(1, 8));
-    Int32Comparator comparator;
+    ASSERT_TRUE(leaf.InitForNewLeaf(8));
 
-    ASSERT_TRUE(leaf.Insert(30, record::RID(1, 30), comparator));
-    ASSERT_TRUE(leaf.Insert(10, record::RID(1, 10), comparator));
-    ASSERT_TRUE(leaf.Insert(20, record::RID(1, 20), comparator));
-    EXPECT_FALSE(leaf.Insert(20, record::RID(1, 99), comparator));
+    ASSERT_TRUE(leaf.Insert(30, record::RID(1, 30)));
+    ASSERT_TRUE(leaf.Insert(10, record::RID(1, 10)));
+    ASSERT_TRUE(leaf.Insert(20, record::RID(1, 20)));
+    EXPECT_FALSE(leaf.Insert(20, record::RID(1, 99)));
     EXPECT_EQ(leaf.GetSize(), 3u);
 
     EXPECT_EQ(leaf.KeyAt(0), 10);
@@ -63,24 +46,24 @@ TEST(BPlusTreeLeafPageTest, InsertLookupAndOrder)
     EXPECT_EQ(leaf.KeyAt(2), 30);
 
     record::RID out;
-    ASSERT_TRUE(leaf.Lookup(20, &out, comparator));
+    ASSERT_TRUE(leaf.Lookup(20, &out));
     EXPECT_EQ(out, record::RID(1, 20));
 
-    EXPECT_FALSE(leaf.Lookup(25, &out, comparator));
-    EXPECT_FALSE(leaf.Lookup(30, nullptr, comparator));
+    EXPECT_FALSE(leaf.Lookup(25, &out));
+    EXPECT_FALSE(leaf.Lookup(30, nullptr));
 }
 
 TEST(BPlusTreeLeafPageTest, InsertRespectsMaxSize)
 {
     Page page;
+    page.InitBlank(2, PageType::LEAF);
     BPlusTreeLeafPage leaf(&page);
-    ASSERT_TRUE(leaf.InitForNewLeaf(2, 3));
-    Int32Comparator comparator;
+    ASSERT_TRUE(leaf.InitForNewLeaf(3));
 
-    EXPECT_TRUE(leaf.Insert(1, record::RID(2, 1), comparator));
-    EXPECT_TRUE(leaf.Insert(2, record::RID(2, 2), comparator));
-    EXPECT_TRUE(leaf.Insert(3, record::RID(2, 3), comparator));
-    EXPECT_FALSE(leaf.Insert(4, record::RID(2, 4), comparator));
+    EXPECT_TRUE(leaf.Insert(1, record::RID(2, 1)));
+    EXPECT_TRUE(leaf.Insert(2, record::RID(2, 2)));
+    EXPECT_TRUE(leaf.Insert(3, record::RID(2, 3)));
+    EXPECT_FALSE(leaf.Insert(4, record::RID(2, 4)));
     EXPECT_EQ(leaf.GetSize(), 3u);
 }
 
@@ -88,19 +71,20 @@ TEST(BPlusTreeLeafPageTest, MoveHalfToSplitsAndMaintainsLeafLinks)
 {
     Page src_page;
     Page dst_page;
+    src_page.InitBlank(100, PageType::LEAF);
+    dst_page.InitBlank(200, PageType::LEAF);
     BPlusTreeLeafPage src(&src_page);
     BPlusTreeLeafPage dst(&dst_page);
-    Int32Comparator comparator;
 
-    ASSERT_TRUE(src.InitForNewLeaf(100, 8, 7));
-    ASSERT_TRUE(dst.InitForNewLeaf(200, 8, 7));
+    ASSERT_TRUE(src.InitForNewLeaf(8, 7));
+    ASSERT_TRUE(dst.InitForNewLeaf(8, 7));
     src.SetNextPageId(777);
 
-    ASSERT_TRUE(src.Insert(10, record::RID(10, 1), comparator));
-    ASSERT_TRUE(src.Insert(20, record::RID(20, 1), comparator));
-    ASSERT_TRUE(src.Insert(30, record::RID(30, 1), comparator));
-    ASSERT_TRUE(src.Insert(40, record::RID(40, 1), comparator));
-    ASSERT_TRUE(src.Insert(50, record::RID(50, 1), comparator));
+    ASSERT_TRUE(src.Insert(10, record::RID(10, 1)));
+    ASSERT_TRUE(src.Insert(20, record::RID(20, 1)));
+    ASSERT_TRUE(src.Insert(30, record::RID(30, 1)));
+    ASSERT_TRUE(src.Insert(40, record::RID(40, 1)));
+    ASSERT_TRUE(src.Insert(50, record::RID(50, 1)));
 
     src.MoveHalfTo(&dst);
 
@@ -119,19 +103,20 @@ TEST(BPlusTreeLeafPageTest, MoveHalfToRejectsNonEmptyRecipient)
 {
     Page src_page;
     Page dst_page;
+    src_page.InitBlank(300, PageType::LEAF);
+    dst_page.InitBlank(400, PageType::LEAF);
     BPlusTreeLeafPage src(&src_page);
     BPlusTreeLeafPage dst(&dst_page);
-    Int32Comparator comparator;
 
-    ASSERT_TRUE(src.InitForNewLeaf(300, 8));
-    ASSERT_TRUE(dst.InitForNewLeaf(400, 8));
+    ASSERT_TRUE(src.InitForNewLeaf(8));
+    ASSERT_TRUE(dst.InitForNewLeaf(8));
     src.SetNextPageId(999);
 
-    ASSERT_TRUE(src.Insert(1, record::RID(1, 1), comparator));
-    ASSERT_TRUE(src.Insert(2, record::RID(1, 2), comparator));
-    ASSERT_TRUE(src.Insert(3, record::RID(1, 3), comparator));
-    ASSERT_TRUE(src.Insert(4, record::RID(1, 4), comparator));
-    ASSERT_TRUE(dst.Insert(100, record::RID(2, 1), comparator));
+    ASSERT_TRUE(src.Insert(1, record::RID(1, 1)));
+    ASSERT_TRUE(src.Insert(2, record::RID(1, 2)));
+    ASSERT_TRUE(src.Insert(3, record::RID(1, 3)));
+    ASSERT_TRUE(src.Insert(4, record::RID(1, 4)));
+    ASSERT_TRUE(dst.Insert(100, record::RID(2, 1)));
 
     src.MoveHalfTo(&dst);
 
@@ -139,6 +124,13 @@ TEST(BPlusTreeLeafPageTest, MoveHalfToRejectsNonEmptyRecipient)
     EXPECT_EQ(dst.GetSize(), 1u);
     EXPECT_EQ(src.GetNextPageId(), 999u);
     EXPECT_EQ(dst.KeyAt(0), 100);
+}
+
+TEST(BPlusTreeLeafPageTest, InitFailsWhenPageIdInvalid)
+{
+    Page page;
+    BPlusTreeLeafPage leaf(&page);
+    EXPECT_FALSE(leaf.InitForNewLeaf(8));
 }
 
 } // namespace HaruhiDB::storage

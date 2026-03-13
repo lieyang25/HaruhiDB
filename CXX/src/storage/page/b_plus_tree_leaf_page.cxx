@@ -13,10 +13,19 @@ namespace storage
 {
 
     bool BPlusTreeLeafPage::InitForNewLeaf(
-        page_id_t page_id,
         uint16_t max_size,
         page_id_t parent_page_id) noexcept
     {
+        if (page_ == nullptr) {
+            return false;
+        }
+
+        // page_id is expected to be assigned by BufferPoolManager::NewPage.
+        const page_id_t page_id = page_->PageId();
+        if (page_id == INVALID_PAGE_ID) {
+            return false;
+        }
+
         const uint16_t physical_max_size = ComputeMaxSize();
         if (physical_max_size == 0) {
             return false;
@@ -86,22 +95,19 @@ namespace storage
         return ItemAt(index).value;
     }
 
-    uint16_t BPlusTreeLeafPage::KeyIndexImpl(
-        const KeyType& key,
-        KeyComparatorFn comparator,
-        const void* comparator_ctx) const noexcept
+    uint16_t BPlusTreeLeafPage::KeyIndex(const KeyType& key) const noexcept
     {
-        if (comparator == nullptr) {
+        const auto* array = Array();
+        if (array == nullptr) {
             return 0;
         }
 
         uint16_t left = 0;
         uint16_t right = GetSize();
-        const auto* array = Array();
 
-        while (left < right && array != nullptr) {
+        while (left < right) {
             const uint16_t mid = static_cast<uint16_t>(left + (right - left) / 2);
-            if (comparator(array[mid].key, key, comparator_ctx) < 0) {
+            if (array[mid].key < key) {
                 left = static_cast<uint16_t>(mid + 1);
             } else {
                 right = mid;
@@ -110,13 +116,9 @@ namespace storage
         return left;
     }
 
-    bool BPlusTreeLeafPage::LookupImpl(
-        const KeyType& key,
-        ValueType* out_value,
-        KeyComparatorFn comparator,
-        const void* comparator_ctx) const noexcept
+    bool BPlusTreeLeafPage::Lookup(const KeyType& key, ValueType* out_value) const noexcept
     {
-        if (out_value == nullptr || comparator == nullptr) {
+        if (out_value == nullptr) {
             return false;
         }
 
@@ -125,7 +127,7 @@ namespace storage
             return false;
         }
 
-        const uint16_t idx = KeyIndexImpl(key, comparator, comparator_ctx);
+        const uint16_t idx = KeyIndex(key);
         if (idx >= size) {
             return false;
         }
@@ -135,7 +137,7 @@ namespace storage
             return false;
         }
 
-        if (comparator(array[idx].key, key, comparator_ctx) != 0) {
+        if (array[idx].key != key) {
             return false;
         }
 
@@ -143,13 +145,9 @@ namespace storage
         return true;
     }
 
-    bool BPlusTreeLeafPage::InsertImpl(
-        const KeyType& key,
-        const ValueType& value,
-        KeyComparatorFn comparator,
-        const void* comparator_ctx) noexcept
+    bool BPlusTreeLeafPage::Insert(const KeyType& key, const ValueType& value) noexcept
     {
-        if (page_ == nullptr || comparator == nullptr) {
+        if (page_ == nullptr) {
             return false;
         }
 
@@ -164,8 +162,8 @@ namespace storage
             return false;
         }
 
-        const uint16_t idx = KeyIndexImpl(key, comparator, comparator_ctx);
-        if (idx < size && comparator(array[idx].key, key, comparator_ctx) == 0) {
+        const uint16_t idx = KeyIndex(key);
+        if (idx < size && array[idx].key == key) {
             return false;
         }
 
@@ -185,6 +183,7 @@ namespace storage
 
     void BPlusTreeLeafPage::MoveHalfTo(BPlusTreeLeafPage* recipient) noexcept
     {
+        // Caller must hold write latches for both source and recipient pages.
         if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
@@ -222,6 +221,7 @@ namespace storage
             dst,
             src + move_start,
             sizeof(MappingType) * move_count);
+        std::memset(src + move_start, 0, sizeof(MappingType) * move_count);
 
         recipient->SetSize(move_count);
         SetSize(move_start);
