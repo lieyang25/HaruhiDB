@@ -11,6 +11,7 @@
 #include "execution/insert_executor.h"
 #include "execution/projection_executor.h"
 #include "execution/seq_scan_executor.h"
+#include "execution/update_executor.h"
 #include "execution/values_executor.h"
 #include "storage/disk/disk_manager.h"
 
@@ -182,6 +183,81 @@ TEST_F(ExecutorSmokeTest, IndexScanExecutorWorks)
     EXPECT_EQ(out.values[1], type::Value::VarChar("azusa"));
     EXPECT_TRUE(out.has_rid);
     EXPECT_FALSE(index_scan.Next(&out));
+}
+
+TEST_F(ExecutorSmokeTest, UpdateExecutorWorks)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(64, &dm);
+    catalog::Catalog catalog(&bpm);
+
+    auto schema_exp = catalog::Schema::Create({
+        catalog::Column("id", type::TypeId::INTEGER, false),
+        catalog::Column("name", type::TypeId::VARCHAR, 16, false),
+    });
+    ASSERT_TRUE(schema_exp.has_value()) << schema_exp.error();
+
+    auto table_exp = catalog.CreateTable("student", schema_exp.value());
+    ASSERT_TRUE(table_exp.has_value()) << table_exp.error();
+    catalog::TableInfo* table_info = table_exp.value();
+    ASSERT_NE(table_info, nullptr);
+
+    ExecutorContext exec_ctx(&catalog);
+
+    auto values = std::make_unique<ValuesExecutor>(
+        &exec_ctx,
+        std::vector<std::vector<type::Value>>{
+            {type::Value::Int32(10), type::Value::VarChar("ui")},
+            {type::Value::Int32(20), type::Value::VarChar("sawa")},
+        });
+
+    InsertExecutor insert(&exec_ctx, table_info, std::move(values));
+    insert.Init();
+    ExecutorRow insert_result;
+    ASSERT_TRUE(insert.Next(&insert_result));
+
+    auto scan_child = std::make_unique<SeqScanExecutor>(&exec_ctx, table_info);
+    auto filter = std::make_unique<FilterExecutor>(
+        &exec_ctx,
+        std::move(scan_child),
+        [](const ExecutorRow& row) {
+            if (row.values.empty()) {
+                return false;
+            }
+            return row.values[0] == type::Value::Int32(10);
+        });
+
+    UpdateExecutor updater(
+        &exec_ctx,
+        table_info,
+        std::move(filter),
+        [](const ExecutorRow& row) {
+            auto out = row.values;
+            if (out.size() > 1) {
+                out[1] = type::Value::VarChar("ritsu");
+            }
+            return out;
+        });
+    updater.Init();
+
+    ExecutorRow update_result;
+    ASSERT_TRUE(updater.Next(&update_result));
+    ASSERT_EQ(update_result.values.size(), 1u);
+    EXPECT_EQ(update_result.values[0], type::Value::Int32(1));
+    EXPECT_FALSE(updater.Next(&update_result));
+
+    SeqScanExecutor verify_scan(&exec_ctx, table_info);
+    verify_scan.Init();
+
+    int seen = 0;
+    ExecutorRow row;
+    while (verify_scan.Next(&row)) {
+        if (row.values[0] == type::Value::Int32(10)) {
+            EXPECT_EQ(row.values[1], type::Value::VarChar("ritsu"));
+            ++seen;
+        }
+    }
+    EXPECT_EQ(seen, 1);
 }
 
 } // namespace HaruhiDB::execution
