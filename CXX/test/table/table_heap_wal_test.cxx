@@ -2,10 +2,12 @@
 
 #include "buffer/buffer_pool_manager/buffer_pool_manager.h"
 #include "storage/disk/disk_manager.h"
+#include "storage/index/b_plus_tree.h"
 #include "storage/wal/wal_manager.h"
 #include "table/table_heap.h"
 #include "table/table_iterator.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -30,6 +32,22 @@ std::string TupleToString(const record::Tuple& tuple)
     const auto* begin = reinterpret_cast<const char*>(tuple.Data());
     return std::string(begin, begin + tuple.Size());
 }
+
+class FailingAppendWalManager : public storage::wal::WalManager
+{
+public:
+    using WalManager::WalManager;
+    bool AppendLog(const storage::wal::LogRecord&) override { return false; }
+    bool FlushLog() override { return true; }
+};
+
+class FailingFlushWalManager : public storage::wal::WalManager
+{
+public:
+    using WalManager::WalManager;
+    bool AppendLog(const storage::wal::LogRecord&) override { return true; }
+    bool FlushLog() override { return false; }
+};
 } // namespace
 
 class TableHeapWalTest : public ::testing::Test
@@ -88,6 +106,44 @@ TEST_F(TableHeapWalTest, InsertThenRecover)
         ASSERT_TRUE(heap.GetTuple(rid, &out));
         EXPECT_EQ(TupleToString(out), "wal_insert");
     }
+}
+
+TEST_F(TableHeapWalTest, WalAppendFailureAbortsProcess)
+{
+    EXPECT_DEATH(
+        {
+            storage::DiskManager dm(db_path_);
+            buffer::BufferPoolManager bpm(16, &dm);
+            auto heap_exp = TableHeap::Create(&bpm);
+            if (!heap_exp.has_value()) {
+                std::abort();
+            }
+            auto heap = std::move(heap_exp.value());
+            FailingAppendWalManager wal(wal_path_);
+            heap->SetWalManager(&wal);
+            record::RID rid;
+            (void)heap->InsertTuple(MakeTupleFromString("append_fail"), &rid);
+        },
+        "FATAL: WAL failure");
+}
+
+TEST_F(TableHeapWalTest, WalFlushFailureAbortsProcess)
+{
+    EXPECT_DEATH(
+        {
+            storage::DiskManager dm(db_path_);
+            buffer::BufferPoolManager bpm(16, &dm);
+            auto heap_exp = TableHeap::Create(&bpm);
+            if (!heap_exp.has_value()) {
+                std::abort();
+            }
+            auto heap = std::move(heap_exp.value());
+            FailingFlushWalManager wal(wal_path_);
+            heap->SetWalManager(&wal);
+            record::RID rid;
+            (void)heap->InsertTuple(MakeTupleFromString("flush_fail"), &rid);
+        },
+        "FATAL: WAL failure");
 }
 
 TEST_F(TableHeapWalTest, DeleteThenRecover)
@@ -239,6 +295,53 @@ TEST_F(TableHeapWalTest, NewPageLinkingSurvivesRecover)
         }
 
         EXPECT_EQ(scanned_payloads, expected_payloads);
+    }
+}
+
+TEST_F(TableHeapWalTest, RecoveryDoesNotGuaranteeIndexConsistency)
+{
+    page_id_t first_page_id = INVALID_PAGE_ID;
+    page_id_t index_header_page_id = INVALID_PAGE_ID;
+    record::RID rid;
+    constexpr int32_t kKey = 42;
+
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(64, &dm);
+        auto heap_exp = TableHeap::Create(&bpm);
+        ASSERT_TRUE(heap_exp.has_value());
+        auto heap = std::move(heap_exp.value());
+        first_page_id = heap->FirstPageId();
+        ASSERT_NE(first_page_id, INVALID_PAGE_ID);
+
+        storage::wal::WalManager wal(wal_path_);
+        heap->SetWalManager(&wal);
+
+        storage::BPlusTree index(&bpm);
+        index_header_page_id = index.HeaderPageId();
+        ASSERT_NE(index_header_page_id, INVALID_PAGE_ID);
+
+        // Persist empty index metadata first. Later index changes are intentionally not flushed.
+        ASSERT_TRUE(bpm.FlushAllPages().has_value());
+
+        ASSERT_TRUE(heap->InsertTuple(MakeTupleFromString("table_row"), &rid));
+        ASSERT_TRUE(index.Insert(kKey, rid));
+    }
+
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(64, &dm);
+        storage::wal::WalManager wal(wal_path_);
+        ASSERT_TRUE(wal.Recover(&bpm));
+
+        TableHeap heap(&bpm, first_page_id);
+        record::Tuple tuple;
+        ASSERT_TRUE(heap.GetTuple(rid, &tuple));
+        EXPECT_EQ(TupleToString(tuple), "table_row");
+
+        storage::BPlusTree recovered_index(&bpm, index_header_page_id);
+        record::RID index_rid;
+        EXPECT_FALSE(recovered_index.GetValue(kKey, &index_rid));
     }
 }
 

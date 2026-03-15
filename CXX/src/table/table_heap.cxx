@@ -8,6 +8,8 @@
 #include "storage/page/table_page.h"
 #include "storage/wal/wal_manager.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <ranges>
 #include <shared_mutex>
 #include <unordered_set>
@@ -118,11 +120,8 @@ bool TableHeap::InsertTuple(const record::Tuple &tuple, record::RID *out_rid)
         storage::TablePage table_page(page);
         auto res = table_page.InsertTuple(tuple);
 
-        if (res.has_value() && !AppendPageAfterImageLog(page, storage::wal::LogRecordType::PUT)) {
-            bpm_->UnpinPage(pid, true);
-            return std::unexpected(storage::TablePageErr{
-                "TableHeap::InsertTuple: wal append/flush failed",
-                storage::TablePageErrCode::NullPage});
+        if (res.has_value()) {
+            AppendPageAfterImageLogOrDie(page, storage::wal::LogRecordType::PUT);
         }
 
         uint32_t free_space = 0;
@@ -239,9 +238,8 @@ bool TableHeap::DeleteTuple(const record::RID &rid)
         storage::TablePage table_page(page);
         auto res = table_page.MarkDelTuple(rid.GetSlotId());
 
-        if (res.has_value() && !AppendPageAfterImageLog(page, storage::wal::LogRecordType::DELETE)) {
-            bpm_->UnpinPage(pid, true);
-            return false;
+        if (res.has_value()) {
+            AppendPageAfterImageLogOrDie(page, storage::wal::LogRecordType::DELETE);
         }
 
         uint32_t free_space = 0;
@@ -286,9 +284,8 @@ bool TableHeap::UpdateTuple(
         storage::TablePage table_page(page);
         auto res = table_page.UpdateTuple(rid.GetSlotId(), new_tuple);
 
-        if (res.has_value() && !AppendPageAfterImageLog(page, storage::wal::LogRecordType::PUT)) {
-            bpm_->UnpinPage(pid, true);
-            return false;
+        if (res.has_value()) {
+            AppendPageAfterImageLogOrDie(page, storage::wal::LogRecordType::PUT);
         }
 
         uint32_t free_space = 0;
@@ -441,11 +438,7 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
     storage::Page *new_page = page_exp.value();
     storage::TablePage new_table_page(new_page);
     new_table_page.InitForNewPage(new_page_id);
-    if (!AppendPageAfterImageLog(new_page, storage::wal::LogRecordType::PUT)) {
-        bpm_->UnpinPage(new_page_id, true);
-        bpm_->DeletePage(new_page_id);
-        return std::nullopt;
-    }
+    AppendPageAfterImageLogOrDie(new_page, storage::wal::LogRecordType::PUT);
 
     bool linked = false;
     {
@@ -473,14 +466,7 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
                     table_page.SetNextPageId(new_page_id);
                     page->MarkDirty();
                     page->WUnLock();
-                    if (!AppendPageAfterImageLog(page, storage::wal::LogRecordType::PUT)) {
-                        page->WLock();
-                        table_page.SetNextPageId(INVALID_PAGE_ID);
-                        page->MarkDirty();
-                        page->WUnLock();
-                        bpm_->UnpinPage(pid, true);
-                        break;
-                    }
+                    AppendPageAfterImageLogOrDie(page, storage::wal::LogRecordType::PUT);
                     bpm_->UnpinPage(pid, true);
                     tail_page_id_ = new_page_id;
                     linked = true;
@@ -670,16 +656,23 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
     return false;
 }
 
-bool TableHeap::AppendPageAfterImageLog(storage::Page* page, storage::wal::LogRecordType type)
+[[noreturn]] void TableHeap::HandleWalFailureOrDie(const char* where)
+{
+    std::fprintf(stderr, "FATAL: WAL failure at %s\n", where == nullptr ? "unknown" : where);
+    std::fflush(stderr);
+    std::abort();
+}
+
+void TableHeap::AppendPageAfterImageLogOrDie(storage::Page* page, storage::wal::LogRecordType type)
 {
     if (wal_manager_ == nullptr) {
-        return true;
+        return;
     }
     if (page == nullptr) {
-        return false;
+        HandleWalFailureOrDie("AppendPageAfterImageLogOrDie(null page)");
     }
     if (page->PageId() == INVALID_PAGE_ID || page->PageId() == 0) {
-        return false;
+        HandleWalFailureOrDie("AppendPageAfterImageLogOrDie(invalid page id)");
     }
 
     storage::wal::LogRecord log_record{};
@@ -692,9 +685,11 @@ bool TableHeap::AppendPageAfterImageLog(storage::Page* page, storage::wal::LogRe
     page->RUnLock();
 
     if (!wal_manager_->AppendLog(log_record)) {
-        return false;
+        HandleWalFailureOrDie("WalManager::AppendLog");
     }
-    return wal_manager_->FlushLog();
+    if (!wal_manager_->FlushLog()) {
+        HandleWalFailureOrDie("WalManager::FlushLog");
+    }
 }
 
 } // namespace table

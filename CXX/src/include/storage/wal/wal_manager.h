@@ -36,10 +36,10 @@ class WalManager
 {
 public:
     explicit WalManager(std::filesystem::path wal_path);
-    ~WalManager();
+    virtual ~WalManager();
 
-    bool AppendLog(const LogRecord& record);
-    bool FlushLog();
+    virtual bool AppendLog(const LogRecord& record);
+    virtual bool FlushLog();
 
     bool Recover(buffer::BufferPoolManager* bpm);
     bool Redo(const LogRecord& record, buffer::BufferPoolManager* bpm);

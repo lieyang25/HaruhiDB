@@ -35,3 +35,19 @@ WAL v1 采用 page after-image REDO-only 方案。
 凡是表堆持久页被修改，均追加对应 page after-image 日志。
 
 恢复时顺序重放完整日志，刷盘成功后清空 WAL。
+
+## WAL v1 能力与限制
+
+- WAL v1 仅覆盖 TableHeap 持久页（page after-image, REDO-only）。
+- 崩溃恢复只保证表堆页正确，不保证 crash 后索引一致。
+- 当前 Insert/Delete/Update 执行路径不自动维护索引；需要索引时应重建或自行同步。
+- `UpdateTuple` 允许记录迁移，迁移后 RID 可能变化，旧 RID 失效；调用方必须使用返回的新 RID。
+- WAL 写入失败被视为致命错误，进程会直接中止，避免“页已改但 WAL 未落盘后继续运行”。
+
+## 当前约束（固定）
+
+- 索引键类型：`int32_t`
+- 索引语义：唯一键
+- 不支持 NULL 键
+- WAL v1 仅覆盖表堆，不覆盖 B+Tree 索引页
+- 不支持事务管理器、UNDO、并发控制/隔离级别

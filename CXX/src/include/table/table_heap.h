@@ -65,8 +65,9 @@ public:
     // 标记删除（逻辑删除）对应 slot
     bool DeleteTuple(const record::RID &rid);
 
-    // 更新 tuple；若 page 内无法原地更新，TableHeap 会将 tuple 迁移到新位置
-    // 并通过 out_rid 返回新的 RID（若原地更新则与传入一致）。
+    // 更新 tuple；若 page 内无法原地更新，TableHeap 会将 tuple 迁移到新位置。
+    // 迁移成功时 out_rid 返回新的 RID，且旧 RID 失效（不可再用于读取/更新）。
+    // 调用方后续必须使用 out_rid 中的 RID。
     bool UpdateTuple(const record::RID &rid, const record::Tuple &new_tuple, record::RID *out_rid = nullptr);
 
     // 迭代器接口
@@ -108,7 +109,8 @@ private:
     // 删除 page（回收）并修正页链（仅在安全可回收时调用）
     // 返回 true 代表删除成功
     bool ReclaimPageIfEmpty(page_id_t page_id);
-    bool AppendPageAfterImageLog(storage::Page* page, storage::wal::LogRecordType type);
+    [[noreturn]] static void HandleWalFailureOrDie(const char* where);
+    void AppendPageAfterImageLogOrDie(storage::Page* page, storage::wal::LogRecordType type);
 
     buffer::BufferPoolManager *bpm_;
     page_id_t first_page_id_;

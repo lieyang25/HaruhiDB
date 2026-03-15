@@ -80,6 +80,33 @@ TEST_F(TableHeapTest, InsertGetAndUpdateTuple)
     EXPECT_EQ(TupleToString(fetched2), "db");
 }
 
+TEST_F(TableHeapTest, UpdateMoveInvalidatesOldRidAndReturnsNewRid)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(32, &dm);
+    TableHeap heap(&bpm);
+
+    record::RID old_rid;
+    ASSERT_TRUE(heap.InsertTuple(MakeTupleFromString("move_source"), &old_rid));
+
+    for (int i = 0; i < 200; ++i) {
+        const std::string payload = std::string(900, static_cast<char>('a' + (i % 26))) + "#" + std::to_string(i);
+        record::RID rid;
+        ASSERT_TRUE(heap.InsertTuple(MakeTupleFromString(payload), &rid));
+    }
+
+    const std::string moved_value = std::string(1800, 'z');
+    record::RID new_rid;
+    ASSERT_TRUE(heap.UpdateTuple(old_rid, MakeTupleFromString(moved_value), &new_rid));
+    ASSERT_NE(new_rid, old_rid);
+
+    record::Tuple old_tuple;
+    record::Tuple new_tuple;
+    EXPECT_FALSE(heap.GetTuple(old_rid, &old_tuple));
+    ASSERT_TRUE(heap.GetTuple(new_rid, &new_tuple));
+    EXPECT_EQ(TupleToString(new_tuple), moved_value);
+}
+
 TEST_F(TableHeapTest, IteratorSkipsDeletedTuples)
 {
     storage::DiskManager dm(db_path_);
