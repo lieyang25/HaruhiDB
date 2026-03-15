@@ -22,6 +22,18 @@ namespace table {
 
 class TableIterator;
 
+} // namespace table
+} // namespace HaruhiDB
+
+namespace HaruhiDB::storage::wal
+{
+class WalManager;
+enum class LogRecordType : uint8_t;
+}
+
+namespace HaruhiDB {
+namespace table {
+
 
 /**
  * TableHeap
@@ -61,6 +73,9 @@ public:
     TableIterator Begin();
     TableIterator End();
 
+    void SetWalManager(storage::wal::WalManager* wal_manager) noexcept { wal_manager_ = wal_manager; }
+    storage::wal::WalManager* GetWalManager() const noexcept { return wal_manager_; }
+
     // 获取首页 id
     page_id_t FirstPageId() const noexcept
     {
@@ -93,10 +108,12 @@ private:
     // 删除 page（回收）并修正页链（仅在安全可回收时调用）
     // 返回 true 代表删除成功
     bool ReclaimPageIfEmpty(page_id_t page_id);
+    bool AppendPageAfterImageLog(storage::Page* page, storage::wal::LogRecordType type);
 
     buffer::BufferPoolManager *bpm_;
     page_id_t first_page_id_;
     page_id_t tail_page_id_;
+    storage::wal::WalManager* wal_manager_{nullptr};
 
     // 简单 free-space map（内存缓存），记录 page_id -> free_bytes
     // 需要在插入/删除后更新

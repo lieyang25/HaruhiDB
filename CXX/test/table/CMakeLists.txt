@@ -1,5 +1,6 @@
 add_executable(table_test
     table_heap_test.cxx
+    table_heap_wal_test.cxx
     tuple_codec_test.cxx
 )
 

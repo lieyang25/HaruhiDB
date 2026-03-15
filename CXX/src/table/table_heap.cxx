@@ -6,6 +6,7 @@
 #include "table/table_iterator.h"
 
 #include "storage/page/table_page.h"
+#include "storage/wal/wal_manager.h"
 
 #include <ranges>
 #include <shared_mutex>
@@ -61,7 +62,8 @@ namespace {
 TableHeap::TableHeap(buffer::BufferPoolManager *bpm, page_id_t first_page_id)
     : bpm_(bpm),
       first_page_id_(first_page_id),
-      tail_page_id_(INVALID_PAGE_ID)
+      tail_page_id_(INVALID_PAGE_ID),
+      wal_manager_(nullptr)
 {
 }
 
@@ -115,6 +117,13 @@ bool TableHeap::InsertTuple(const record::Tuple &tuple, record::RID *out_rid)
         storage::Page *page = page_exp.value();
         storage::TablePage table_page(page);
         auto res = table_page.InsertTuple(tuple);
+
+        if (res.has_value() && !AppendPageAfterImageLog(page, storage::wal::LogRecordType::PUT)) {
+            bpm_->UnpinPage(pid, true);
+            return std::unexpected(storage::TablePageErr{
+                "TableHeap::InsertTuple: wal append/flush failed",
+                storage::TablePageErrCode::NullPage});
+        }
 
         uint32_t free_space = 0;
         page->RLock();
@@ -230,6 +239,11 @@ bool TableHeap::DeleteTuple(const record::RID &rid)
         storage::TablePage table_page(page);
         auto res = table_page.MarkDelTuple(rid.GetSlotId());
 
+        if (res.has_value() && !AppendPageAfterImageLog(page, storage::wal::LogRecordType::DELETE)) {
+            bpm_->UnpinPage(pid, true);
+            return false;
+        }
+
         uint32_t free_space = 0;
         page->RLock();
         free_space = table_page.FreeSpace();
@@ -240,7 +254,7 @@ bool TableHeap::DeleteTuple(const record::RID &rid)
         ok = res.has_value();
     }
 
-    if (ok) {
+    if (ok && wal_manager_ == nullptr) {
         ReclaimPageIfEmpty(pid);
     }
     return ok;
@@ -271,6 +285,11 @@ bool TableHeap::UpdateTuple(
         storage::Page *page = page_exp.value();
         storage::TablePage table_page(page);
         auto res = table_page.UpdateTuple(rid.GetSlotId(), new_tuple);
+
+        if (res.has_value() && !AppendPageAfterImageLog(page, storage::wal::LogRecordType::PUT)) {
+            bpm_->UnpinPage(pid, true);
+            return false;
+        }
 
         uint32_t free_space = 0;
         page->RLock();
@@ -422,6 +441,11 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
     storage::Page *new_page = page_exp.value();
     storage::TablePage new_table_page(new_page);
     new_table_page.InitForNewPage(new_page_id);
+    if (!AppendPageAfterImageLog(new_page, storage::wal::LogRecordType::PUT)) {
+        bpm_->UnpinPage(new_page_id, true);
+        bpm_->DeletePage(new_page_id);
+        return std::nullopt;
+    }
 
     bool linked = false;
     {
@@ -449,6 +473,14 @@ std::optional<page_id_t> TableHeap::AllocateNewPage()
                     table_page.SetNextPageId(new_page_id);
                     page->MarkDirty();
                     page->WUnLock();
+                    if (!AppendPageAfterImageLog(page, storage::wal::LogRecordType::PUT)) {
+                        page->WLock();
+                        table_page.SetNextPageId(INVALID_PAGE_ID);
+                        page->MarkDirty();
+                        page->WUnLock();
+                        bpm_->UnpinPage(pid, true);
+                        break;
+                    }
                     bpm_->UnpinPage(pid, true);
                     tail_page_id_ = new_page_id;
                     linked = true;
@@ -636,6 +668,33 @@ bool TableHeap::ReclaimPageIfEmpty(page_id_t page_id)
     }
 
     return false;
+}
+
+bool TableHeap::AppendPageAfterImageLog(storage::Page* page, storage::wal::LogRecordType type)
+{
+    if (wal_manager_ == nullptr) {
+        return true;
+    }
+    if (page == nullptr) {
+        return false;
+    }
+    if (page->PageId() == INVALID_PAGE_ID || page->PageId() == 0) {
+        return false;
+    }
+
+    storage::wal::LogRecord log_record{};
+    log_record.type = type;
+    log_record.page_id = page->PageId();
+    log_record.payload_len = storage::wal::WAL_PAYLOAD_LEN;
+
+    page->RLock();
+    log_record.after_image = page->Data();
+    page->RUnLock();
+
+    if (!wal_manager_->AppendLog(log_record)) {
+        return false;
+    }
+    return wal_manager_->FlushLog();
 }
 
 } // namespace table
