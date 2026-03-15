@@ -121,6 +121,14 @@ record::Tuple TableIterator::operator*() const
     return record::Tuple(std::span<const std::byte>(tuple_buffer_.data(), tuple_buffer_.size()));
 }
 
+record::RID TableIterator::GetRID() const noexcept
+{
+    if (at_end_ || heap_ == nullptr || cur_page_id_ == INVALID_PAGE_ID || cur_slot_ == INVALID_SLOT_ID) {
+        return {};
+    }
+    return record::RID(cur_page_id_, cur_slot_);
+}
+
 TableIterator &TableIterator::operator++()
 {
     if (at_end_ || heap_ == nullptr) {

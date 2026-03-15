@@ -44,6 +44,10 @@ public:
     // 解引用：读取并返回当前 tuple（拷贝）
     record::Tuple operator*() const;
 
+    // 返回当前 iterator 指向 tuple 的 RID。
+    // 若为 end iterator，返回 INVALID RID。
+    record::RID GetRID() const noexcept;
+
     // 前缀 ++
     TableIterator &operator++();
 

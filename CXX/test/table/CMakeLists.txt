@@ -1,5 +1,6 @@
 add_executable(table_test
     table_heap_test.cxx
+    tuple_codec_test.cxx
 )
 
 target_link_libraries(table_test PRIVATE

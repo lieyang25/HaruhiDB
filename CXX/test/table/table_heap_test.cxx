@@ -95,14 +95,19 @@ TEST_F(TableHeapTest, IteratorSkipsDeletedTuples)
     ASSERT_TRUE(heap.DeleteTuple(r2));
 
     std::vector<std::string> scanned;
+    std::vector<record::RID> scanned_rids;
     for (auto it = heap.Begin(); it != heap.End(); ++it) {
+        scanned_rids.push_back(it.GetRID());
         const record::Tuple tuple = *it;
         scanned.push_back(TupleToString(tuple));
     }
 
     ASSERT_EQ(scanned.size(), 2u);
+    ASSERT_EQ(scanned_rids.size(), 2u);
     EXPECT_EQ(scanned[0], "a");
     EXPECT_EQ(scanned[1], "c");
+    EXPECT_EQ(scanned_rids[0], r1);
+    EXPECT_EQ(scanned_rids[1], r3);
 }
 
 TEST_F(TableHeapTest, ReclaimMiddlePageKeepsChainConsistent)
