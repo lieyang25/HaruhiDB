@@ -1,5 +1,38 @@
 /**
  * CXX/src/type/value.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 Value 的运行时行为。
+ *
+ * 主要完成：
+ *
+ * 1. 数值类型转换判断
+ * 2. 数值提升为 long double
+ * 3. Value 比较
+ * 4. 字符串化
+ * 5. 按指定类型序列化
+ * 6. 从原始字节反序列化
+ *
+ *
+ * ========================= 核心机制 =========================
+ *
+ * CanCastTo:
+ *   判断当前 Value 能否安全转换到目标 TypeId
+ *
+ * Compare:
+ *   - NULL 与非 NULL 无序
+ *   - 数值类型统一提升后比较
+ *   - VARCHAR 按字符串字典序比较
+ *   - 其余不兼容类型返回无序
+ *
+ * Serialize:
+ *   - 数值类型按目标类型写入定长字节
+ *   - VARCHAR 写入原始字符串字节
+ *
+ * TryDeserialize:
+ *   - 按 TypeId 从给定字节区间恢复 Value
+ *   - 长度不足时返回错误
  */
 
 #include "type/value.h"
@@ -63,8 +96,10 @@ namespace type
                                 }
                             }
 
-                            constexpr long double lower = static_cast<long double>(std::numeric_limits<T>::min());
-                            constexpr long double upper = static_cast<long double>(std::numeric_limits<T>::max());
+                            constexpr long double lower =
+                                static_cast<long double>(std::numeric_limits<T>::min());
+                            constexpr long double upper =
+                                static_cast<long double>(std::numeric_limits<T>::max());
                             if (as_long_double < lower || as_long_double > upper) {
                                 return std::nullopt;
                             }
@@ -74,7 +109,8 @@ namespace type
                             if (!std::isfinite(as_long_double)) {
                                 return std::nullopt;
                             }
-                            constexpr long double upper = static_cast<long double>(std::numeric_limits<T>::max());
+                            constexpr long double upper =
+                                static_cast<long double>(std::numeric_limits<T>::max());
                             if (as_long_double < -upper || as_long_double > upper) {
                                 return std::nullopt;
                             }
@@ -118,6 +154,9 @@ namespace type
         }
     } // namespace
 
+    /**
+     * @param target 目标类型
+     */
     bool Value::CanCastTo(TypeId target) const noexcept
     {
         if (target == TypeId::INVALID) {
@@ -148,6 +187,9 @@ namespace type
         return Type() == target;
     }
 
+    /**
+     * @note 仅数值类型支持提升
+     */
     std::optional<long double> Value::AsLongDouble() const noexcept
     {
         return std::visit(
@@ -164,8 +206,12 @@ namespace type
             data_);
     }
 
+    /**
+     * @param rhs 右值
+     */
     std::partial_ordering Value::Compare(const Value& rhs) const noexcept
     {
+        // step 1: NULL 参与比较时，只有 NULL == NULL 才等价，其余均无序。
         if (IsNull() || rhs.IsNull()) {
             if (IsNull() && rhs.IsNull()) {
                 return std::partial_ordering::equivalent;
@@ -173,6 +219,7 @@ namespace type
             return std::partial_ordering::unordered;
         }
 
+        // step 2: 若两侧都属于数值类，则统一提升到 long double 比较。
         const bool lhs_numeric = TypeUtil::IsNumeric(Type()) || Type() == TypeId::BOOLEAN;
         const bool rhs_numeric = TypeUtil::IsNumeric(rhs.Type()) || rhs.Type() == TypeId::BOOLEAN;
         if (lhs_numeric && rhs_numeric) {
@@ -190,6 +237,7 @@ namespace type
             return std::partial_ordering::equivalent;
         }
 
+        // step 3: 若两侧都是字符串，则按字典序比较。
         const auto* lhs_str = TryAs<std::string>();
         const auto* rhs_str = rhs.TryAs<std::string>();
         if (lhs_str != nullptr && rhs_str != nullptr) {
@@ -202,6 +250,7 @@ namespace type
             return std::partial_ordering::equivalent;
         }
 
+        // step 4: 其他不兼容类型返回无序。
         return std::partial_ordering::unordered;
     }
 
@@ -221,8 +270,12 @@ namespace type
             data_);
     }
 
+    /**
+     * @param type 目标类型
+     */
     std::vector<std::byte> Value::Serialize(TypeId type) const
     {
+        // step 1: 检查目标类型是否合法；NULL 序列化为空字节序列。
         if (type == TypeId::INVALID) {
             throw std::invalid_argument("Value::Serialize: invalid target type");
         }
@@ -230,6 +283,7 @@ namespace type
             return {};
         }
 
+        // step 2: 按目标类型执行转换并写出原始字节。
         switch (type) {
             case TypeId::BOOLEAN: {
                 const uint8_t v = static_cast<uint8_t>(GetOrThrowCast<bool>(*this, type) ? 1 : 0);
@@ -270,8 +324,15 @@ namespace type
         return {};
     }
 
-    std::expected<Value, ValueDeserializeErr> Value::TryDeserialize(TypeId type, const std::byte* ptr, size_t len)
+    /**
+     * @param type 目标类型
+     * @param ptr  数据起始地址
+     * @param len  数据长度
+     */
+    std::expected<Value, ValueDeserializeErr> Value::TryDeserialize(
+        TypeId type, const std::byte* ptr, size_t len)
     {
+        // step 1: 检查目标类型与输入指针/长度组合是否合法。
         if (type == TypeId::INVALID) {
             return MakeDeserializeErr(
                 ValueDeserializeErrCode::InvalidType,
@@ -289,6 +350,7 @@ namespace type
                 "Value::TryDeserialize: null pointer with non-zero length");
         }
 
+        // step 2: 按 TypeId 解释原始字节并构造 Value。
         switch (type) {
             case TypeId::BOOLEAN:
                 if (len >= sizeof(uint8_t)) {
@@ -357,6 +419,12 @@ namespace type
             "Value::TryDeserialize: unsupported type");
     }
 
+    /**
+     * @param type 目标类型
+     * @param ptr  数据起始地址
+     * @param len  数据长度
+     * @note 失败时抛出异常
+     */
     Value Value::Deserialize(TypeId type, const std::byte* ptr, size_t len)
     {
         auto parsed = TryDeserialize(type, ptr, len);
@@ -365,5 +433,6 @@ namespace type
         }
         return parsed.value();
     }
+
 } // namespace type
 } // namespace HaruhiDB
