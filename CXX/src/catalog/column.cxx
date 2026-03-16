@@ -1,13 +1,24 @@
 /**
  * CXX/src/catalog/column.cxx
  *
- * 实现 Column 的逻辑
+ * ========================= 实现目标 =========================
  *
- * 包含：
+ * 本文件实现 Column 的构造、校验与字符串化逻辑。
  *
- * 构造函数
- * ToString
- * Validate
+ * 主要完成：
+ *
+ * 1. 固定长度列构造
+ * 2. 变长列构造
+ * 3. 列定义合法性校验
+ * 4. SQL 风格字符串输出
+ *
+ *
+ * ========================= 实现说明 =========================
+ *
+ * Column 在构造阶段就尽量保证自身合法。
+ *
+ * 若定义不合法，则构造函数直接抛出异常；
+ * Validate 则提供非异常形式的校验接口。
  */
 
 #include "catalog/column.h"
@@ -19,128 +30,97 @@ namespace HaruhiDB
 {
 namespace catalog
 {
-
-    /**
-     * 内部辅助函数
-     *
-     * 调用 Validate
-     * 如果失败直接抛异常
-     */
     namespace
     {
+        /**
+         * 若列定义不合法则直接抛异常。
+         */
         void ThrowIfInvalidColumnDefinition(const Column& column)
         {
             auto result = column.Validate();
-
             if (!result.has_value()) {
                 throw std::invalid_argument(result.error());
             }
         }
-    }
+    } // namespace
 
     /**
-     * 固定长度列构造函数
-     *
-     * 例如：
-     *
-     * INT
-     * DOUBLE
+     * @param name          列名
+     * @param type          列类型
+     * @param nullable      是否允许 NULL
+     * @param default_value 默认值
      */
-    Column::Column(std::string name, type::TypeId type, bool nullable, std::optional<type::Value> default_value)
+    Column::Column(
+        std::string name,
+        type::TypeId type,
+        bool nullable,
+        std::optional<type::Value> default_value)
         : name_(std::move(name)), type_(type), nullable_(nullable), default_value_(std::move(default_value))
     {
-
-        /**
-         * 获取固定类型长度
-         *
-         * INT -> 4
-         * DOUBLE -> 8
-         */
+        // step 1: 读取固定长度类型的物理大小。
         const int fixed_size = type::TypeUtil::FixedLengthSize(type_);
 
-        /**
-         * 如果是变长类型
-         * 必须使用另一个构造函数
-         */
+        // step 2: 固定长度构造函数不允许处理变长类型。
         if (fixed_size == type::TypeUtil::VARIABLE_LENGTH) {
             throw std::invalid_argument("Column: variable-length type requires explicit length");
         }
 
-        /**
-         * 类型非法
-         */
+        // step 3: 检查固定长度是否合法。
         if (fixed_size <= 0) {
             throw std::invalid_argument("Column: invalid fixed-length type");
         }
 
-        /**
-         * 设置长度
-         */
+        // step 4: 写入长度并标记为内联列。
         length_ = static_cast<uint32_t>(fixed_size);
-
-        /**
-         * 固定长度类型一定是 inline
-         */
         inlined_ = true;
 
-        /**
-         * 验证定义是否合法
-         */
+        // step 5: 统一校验列定义。
         ThrowIfInvalidColumnDefinition(*this);
     }
 
     /**
-     * 变长类型构造函数
-     *
-     * 用于 VARCHAR
+     * @param name          列名
+     * @param type          列类型
+     * @param length        列长度或最大长度
+     * @param nullable      是否允许 NULL
+     * @param default_value 默认值
      */
     Column::Column(
-        std::string name, type::TypeId type, uint32_t length, bool nullable, std::optional<type::Value> default_value)
-        : name_(std::move(name)), type_(type), length_(length), nullable_(nullable), default_value_(std::move(default_value))
+        std::string name,
+        type::TypeId type,
+        uint32_t length,
+        bool nullable,
+        std::optional<type::Value> default_value)
+        : name_(std::move(name)),
+          type_(type),
+          length_(length),
+          nullable_(nullable),
+          default_value_(std::move(default_value))
     {
-
-        /**
-         * 判断是否为变长类型
-         */
+        // step 1: 根据类型判断该列是否应为内联列。
         inlined_ = !type::TypeUtil::IsVariableLength(type_);
 
-        /**
-         * 如果是固定长度类型
-         */
+        // step 2: 固定长度列要求 length 与类型固有长度一致。
         if (inlined_) {
-
             const int fixed_size = type::TypeUtil::FixedLengthSize(type_);
 
             if (fixed_size <= 0) {
                 throw std::invalid_argument("Column: invalid fixed-length type");
             }
 
-            /**
-             * 长度必须匹配
-             */
             if (length_ != static_cast<uint32_t>(fixed_size)) {
                 throw std::invalid_argument("Column: fixed-length column size mismatch");
             }
-
-        } else if (length_ == 0) {
-
-            /**
-             * 变长列必须指定最大长度
-             */
+        }
+        // step 3: 变长列必须显式给出正长度。
+        else if (length_ == 0) {
             throw std::invalid_argument("Column: variable-length column size must be positive");
         }
 
+        // step 4: 统一校验列定义。
         ThrowIfInvalidColumnDefinition(*this);
     }
 
-    /**
-     * 将 Column 转换为 SQL 风格字符串
-     *
-     * 例如：
-     *
-     * id INT NOT NULL
-     * name VARCHAR(32) NULL
-     */
     std::string Column::ToString() const
     {
         std::string output = name_ + " " + std::string(type::TypeUtil::TypeName(type_));
@@ -159,48 +139,25 @@ namespace catalog
         return output;
     }
 
-    /**
-     * 验证 Column 定义是否合法
-     *
-     * 检查：
-     *
-     * 1 name 非空
-     * 2 type 合法
-     * 3 length 合法
-     * 4 inlined 与 type 匹配
-     * 5 default value 类型合法
-     */
     std::expected<void, std::string> Column::Validate() const
     {
-
-        /**
-         * 列名不能为空
-         */
+        // step 1: 基础字段检查。
         if (name_.empty()) {
             return std::unexpected("Column: name must not be empty");
         }
 
-        /**
-         * 类型必须合法
-         */
         if (!type::TypeUtil::IsValid(type_) || type_ == type::TypeId::INVALID) {
             return std::unexpected("Column: invalid type id");
         }
 
-        /**
-         * 检查 inlined 是否正确
-         */
+        // step 2: 检查 inlined_ 与类型类别是否一致。
         const bool should_be_inlined = !type::TypeUtil::IsVariableLength(type_);
-
         if (should_be_inlined != inlined_) {
             return std::unexpected("Column: inlined flag does not match type");
         }
 
-        /**
-         * 固定长度类型验证
-         */
+        // step 3: 校验长度是否合法。
         if (inlined_) {
-
             const int fixed_size = type::TypeUtil::FixedLengthSize(type_);
 
             if (fixed_size <= 0) {
@@ -210,51 +167,33 @@ namespace catalog
             if (length_ != static_cast<uint32_t>(fixed_size)) {
                 return std::unexpected("Column: fixed-length column size mismatch");
             }
-
         } else if (length_ == 0) {
-
-            /**
-             * 变长列必须指定长度
-             */
             return std::unexpected("Column: variable-length column size must be positive");
         }
 
-        /**
-         * 如果没有默认值
-         * 直接合法
-         */
+        // step 4: 若无默认值，则定义已经合法。
         if (!default_value_.has_value()) {
             return {};
         }
 
         const type::Value& default_value = default_value_.value();
 
-        /**
-         * NULL 默认值检查
-         */
+        // step 5: NULL 默认值仅允许出现在 nullable 列上。
         if (default_value.IsNull()) {
-
             if (!nullable_) {
                 return std::unexpected("Column: NULL default value is not allowed for NOT NULL column");
             }
-
             return {};
         }
 
-        /**
-         * 默认值类型必须可转换
-         */
+        // step 6: 非 NULL 默认值必须能转换到列类型。
         if (!default_value.CanCastTo(type_)) {
             return std::unexpected("Column: default value cannot cast to column type");
         }
 
-        /**
-         * VARCHAR 长度检查
-         */
+        // step 7: VARCHAR 默认值还要满足长度限制。
         if (type_ == type::TypeId::VARCHAR) {
-
             const auto serialized = default_value.Serialize(type_);
-
             if (serialized.size() > length_) {
                 return std::unexpected("Column: default VARCHAR value exceeds column length");
             }
