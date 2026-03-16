@@ -3,78 +3,56 @@
  *
  * ========================= 设计目标 =========================
  *
- * Schema 用于描述一张表（Table）的结构。
+ * Schema 用于描述一张表的结构定义。
  *
- * Schema = 多个 Column 的集合。
+ * 它由多个 Column 组成，
+ * 同时负责描述 tuple 的逻辑布局与列查找关系。
  *
- * 在 SQL 中：
+ * 核心职责：
  *
- * CREATE TABLE student (
- *     id INT,
- *     age INT,
- *     name VARCHAR(32)
- * );
- *
- * Schema 就是：
- *
- * [
- *   Column("id", INT),
- *   Column("age", INT),
- *   Column("name", VARCHAR(32))
- * ]
+ * 1. 保存所有列定义
+ * 2. 计算各列在 tuple 中的 offset
+ * 3. 维护列名到列下标的映射
+ * 4. 统计变长列信息
+ * 5. 支持 schema 投影
  *
  *
- * ========================= Schema 在数据库中的作用 =========================
+ * ========================= 为什么需要 Schema =========================
  *
- * Schema 的核心职责有三个：
+ * Column 只描述“单列”信息，
+ * 但数据库真正操作的是“一整行记录”。
  *
- * 1 描述表结构
+ * Schema 负责把多个 Column 组织起来，
+ * 并回答下面这些问题：
  *
- *   Table
- *     └── Schema
- *            ├── Column
- *            ├── Column
- *            └── Column
- *
- *
- * 2 描述 Tuple 内存布局
- *
- * Schema 会计算：
- *
- * column offset
- * tuple size
- * varlen columns
+ * - 第 i 列是什么
+ * - 某列名字对应哪个下标
+ * - 某列在 tuple 中的 offset 是多少
+ * - 这张表是否包含变长列
+ * - tuple 的 inline 区总大小是多少
  *
  *
- * 3 提供列查找接口
- *
- * 例如：
- *
- * SELECT name FROM table
- *
- * 数据库需要知道：
- *
- * name 在 schema 中的 index
- *
- *
- *
- * ========================= Schema 与其他组件关系 =========================
+ * ========================= Schema 在系统中的位置 =========================
  *
  * Catalog
- *    │
- *    └── Table
- *          │
- *          └── Schema
- *                │
- *                └── Column
+ *   └── TableInfo
+ *         └── Schema
+ *               ├── Column
+ *               ├── Column
+ *               └── Column
+ *
+ * Tuple 编解码时，
+ * 由 Schema 决定各列的布局与解释方式。
  *
  *
- * Storage 层：
+ * ========================= 组织形式 =========================
  *
- * Page
- *   └── Tuple
- *         └── Schema 负责解析
- *
+ * Schema
+ *   ├── columns_
+ *   ├── name_to_index_
+ *   ├── uninlined_columns_
+ *   ├── tuple_inlined_
+ *   └── inlined_storage_size_
  */
 
 #pragma once
@@ -95,175 +73,156 @@ namespace HaruhiDB
 namespace catalog
 {
 
-    /**
-     * Schema
-     *
-     * 表示一张表的结构定义。
-     *
-     * Schema 包含：
-     *
-     * - 多个 Column
-     * - tuple layout 信息
-     * - column name -> index 映射
-     */
-    class Schema {
+    class Schema
+    {
     public:
-
         /**
-         * 默认构造
+         * 默认构造。
          */
         Schema() = default;
 
         /**
-         * 使用 Column 构造 Schema
+         * 使用一组列构造 Schema。
          *
-         * 会自动计算：
-         *
-         * offset
-         * tuple layout
+         * @param columns 列定义集合
+         * @note 构造时会自动建立 layout 与名称索引
          */
         explicit Schema(std::vector<Column> columns);
 
         /**
-         * 安全构造接口
+         * 安全构造接口。
          *
-         * 返回：
-         *
-         * expected<Schema, error>
+         * @param columns 列定义集合
+         * @return 成功返回 Schema，失败返回错误信息
          */
         static std::expected<Schema, std::string> Create(std::vector<Column> columns);
 
         /**
-         * 获取所有列
+         * 返回所有列。
          */
         const std::vector<Column>& Columns() const noexcept { return columns_; }
 
         /**
-         * 获取列数量
+         * 返回列数量。
          */
         size_t ColumnCount() const noexcept { return columns_.size(); }
 
         /**
-         * 是否为空 schema
+         * 判断是否为空 schema。
          */
         bool Empty() const noexcept { return columns_.empty(); }
 
         /**
-         * 根据 index 获取 column
+         * 按下标获取列。
+         *
+         * @param index 列下标
          */
         const Column& GetColumn(size_t index) const;
 
         /**
-         * 可修改版本
+         * 按下标获取列。
+         *
+         * @param index 列下标
          */
         Column& GetColumn(size_t index);
 
         /**
-         * 根据名称获取 column index
+         * 按列名查找列下标。
          *
-         * 不存在返回 nullopt
+         * @param name 列名
+         * @return 找到则返回下标，否则返回 nullopt
          */
         std::optional<size_t> TryGetColumnIndex(std::string_view name) const noexcept;
 
         /**
-         * 根据名称获取 column index
+         * 按列名查找列下标。
          *
-         * 不存在抛异常
+         * @param name 列名
+         * @note 不存在时抛异常
          */
         size_t GetColumnIndex(std::string_view name) const;
 
         /**
-         * 是否存在该列
+         * 判断是否包含指定列名。
+         *
+         * @param name 列名
          */
         bool HasColumn(std::string_view name) const noexcept;
 
         /**
-         * 根据名称查找 column
+         * 按列名查找列。
          *
-         * 不存在返回 nullptr
+         * @param name 列名
+         * @return 找到则返回列指针，否则返回 nullptr
          */
         const Column* FindColumn(std::string_view name) const noexcept;
 
         /**
-         * 可修改版本
+         * 按列名查找列。
+         *
+         * @param name 列名
+         * @return 找到则返回列指针，否则返回 nullptr
          */
         Column* FindColumn(std::string_view name) noexcept;
 
         /**
-         * tuple 是否完全 inline
-         *
-         * 如果包含 VARCHAR
-         * 则为 false
+         * 判断 tuple 是否完全由 inline 列组成。
          */
         bool IsTupleInlined() const noexcept { return tuple_inlined_; }
 
         /**
-         * tuple inline 数据大小
+         * 返回 tuple inline 区总大小。
          */
         uint32_t InlinedStorageSize() const noexcept { return inlined_storage_size_; }
 
         /**
-         * 所有变长列 index
+         * 返回所有变长列下标。
          */
         const std::vector<uint32_t>& UninlinedColumns() const noexcept { return uninlined_columns_; }
 
         /**
-         * 返回所有列名
+         * 返回所有列名。
          */
         std::vector<std::string> ColumnNames() const;
 
         /**
-         * 返回 schema 的可读字符串
+         * 返回 schema 的可读字符串表示。
          */
         std::string ToString() const;
 
         /**
-         * Schema 投影
+         * 基于列下标做投影，生成新的 Schema。
          *
-         * SELECT a,b FROM table
-         *
-         * 就需要 project schema
+         * @param column_indices 需要保留的列下标集合
          */
         Schema Project(std::span<const uint32_t> column_indices) const;
 
     private:
-
         /**
-         * 构建 tuple layout
+         * 构建 layout 与辅助索引。
          *
-         * 主要工作：
-         *
+         * @note 主要负责：
          * - 计算 offset
-         * - 构建 name map
-         * - 统计 varlen column
+         * - 建立 name_to_index_
+         * - 收集变长列
+         * - 统计 inlined_storage_size_
          */
         void BuildLayoutOrThrow();
 
-        /**
-         * 所有 column
-         */
+    private:
+        /// 所有列定义
         std::vector<Column> columns_;
 
-        /**
-         * column name -> index 映射
-         *
-         * 用于快速查找
-         */
+        /// 列名到列下标映射
         std::unordered_map<std::string, size_t> name_to_index_;
 
-        /**
-         * 变长列列表
-         */
+        /// 所有变长列下标
         std::vector<uint32_t> uninlined_columns_;
 
-        /**
-         * tuple 是否完全 inline
-         */
+        /// tuple 是否完全 inline
         bool tuple_inlined_{true};
 
-        /**
-         * tuple inline 部分总大小
-         */
+        /// tuple inline 区总大小
         uint32_t inlined_storage_size_{0};
     };
 
