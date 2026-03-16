@@ -25,6 +25,9 @@ namespace HaruhiDB
     
     static constexpr uint32_t DB_MAGIC = 0x48415255;
     static constexpr uint32_t DB_VERSION = 1;
+    static constexpr uint32_t WAL_MAGIC = 0x57414C31U;
+    static constexpr uint32_t WAL_VERSION = 1U;
+    static constexpr uint32_t WAL_PAYLOAD_LEN = static_cast<uint32_t>(PAGE_SIZE);
 
     static constexpr uint16_t TUPLE_LENGTH = 0x0FFF;
     static constexpr uint16_t TUPLE_FLAG_DEL = 0x8000;   
