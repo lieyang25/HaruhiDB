@@ -48,12 +48,14 @@ namespace storage
     DiskManager::DiskManager(const std::filesystem::path& path)
         : path_(path)
     {
+        // step 1: 打开数据库文件，必要时创建。
         auto open_file = OpenFile();
         if (!open_file) {
             throw std::runtime_error(
                 "DiskManager: failed to open file: " + open_file.error().msg);
         }
 
+        // step 2: 若为空文件则初始化头页，否则加载已有头页。
         auto init_header = InitHeaderIfNeeded();
         if (!init_header) {
             throw std::runtime_error(
@@ -79,6 +81,7 @@ namespace storage
      */
     std::expected<void, IOErr> DiskManager::OpenFile()
     {
+        // step 1: 确保数据库文件所在目录存在。
         try {
             auto parent = path_.parent_path();
             if (!parent.empty()) {
@@ -90,6 +93,7 @@ namespace storage
                 HaruhiDB::ErrorCode::DirError});
         }
 
+        // step 2: 以读写二进制模式打开文件；若不存在则先创建。
         file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
         if (!file_.is_open()) {
             file_.clear();
@@ -104,6 +108,7 @@ namespace storage
                 HaruhiDB::ErrorCode::FileOpenFailed});
         }
 
+        // step 3: 检查文件大小是否合法，并恢复 next_page_id_。
         try {
             auto file_size = std::filesystem::file_size(path_);
             if (file_size % PAGE_SIZE != 0) {
@@ -130,6 +135,7 @@ namespace storage
     {
         uint64_t file_size = 0;
 
+        // step 1: 读取文件大小，判断当前是否为空数据库文件。
         try {
             file_size = static_cast<uint64_t>(std::filesystem::file_size(path_));
         } catch (const std::exception& e) {
@@ -138,6 +144,7 @@ namespace storage
                 HaruhiDB::ErrorCode::FileSizeError});
         }
 
+        // step 2: 若文件不足一页，则写入新的头页。
         if (file_size < PAGE_SIZE) {
             DBHeader dbheader;
             dbheader.magic_number = DB_MAGIC;
@@ -161,6 +168,7 @@ namespace storage
             return {};
         }
 
+        // step 3: 若头页已存在，则直接加载。
         return LoadHeader();
     }
 
@@ -171,6 +179,7 @@ namespace storage
     {
         std::array<std::byte, PAGE_SIZE> buffer{};
 
+        // step 1: 读取 Page 0 到缓冲区。
         file_.clear();
         file_.seekg(0, std::ios::beg);
         file_.read(reinterpret_cast<char*>(buffer.data()), PAGE_SIZE);
@@ -181,6 +190,7 @@ namespace storage
                 HaruhiDB::ErrorCode::HeaderReadFailed});
         }
 
+        // step 2: 反序列化 DBHeader 并校验 magic。
         DBHeader dbheader;
         std::memcpy(&dbheader, buffer.data(), sizeof(DBHeader));
 
@@ -190,6 +200,7 @@ namespace storage
                 HaruhiDB::ErrorCode::HeaderMagicMismatch});
         }
 
+        // step 3: 用头页内容恢复内存中的分配状态。
         next_page_id_ = static_cast<page_id_t>(dbheader.next_page_id);
         free_list_head_ = static_cast<page_id_t>(dbheader.free_list_head);
 
@@ -205,12 +216,14 @@ namespace storage
      */
     std::expected<void, IOErr> DiskManager::PersistHeader()
     {
+        // step 1: 组装最新的 DBHeader。
         DBHeader dbheader{};
         dbheader.magic_number = DB_MAGIC;
         dbheader.version = DB_VERSION;
         dbheader.next_page_id = next_page_id_;
         dbheader.free_list_head = free_list_head_;
 
+        // step 2: 序列化后覆盖写入 Page 0。
         std::array<std::byte, PAGE_SIZE> buffer{};
         std::memcpy(buffer.data(), &dbheader, sizeof(DBHeader));
 
@@ -234,6 +247,7 @@ namespace storage
      */
     std::expected<void, IOErr> DiskManager::ReadPage(page_id_t page_id, page_data_t& data)
     {
+        // step 1: 检查文件状态与页号合法性。
         if (!file_.is_open()) {
             return std::unexpected(IOErr{
                 "File not open.",
@@ -250,6 +264,7 @@ namespace storage
 
         file_.clear();
 
+        // step 2: 检查目标页面是否仍在文件范围内。
         uint64_t file_size = static_cast<uint64_t>(std::filesystem::file_size(path_));
 
         if (offset + PAGE_SIZE > file_size) {
@@ -258,6 +273,7 @@ namespace storage
                 HaruhiDB::ErrorCode::ReadPageOutOfRange});
         }
 
+        // step 3: 定位并读取整页内容。
         file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
         file_.read(reinterpret_cast<char*>(data.data()), PAGE_SIZE);
 
@@ -277,6 +293,7 @@ namespace storage
      */
     std::expected<void, IOErr> DiskManager::WritePage(page_id_t page_id, const page_data_t& data)
     {
+        // step 1: 检查文件状态与页号合法性。
         if (!file_.is_open()) {
             return std::unexpected(IOErr{
                 "File not open.",
@@ -298,6 +315,7 @@ namespace storage
 
         file_.clear();
 
+        // step 2: 检查是否为合法覆盖写或末尾追加写。
         uint64_t file_size = static_cast<uint64_t>(std::filesystem::file_size(path_));
 
         if (offset + PAGE_SIZE > file_size) {
@@ -308,6 +326,7 @@ namespace storage
             }
         }
 
+        // step 3: 定位并写入整页内容。
         file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
         file_.write(reinterpret_cast<const char*>(data.data()), PAGE_SIZE);
 
@@ -329,6 +348,7 @@ namespace storage
     {
         std::array<std::byte, PAGE_SIZE> buffer{};
 
+        // step 1: 若 free list 非空，则弹出链表头作为复用页。
         if (free_list_head_ != INVALID_PAGE_ID) {
             page_id_t recycled_page = free_list_head_;
 
@@ -347,6 +367,7 @@ namespace storage
                     ? INVALID_PAGE_ID
                     : static_cast<page_id_t>(next_free_raw);
 
+            // step 2: 持久化新的 free list 头指针。
             auto p = PersistHeader();
             if (!p) {
                 return std::unexpected(IOErr{
@@ -357,6 +378,7 @@ namespace storage
             return recycled_page;
         }
 
+        // step 3: 若无可复用页，则在文件尾部分配新页。
         page_id_t new_page = next_page_id_;
 
         auto w = WritePage(new_page, buffer);
@@ -368,6 +390,7 @@ namespace storage
 
         next_page_id_++;
 
+        // step 4: 持久化 next_page_id_ 的变化。
         auto p = PersistHeader();
         if (!p) {
             return std::unexpected(IOErr{
@@ -384,6 +407,7 @@ namespace storage
      */
     std::expected<void, IOErr> DiskManager::DeallocatePage(page_id_t page_id)
     {
+        // step 1: 检查文件状态与待回收页号是否合法。
         if (!file_.is_open()) {
             return std::unexpected(IOErr{
                 "File not open",
@@ -396,7 +420,7 @@ namespace storage
                 HaruhiDB::ErrorCode::ReadPageOutOfRange});
         }
 
-        // 防止重复回收和 free list 结构损坏。
+        // step 2: 遍历当前 free list，防止重复回收或链表损坏。
         page_id_t cur = free_list_head_;
         size_t hops = 0;
         std::array<std::byte, PAGE_SIZE> cursor_buf{};
@@ -441,6 +465,7 @@ namespace storage
             }
         }
 
+        // step 3: 把旧链表头写入当前页起始位置，使该页成为新的链表头。
         std::array<std::byte, PAGE_SIZE> buffer{};
         uint64_t cur_head_raw = static_cast<uint64_t>(free_list_head_);
 
@@ -453,6 +478,7 @@ namespace storage
                 HaruhiDB::ErrorCode::DeallocateWriteFailed});
         }
 
+        // step 4: 更新 free_list_head_ 并持久化头页。
         free_list_head_ = page_id;
 
         auto p = PersistHeader();
