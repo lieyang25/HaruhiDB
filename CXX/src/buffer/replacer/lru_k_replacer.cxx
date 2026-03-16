@@ -1,35 +1,33 @@
 /**
  * CXX/src/buffer/replacer/lru_k_replacer.cxx
  *
- * English:
- * Implementation of the LRU-K replacer used by the BufferPoolManager.
+ * ========================= 实现目标 =========================
  *
- * This module maintains access history for each frame and selects a victim
- * frame according to the LRU-K replacement policy when the buffer pool needs
- * to evict a page.
+ * 本文件实现 LruKReplacer 的替换逻辑。
  *
- * Core mechanism:
- * 1. Each frame maintains the last K access timestamps.
- * 2. The replacer computes the backward K-distance when selecting a victim.
- * 3. Frames with fewer than K accesses are treated as having infinite distance.
- * 4. Only frames marked as evictable are candidates for eviction.
+ * 主要完成：
  *
- * Thread safety:
- * All public operations are protected by the internal mutex `latch_`.
+ * 1. 记录 frame 访问历史
+ * 2. 维护 evictable 状态
+ * 3. 统计可淘汰 frame 数量
+ * 4. 按 LRU-K 规则选择 victim
  *
  *
- * 中文：
- * 本文件实现了 LRU-K 页面替换算法，用于 BufferPoolManager 在缓冲池
- * 满时选择要淘汰的 frame。
+ * ========================= 与 BufferPoolManager 的联动 =========================
  *
- * 主要机制：
- * 1. 每个 frame 记录最近 K 次访问时间戳。
- * 2. 淘汰时计算 backward K-distance。
- * 3. 若访问次数不足 K 次，则认为距离为无穷大（优先淘汰）。
- * 4. 只有被标记为 evictable 的 frame 才可以被淘汰。
+ * BufferPoolManager
+ *   ├── 页面被访问时调用 RecordAccess
+ *   ├── pin/unpin 时调用 SetEvictable
+ *   ├── 需要淘汰时调用 Victim
+ *   └── 页面删除时调用 Remove
  *
- * 线程安全：
- * 所有对内部状态的访问都通过互斥锁 `latch_` 保护。
+ *
+ * ========================= 实现说明 =========================
+ *
+ * 本实现以 frame 为单位维护访问历史。
+ *
+ * 每个 frame 记录最近 K 次访问时间戳，
+ * victim 选择只在 evictable frame 中进行。
  */
 
 #include "buffer/replacer/lru_k_replacer.h"
@@ -40,95 +38,61 @@ namespace replacer
 {
 
     /**
-     * English:
-     * Constructor of LruKReplacer.
-     * Initializes the replacer with a fixed number of frames and parameter K.
-     *
-     * 中文：
-     * LruKReplacer 构造函数。
-     * 初始化替换器并设置缓冲池 frame 数量以及 K 值。
+     * @param pool_size 缓冲池 frame 总数
+     * @param k         LRU-K 中的 K
      */
     LruKReplacer::LruKReplacer(size_t pool_size, size_t k)
         : pool_size_(pool_size), k_(k)
     {
-        // English: allocate metadata for all frames
-        // 中文：为所有 frame 分配元数据结构
         frames_.resize(pool_size_);
     }
 
-
     /**
-     * English:
-     * Records an access to the specified frame.
-     * Updates the access history and maintains only the last K timestamps.
-     *
-     * 中文：
-     * 记录某个 frame 的访问。
-     * 更新访问历史，并且只保留最近 K 次访问时间戳。
+     * @param frame_id 被访问的 frame
      */
     void LruKReplacer::RecordAccess(frame_id_t frame_id)
     {
         std::lock_guard<std::mutex> guard(latch_);
 
-        // English: ignore invalid frame ids
-        // 中文：忽略非法 frame_id
+        // step 1: 过滤非法 frame_id。
         if (frame_id >= static_cast<frame_id_t>(pool_size_)) {
             return;
         }
 
-        auto &frame = frames_[frame_id];
+        auto& frame = frames_[frame_id];
 
-        // English: advance global timestamp
-        // 中文：递增全局时间戳
+        // step 2: 推进全局时间戳，并写入本次访问。
         current_timestamp_++;
-
-        // English: record the access time
-        // 中文：记录访问时间
         frame.history.push_back(current_timestamp_);
 
-        // English: keep only the last K timestamps
-        // 中文：只保留最近 K 次访问
+        // step 3: 只保留最近 K 次访问历史。
         if (frame.history.size() > k_) {
             frame.history.pop_front();
         }
     }
 
-
     /**
-     * English:
-     * Sets whether the frame is evictable.
-     *
-     * If a frame becomes evictable, the replacer increases the evictable count.
-     * If it becomes non-evictable, the count decreases.
-     *
-     * 中文：
-     * 设置 frame 是否允许被淘汰。
-     *
-     * 当 frame 变为 evictable 时增加计数，
-     * 变为不可淘汰时减少计数。
+     * @param frame_id 目标 frame
+     * @param evictable 是否允许淘汰
      */
     void LruKReplacer::SetEvictable(frame_id_t frame_id, bool evictable)
     {
         std::lock_guard<std::mutex> guard(latch_);
 
-        // English: ignore invalid frame ids
-        // 中文：忽略非法 frame_id
+        // step 1: 过滤非法 frame_id。
         if (frame_id >= static_cast<frame_id_t>(pool_size_)) {
             return;
         }
 
-        auto &frame = frames_[frame_id];
+        auto& frame = frames_[frame_id];
 
-        // English: no change needed if state is identical
-        // 中文：若状态相同则无需修改
+        // step 2: 若状态未变化，则直接返回。
         if (frame.evictable == evictable) {
             return;
         }
 
+        // step 3: 更新 frame 状态与全局计数。
         frame.evictable = evictable;
-
-        // English: update evictable frame counter
-        // 中文：更新可淘汰 frame 计数
         if (evictable) {
             evictable_size_++;
         } else {
@@ -136,94 +100,59 @@ namespace replacer
         }
     }
 
-
     /**
-     * English:
-     * Selects a victim frame according to the LRU-K policy.
-     *
-     * After selecting the victim, the frame is removed from the replacer
-     * and its metadata is cleared.
-     *
-     * 中文：
-     * 根据 LRU-K 算法选择一个 victim frame。
-     *
-     * 选择后该 frame 会从 replacer 中移除，并清除历史信息。
+     * @param frame_id 输出参数，返回 victim frame
+     * @return 成功返回 true，否则返回 false
      */
     bool LruKReplacer::Victim(frame_id_t& frame_id)
     {
         std::lock_guard<std::mutex> guard(latch_);
 
-        // English: no evictable frame exists
-        // 中文：没有可淘汰 frame
+        // step 1: 若没有可淘汰 frame，则失败。
         if (evictable_size_ == 0) {
             return false;
         }
 
-        // English: select victim internally
-        // 中文：内部选择 victim
+        // step 2: 按 LRU-K 规则选择 victim。
         frame_id = PickVictimInternal();
-
         if (frame_id == std::numeric_limits<frame_id_t>::max()) {
             return false;
         }
 
-        auto &frame = frames_[frame_id];
+        auto& frame = frames_[frame_id];
 
-        // English: remove frame from replacer
-        // 中文：从 replacer 中移除该 frame
+        // step 3: 从 replacer 视角移除该 frame。
         frame.evictable = false;
         evictable_size_--;
-
-        // English: clear access history
-        // 中文：清空访问历史
         frame.history.clear();
 
         return true;
     }
 
-
     /**
-     * English:
-     * Removes a frame from the replacer.
-     * Typically used when the page is deleted.
-     *
-     * 中文：
-     * 从 replacer 中移除某个 frame。
-     * 通常在页面被删除时调用。
+     * @param frame_id 要移除的 frame
+     * @note 仅允许移除 evictable frame
      */
     void LruKReplacer::Remove(frame_id_t frame_id)
     {
         std::lock_guard<std::mutex> guard(latch_);
 
-        // English: ignore invalid frame ids
-        // 中文：忽略非法 frame_id
         if (frame_id >= static_cast<frame_id_t>(pool_size_)) {
             return;
         }
 
-        auto &frame = frames_[frame_id];
-
-        // English: cannot remove non-evictable frame
-        // 中文：不可移除不可淘汰的 frame
+        auto& frame = frames_[frame_id];
         if (!frame.evictable) {
             return;
         }
 
-        // English: clear metadata
-        // 中文：清除元信息
         frame.history.clear();
         frame.evictable = false;
-
         evictable_size_--;
     }
 
-
     /**
-     * English:
-     * Returns the number of evictable frames.
-     *
-     * 中文：
-     * 返回当前可淘汰 frame 的数量。
+     * 返回当前可淘汰 frame 数量。
      */
     size_t LruKReplacer::Size() const
     {
@@ -231,61 +160,34 @@ namespace replacer
         return evictable_size_;
     }
 
-
     /**
-     * English:
-     * Internal victim selection algorithm for LRU-K.
-     *
-     * Selection rules:
-     * 1. Prefer frames with largest backward K-distance.
-     * 2. Frames with fewer than K accesses have infinite distance.
-     * 3. If multiple frames have infinite distance, choose the one
-     *    with the earliest access timestamp.
-     *
-     * 中文：
-     * LRU-K 的内部 victim 选择算法。
+     * 按 LRU-K 规则选择 victim。
      *
      * 规则：
-     * 1. 优先选择 backward K-distance 最大的 frame。
-     * 2. 访问次数少于 K 的 frame 视为距离无限大。
-     * 3. 若多个 frame 为无限距离，则选择最早访问的。
+     *
+     * 1. 只考虑 evictable frame
+     * 2. history.size() < k_ 视为无限距离
+     * 3. 优先选择 backward K-distance 更大的 frame
+     * 4. 若同为无限距离，则选择更早访问的 frame
      */
     frame_id_t LruKReplacer::PickVictimInternal()
     {
-        // English: selected victim frame id
-        // 中文：最终选择的 victim
         frame_id_t victim = std::numeric_limits<frame_id_t>::max();
-
-        // English: largest backward distance found so far
-        // 中文：当前最大 backward distance
         uint64_t max_distance = 0;
-
-        // English: earliest timestamp used for tie-breaking
-        // 中文：用于打破平局的最早访问时间
         uint64_t earliest_timestamp = UINT64_MAX;
-
         bool found = false;
 
-        // English: scan all frames
-        // 中文：遍历所有 frame
-        for (frame_id_t i = 0; i < static_cast<frame_id_t>(pool_size_); i++)
-        {
-            auto &frame = frames_[i];
-
-            // English: skip non-evictable frames
-            // 中文：跳过不可淘汰 frame
+        // step 1: 遍历所有 frame，跳过不可淘汰项。
+        for (frame_id_t i = 0; i < static_cast<frame_id_t>(pool_size_); i++) {
+            auto& frame = frames_[i];
             if (!frame.evictable) {
                 continue;
             }
 
+            // step 2: 计算当前 frame 的比较关键字。
             uint64_t distance = 0;
-
-            // English: compute backward K-distance
-            // 中文：计算 backward K-distance
-            // Note:
-            // - empty history (SetEvictable called before RecordAccess) is treated as coldest.
-            // - history size < K follows standard LRU-K "infinite distance" behavior.
             uint64_t first_access = 0;
+
             if (frame.history.empty()) {
                 distance = UINT64_MAX;
             } else if (frame.history.size() < k_) {
@@ -296,24 +198,17 @@ namespace replacer
                 distance = current_timestamp_ - frame.history.front();
             }
 
-            // English: first candidate
-            // 中文：第一个候选
+            // step 3: 按距离优先、最早访问次优先的规则更新 victim。
             if (!found) {
                 victim = i;
                 max_distance = distance;
                 earliest_timestamp = first_access;
                 found = true;
-            }
-            // English: prefer larger backward distance
-            // 中文：优先更大的 distance
-            else if (distance > max_distance) {
+            } else if (distance > max_distance) {
                 victim = i;
                 max_distance = distance;
                 earliest_timestamp = first_access;
-            }
-            // English: tie-break when both are infinite distance
-            // 中文：若都是无限距离，则选择更早访问的
-            else if (distance == UINT64_MAX && max_distance == UINT64_MAX) {
+            } else if (distance == UINT64_MAX && max_distance == UINT64_MAX) {
                 if (first_access < earliest_timestamp) {
                     victim = i;
                     earliest_timestamp = first_access;
