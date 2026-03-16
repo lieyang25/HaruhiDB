@@ -1,18 +1,45 @@
 /**
  * CXX/src/storage/page/page.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 Page 的基础页对象行为。
+ *
+ * 主要完成：
+ *
+ * 1. 页面初始构造
+ * 2. 空白页初始化
+ * 3. 页头访问
+ * 4. pin / dirty 状态管理
+ * 5. 页级读写锁封装
+ * 6. 原始字节数据访问
+ *
+ *
+ * ========================= 实现说明 =========================
+ *
+ * Page 不解释具体业务结构，
+ * 只提供“页对象”这一层的通用能力。
+ *
+ * 真正的数据页、索引页、头页等语义，
+ * 由上层结合 PageType 与页面布局继续解释。
  */
 
 #include "storage/page/page.h"
-#include <cstring>
+
 #include <cassert>
+#include <cstring>
 
 namespace HaruhiDB
 {
 namespace storage
 {
-    Page::Page() : pin_count_(0),is_dirty_(false)
+
+    Page::Page() : pin_count_(0), is_dirty_(false)
     {
-        std::memset(data_.data(),0,PAGE_SIZE);
+        // step 1: 清空整页原始字节。
+        std::memset(data_.data(), 0, PAGE_SIZE);
+
+        // step 2: 初始化默认页头，使该对象处于未绑定页面状态。
         Header()->page_id = INVALID_PAGE_ID;
         Header()->page_type = PageType::INVALID;
         Header()->lsn = 0;
@@ -20,9 +47,16 @@ namespace storage
         std::memset(Header()->opaque, 0, sizeof(Header()->opaque));
     }
 
-    void Page::InitBlank(page_id_t page_id,PageType page_type)
+    /**
+     * @param page_id   新页号
+     * @param page_type 页面类型
+     */
+    void Page::InitBlank(page_id_t page_id, PageType page_type)
     {
+        // step 1: 清空整页内容。
         std::memset(data_.data(), 0, PAGE_SIZE);
+
+        // step 2: 重建页头的基础持久化字段。
         PersistentHeader* header = Header();
         header->page_id = page_id;
         header->page_type = page_type;
@@ -30,10 +64,15 @@ namespace storage
         std::memset(header->reserved0, 0, sizeof(header->reserved0));
         std::memset(header->opaque, 0, sizeof(header->opaque));
 
+        // step 3: 重置运行时状态。
         pin_count_.store(0);
         is_dirty_.store(false);
     }
 
+    /**
+     * @param page_id 新页号
+     * @note 仅重置运行时状态与 page_id，不清空整页内容
+     */
     void Page::ResetMetaData(page_id_t page_id)
     {
         Header()->page_id = page_id;
@@ -45,122 +84,78 @@ namespace storage
     {
         return reinterpret_cast<PersistentHeader*>(data_.data());
     }
+
     const PersistentHeader* Page::Header() const noexcept
     {
         return reinterpret_cast<const PersistentHeader*>(data_.data());
     }
 
-    /**
-     * PageId and Type
-     *
-     * English:
-     * Return the page id and page type from header.
-     *
-     * 中文：
-     * 返回页面的 page_id 和 page_type。
-     */
     page_id_t Page::PageId() noexcept
     {
         return Header()->page_id;
     }
+
     PageType Page::Type() noexcept
     {
         return Header()->page_type;
     }
 
-    /**
-     * Pin/UnPin
-     *
-     * English:
-     * Increment or decrement the pin count. Used by buffer pool to track
-     * page usage. UnPin asserts pin_count > 0.
-     *
-     * 中文：
-     * Pin/UnPin 用于管理页面引用计数，辅助 BufferPool 判断页面是否可替换。
-     * UnPin 时断言 pin_count 大于 0。
-     */
     void Page::Pin() noexcept
     {
-        pin_count_.fetch_add(1,std::memory_order_acq_rel);
+        pin_count_.fetch_add(1, std::memory_order_acq_rel);
     }
+
     void Page::UnPin() noexcept
     {
         int old = pin_count_.fetch_sub(1, std::memory_order_acq_rel);
         assert(old > 0 && "UnPin called when pin_count == 0");
     }
+
     int Page::PinCount() const noexcept
     {
         return pin_count_.load(std::memory_order_acquire);
     }
 
-    /**
-     * Dirty flag
-     *
-     * English:
-     * Mark the page as dirty or check dirty status.
-     *
-     * 中文：
-     * 标记页面为脏，或者检查页面是否为脏。
-     */
     void Page::MarkDirty() noexcept
     {
-        is_dirty_.store(true,std::memory_order_release);
+        is_dirty_.store(true, std::memory_order_release);
     }
-     /**     
-     * English:
-     * Marks the page not as dirty (modified).
-     *
-     * 中文：
-     * 标记页面不为 dirty（已修改）。
-     */
+
     void Page::ClearDirty() noexcept
     {
-        is_dirty_.store(false,std::memory_order_release);
+        is_dirty_.store(false, std::memory_order_release);
     }
+
     bool Page::IsDirty() const noexcept
     {
         return is_dirty_.load(std::memory_order_acquire);
     }
 
-    /**
-     * Thread-safe locks
-     *
-     * English:
-     * Provide shared (read) and exclusive (write) locks for page access.
-     *
-     * 中文：
-     * 提供共享（读）锁和独占（写）锁，用于线程安全访问页面。
-     */
-    void Page::RLock() 
+    void Page::RLock()
     {
         latch_.lock_shared();
     }
-    void Page::RUnLock() 
+
+    void Page::RUnLock()
     {
         latch_.unlock_shared();
     }
-    void Page::WLock() 
+
+    void Page::WLock()
     {
         latch_.lock();
     }
-    void Page::WUnLock() 
+
+    void Page::WUnLock()
     {
         latch_.unlock();
     }
 
-    /**
-     * RawData
-     *
-     * English:
-     * Return pointer to the raw page data.
-     *
-     * 中文：
-     * 返回页面原始数据指针。
-     */
     std::byte* Page::RawData() noexcept
     {
         return data_.data();
     }
+
     const std::byte* Page::RawData() const noexcept
     {
         return data_.data();
