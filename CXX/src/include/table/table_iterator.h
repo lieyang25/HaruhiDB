@@ -1,69 +1,100 @@
 /**
  * CXX/src/include/table/table_iterator.h
+ *
+ * ========================= 设计目标 =========================
+ *
+ * TableIterator 负责在 TableHeap 上做顺序扫描。
+ *
+ * 它提供 STL 风格的最小前向迭代接口：
+ *
+ * - `operator*` 读取当前 tuple（拷贝语义）
+ * - `operator++` 前进到下一条可见记录
+ * - `IsEnd` 判断是否到达末尾
+ *
+ *
+ * ========================= 与 TableHeap 的关系 =========================
+ *
+ * TableHeap 持有页链结构和 BufferPoolManager。
+ * TableIterator 依赖 TableHeap 完成：
+ *
+ * - 取页（FetchPage）
+ * - 解除 pin（UnpinPage）
+ * - 页链跳转（NextPageId）
+ *
+ * 迭代器本身不拥有任何页对象，只维护当前位置状态。
  */
 
 #pragma once
 
 #include "storage/record/rid.h"
 #include "storage/record/tuple.h"
+#include "table/table_heap.h"
 
 #include <cstddef>
 #include <vector>
 
-namespace HaruhiDB {
-namespace storage {
-    class Page;
-}
-}
-
-namespace HaruhiDB {
-namespace table {
-
-class TableHeap;
-
+namespace HaruhiDB
+{
+namespace table
+{
 /**
  * TableIterator
  *
  * 作用：
- *  - 跨页顺序扫描表
- *  - 在遍历期间管理 pin/unpin 与页锁（保证读取稳定）
- *
- * 实现策略：
- *  - iterator 内部持有当前 page_id 与当前 slot index
- *  - operator* 返回 Tuple 的拷贝（即读取 page 并拷贝 tuple）
- *  - operator++ 前进到下一个 alive slot；若到页尾则跳到 header.next_page_id 并继续
+ * - 跨页顺序扫描表中的有效 tuple
+ * - 在读取期间配合页锁与 pin/unpin 保证访问安全
  */
 class TableIterator {
 public:
-    // 构造一个 end iterator
+    /**
+     * 构造 end 迭代器。
+     */
     TableIterator();
 
-    // 构造一个从指定 RID 开始的 iterator（TableHeap 负责 Begin/End 的构造）
-    TableIterator(TableHeap *heap, page_id_t start_page, slot_id_t start_slot);
+    /**
+     * 构造从指定位置开始的迭代器。
+     *
+     * @param heap       关联的表堆
+     * @param start_page 起始页号
+     * @param start_slot 起始 slot
+     */
+    TableIterator(TableHeap* heap, page_id_t start_page, slot_id_t start_slot);
 
-    // 解引用：读取并返回当前 tuple（拷贝）
+    /**
+     * 解引用当前记录，返回 tuple 拷贝。
+     */
     record::Tuple operator*() const;
 
-    // 返回当前 iterator 指向 tuple 的 RID。
-    // 若为 end iterator，返回 INVALID RID。
+    /**
+     * 返回当前迭代器指向记录的 RID。
+     *
+     * 若为 end 迭代器，返回 INVALID RID。
+     */
     record::RID GetRID() const noexcept;
 
-    // 前缀 ++
-    TableIterator &operator++();
+    /**
+     * 前缀递增，移动到下一条有效记录。
+     */
+    TableIterator& operator++();
 
-    bool operator==(const TableIterator &other) const noexcept;
-    bool operator!=(const TableIterator &other) const noexcept;
+    bool operator==(const TableIterator& other) const noexcept;
+    bool operator!=(const TableIterator& other) const noexcept;
 
     bool IsEnd() const noexcept { return at_end_; }
 
 private:
-    // helper: 尝试移动到下一个有效位置（slot）；返回 true 表示有有效条目
+    /**
+     * 从当前 `(cur_page_id_, cur_slot_)` 出发，
+     * 定位下一条可见 tuple。
+     *
+     * @return 找到返回 true，否则 false
+     */
     bool AdvanceToNextValid();
 
-    TableHeap *heap_;
-    page_id_t cur_page_id_;
-    slot_id_t cur_slot_;
-    bool at_end_;
+    TableHeap* heap_{nullptr};
+    page_id_t cur_page_id_{INVALID_PAGE_ID};
+    slot_id_t cur_slot_{INVALID_SLOT_ID};
+    bool at_end_{true};
     mutable std::vector<std::byte> tuple_buffer_;
     mutable bool tuple_cached_{false};
 };

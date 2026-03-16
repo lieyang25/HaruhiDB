@@ -1,5 +1,24 @@
 /**
  * CXX/src/table/table_iterator.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 TableIterator 的顺序扫描逻辑。
+ *
+ * 主要完成：
+ *
+ * 1. end/起始迭代器构造
+ * 2. 当前 tuple 读取（拷贝）
+ * 3. 迭代前进与跨页跳转
+ * 4. RID 获取与比较
+ *
+ *
+ * ========================= 遍历规则 =========================
+ *
+ * - 仅返回未删除 slot
+ * - 跳过空页与无活跃 tuple 的页
+ * - 到达页尾后自动跳转到 next_page_id
+ * - 失败场景下返回空 tuple 或 end 状态
  */
 
 #include "table/table_iterator.h"
@@ -7,16 +26,20 @@
 
 #include "storage/page/table_page.h"
 
-#include <utility>
 #include <shared_mutex>
+#include <utility>
 #include <vector>
 
-namespace HaruhiDB {
-namespace table {
+namespace HaruhiDB
+{
+namespace table
+{
 
-namespace {
+namespace
+{
     template <typename F>
-    class ScopeGuard {
+    class ScopeGuard
+    {
     public:
         explicit ScopeGuard(F&& fn)
             : fn_(std::forward<F>(fn)), active_(true)
@@ -51,25 +74,20 @@ namespace {
 } // namespace
 
 TableIterator::TableIterator()
-    : heap_(nullptr),
-      cur_page_id_(INVALID_PAGE_ID),
-      cur_slot_(INVALID_SLOT_ID),
-      at_end_(true),
-      tuple_cached_(false)
 {
 }
 
-TableIterator::TableIterator(TableHeap *heap, page_id_t start_page, slot_id_t start_slot)
+TableIterator::TableIterator(TableHeap* heap, page_id_t start_page, slot_id_t start_slot)
     : heap_(heap),
       cur_page_id_(start_page),
       cur_slot_(start_slot),
-      at_end_(false),
-      tuple_cached_(false)
+      at_end_(false)
 {
     if (heap_ == nullptr || cur_page_id_ == INVALID_PAGE_ID) {
         at_end_ = true;
         return;
     }
+
     std::shared_lock lock(heap_->table_latch_);
     if (!AdvanceToNextValid()) {
         at_end_ = true;
@@ -92,7 +110,7 @@ record::Tuple TableIterator::operator*() const
         return {};
     }
 
-    storage::Page *page = page_exp.value();
+    storage::Page* page = page_exp.value();
     const page_id_t pid_snapshot = cur_page_id_;
     page->RLock();
     auto guard = MakeScopeGuard([&]() {
@@ -104,7 +122,8 @@ record::Tuple TableIterator::operator*() const
     if (cur_slot_ >= table_page.SlotCount()) {
         return {};
     }
-    const storage::Slot *slot = table_page.GetSlot(cur_slot_);
+
+    const storage::Slot* slot = table_page.GetSlot(cur_slot_);
     if (slot == nullptr || slot->IsDeleted()) {
         return {};
     }
@@ -115,9 +134,10 @@ record::Tuple TableIterator::operator*() const
         return {};
     }
 
-    const std::byte *begin = page->RawData() + offset;
+    const std::byte* begin = page->RawData() + offset;
     tuple_buffer_.assign(begin, begin + length);
     tuple_cached_ = true;
+
     return record::Tuple(std::span<const std::byte>(tuple_buffer_.data(), tuple_buffer_.size()));
 }
 
@@ -129,13 +149,14 @@ record::RID TableIterator::GetRID() const noexcept
     return record::RID(cur_page_id_, cur_slot_);
 }
 
-TableIterator &TableIterator::operator++()
+TableIterator& TableIterator::operator++()
 {
     if (at_end_ || heap_ == nullptr) {
         return *this;
     }
 
     tuple_cached_ = false;
+
     std::shared_lock lock(heap_->table_latch_);
     if (cur_slot_ != INVALID_SLOT_ID) {
         cur_slot_ = static_cast<slot_id_t>(cur_slot_ + 1);
@@ -148,18 +169,19 @@ TableIterator &TableIterator::operator++()
     return *this;
 }
 
-bool TableIterator::operator==(const TableIterator &other) const noexcept
+bool TableIterator::operator==(const TableIterator& other) const noexcept
 {
     if (at_end_ && other.at_end_) {
         return true;
     }
+
     return heap_ == other.heap_ &&
-        cur_page_id_ == other.cur_page_id_ &&
-        cur_slot_ == other.cur_slot_ &&
-        at_end_ == other.at_end_;
+           cur_page_id_ == other.cur_page_id_ &&
+           cur_slot_ == other.cur_slot_ &&
+           at_end_ == other.at_end_;
 }
 
-bool TableIterator::operator!=(const TableIterator &other) const noexcept
+bool TableIterator::operator!=(const TableIterator& other) const noexcept
 {
     return !(*this == other);
 }
@@ -182,7 +204,7 @@ bool TableIterator::AdvanceToNextValid()
             return false;
         }
 
-        storage::Page *page = page_exp.value();
+        storage::Page* page = page_exp.value();
         const page_id_t pid_snapshot = pid;
         page->RLock();
         auto release = MakeScopeGuard([&]() {
