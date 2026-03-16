@@ -1,5 +1,46 @@
 /**
  * CXX/src/storage/page/table_page.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 TablePage 的页内 tuple 管理逻辑。
+ *
+ * 主要完成：
+ *
+ * 1. 表页初始化
+ * 2. slot 分配与复用
+ * 3. tuple 插入
+ * 4. tuple 更新
+ * 5. tuple 删除标记
+ * 6. tuple 读取
+ * 7. 页内压缩与空间整理
+ *
+ *
+ * ========================= 核心机制 =========================
+ *
+ * InsertTuple:
+ *   优先复用已删除 slot
+ *   空间不足时尝试压缩 tuple body
+ *   然后在页面尾部写入 tuple
+ *
+ * UpdateTuple:
+ *   若新 tuple 更小或相等，则原位覆盖
+ *   若更大，则必要时压缩后重新放置
+ *
+ * MarkDelTuple:
+ *   将 slot 标记为 deleted
+ *   并挂入 free list
+ *
+ * CompactTupleBodies:
+ *   重新排列仍然有效的 tuple body
+ *   回收中间碎片
+ *
+ *
+ * ========================= 实现说明 =========================
+ *
+ * TablePage 只负责单页内部管理，
+ * 不处理跨页遍历与页链维护策略，
+ * 这些工作由 TableHeap 继续完成。
  */
 
 #include "storage/page/table_page.h"
@@ -22,8 +63,8 @@ namespace storage
         bool IsTupleCountersConsistent(const TablePageHeaderData* header)
         {
             return static_cast<uint32_t>(header->alive_tuple_count) +
-                    static_cast<uint32_t>(header->deleted_tuple_count) ==
-                static_cast<uint32_t>(header->slot_count);
+                       static_cast<uint32_t>(header->deleted_tuple_count) ==
+                   static_cast<uint32_t>(header->slot_count);
         }
 
         TupleCounters ComputeTupleCounters(const TablePage& table_page, const TablePageHeaderData* header)
@@ -66,6 +107,9 @@ namespace storage
         };
     } // namespace
 
+    /**
+     * @param page_id 新页号
+     */
     void TablePage::InitForNewPage(page_id_t page_id)
     {
         if (page_ == nullptr) {
@@ -73,11 +117,14 @@ namespace storage
         }
 
         WritePageGuard guard(page_);
+
+        // step 1: 初始化通用页头。
         auto* base_header = page_->Header();
         base_header->lsn = 0;
         base_header->page_id = page_id;
         base_header->page_type = PageType::HEAP;
 
+        // step 2: 初始化表页专用头部。
         auto* table_header = HeaderData();
         table_header->next_page_id = INVALID_PAGE_ID;
         table_header->slot_count = 0;
@@ -86,6 +133,8 @@ namespace storage
         table_header->free_space_offset = PAGE_SIZE;
         table_header->free_list_head = INVALID_SLOT_ID;
         table_header->reserved = 0;
+
+        // step 3: 标记脏页。
         page_->MarkDirty();
     }
 
@@ -114,6 +163,10 @@ namespace storage
         return HeaderData()->slot_count;
     }
 
+    /**
+     * @param tuple 待插入 tuple
+     * @return 成功时返回 slot_id
+     */
     std::expected<slot_id_t, TablePageErr> TablePage::InsertTuple(const record::Tuple& tuple)
     {
         if (page_ == nullptr) {
@@ -121,6 +174,8 @@ namespace storage
         }
 
         WritePageGuard guard(page_);
+
+        // step 1: 检查 tuple 大小是否合法，并修复计数。
         const uint16_t tuple_size = tuple.Size();
         if (tuple_size == 0 || tuple_size > PAGE_SIZE - sizeof(PersistentHeader) - sizeof(Slot)) {
             return std::unexpected(
@@ -130,6 +185,7 @@ namespace storage
         auto* header = HeaderData();
         RepairTupleCounters();
 
+        // step 2: 若 free list 非空，则尝试复用已删除 slot。
         slot_id_t reuse_slot = INVALID_SLOT_ID;
         slot_id_t reuse_next = INVALID_SLOT_ID;
         if (header->free_list_head != INVALID_SLOT_ID) {
@@ -138,6 +194,7 @@ namespace storage
                 return std::unexpected(
                     TablePageErr{"TablePage::InsertTuple: free list corrupted", TablePageErrCode::FreeListCorrupted});
             }
+
             const Slot* reusable = GetSlot(reuse_slot);
             if (!reusable->IsDeleted()) {
                 return std::unexpected(
@@ -151,11 +208,13 @@ namespace storage
             }
         }
 
+        // step 3: 计算需要的空间；若不足则尝试压缩。
         const bool adding_new_slot = (reuse_slot == INVALID_SLOT_ID);
         uint16_t needed = tuple_size;
         if (adding_new_slot) {
             needed = static_cast<uint16_t>(needed + sizeof(Slot));
         }
+
         if (FreeSpace() < needed) {
             if (!CompactTupleBodies()) {
                 return std::unexpected(
@@ -169,6 +228,7 @@ namespace storage
             }
         }
 
+        // step 4: 若复用 deleted slot，则先把它从 free list 中摘下。
         if (!adding_new_slot) {
             if (header->deleted_tuple_count == 0) {
                 return std::unexpected(
@@ -178,14 +238,17 @@ namespace storage
             header->deleted_tuple_count = static_cast<uint16_t>(header->deleted_tuple_count - 1);
         }
 
+        // step 5: 把 tuple body 写入页面尾部增长区。
         const uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - tuple_size);
         std::memcpy(page_->RawData() + new_data_offset, tuple.Data(), tuple_size);
         header->free_space_offset = new_data_offset;
 
+        // step 6: 写入 slot 信息并更新计数。
         const slot_id_t slot_id = adding_new_slot ? header->slot_count : reuse_slot;
         Slot* slot = GetSlot(slot_id);
         slot->SetOffset(new_data_offset);
         slot->SetLength(tuple_size);
+
         if (adding_new_slot) {
             header->slot_count = static_cast<slot_id_t>(header->slot_count + 1);
         }
@@ -195,6 +258,10 @@ namespace storage
         return slot_id;
     }
 
+    /**
+     * @param slot_id 目标槽位
+     * @param tuple   新 tuple
+     */
     std::expected<void, TablePageErr> TablePage::UpdateTuple(slot_id_t slot_id, const record::Tuple& tuple)
     {
         if (page_ == nullptr) {
@@ -204,6 +271,8 @@ namespace storage
         WritePageGuard guard(page_);
         auto* header = HeaderData();
         RepairTupleCounters();
+
+        // step 1: 检查 slot 与 tuple 大小合法性。
         if (slot_id >= header->slot_count) {
             return std::unexpected(
                 TablePageErr{"TablePage::UpdateTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
@@ -221,6 +290,7 @@ namespace storage
                 TablePageErr{"TablePage::UpdateTuple: invalid tuple size", TablePageErrCode::InvalidTupleSize});
         }
 
+        // step 2: 若新 tuple 不更大，则原位覆盖。
         const uint16_t old_len = slot->GetLength();
         if (new_len <= old_len) {
             std::memcpy(page_->RawData() + slot->GetOffset(), tuple.Data(), new_len);
@@ -229,6 +299,7 @@ namespace storage
             return {};
         }
 
+        // step 3: 若需要更大空间，则必要时压缩页面。
         if (FreeSpace() < new_len) {
             if (!CompactTupleBodies(slot_id)) {
                 return std::unexpected(
@@ -242,6 +313,7 @@ namespace storage
             }
         }
 
+        // step 4: 重新为该 tuple 分配页尾空间并更新 slot。
         const uint16_t new_data_offset = static_cast<uint16_t>(header->free_space_offset - new_len);
         std::memcpy(page_->RawData() + new_data_offset, tuple.Data(), new_len);
         header->free_space_offset = new_data_offset;
@@ -252,6 +324,9 @@ namespace storage
         return {};
     }
 
+    /**
+     * @param slot_id 目标槽位
+     */
     std::expected<void, TablePageErr> TablePage::MarkDelTuple(slot_id_t slot_id)
     {
         if (page_ == nullptr) {
@@ -261,6 +336,8 @@ namespace storage
         WritePageGuard guard(page_);
         auto* header = HeaderData();
         RepairTupleCounters();
+
+        // step 1: 检查 slot 合法性。
         if (slot_id >= header->slot_count) {
             return std::unexpected(
                 TablePageErr{"TablePage::MarkDelTuple: slot id out of range", TablePageErrCode::SlotOutOfRange});
@@ -272,6 +349,7 @@ namespace storage
                 TablePageErr{"TablePage::MarkDelTuple: slot already deleted", TablePageErrCode::SlotAlreadyDeleted});
         }
 
+        // step 2: 先压缩有效 tuple，回收该 slot 的数据体空间。
         if (!CompactTupleBodies(slot_id)) {
             return std::unexpected(
                 TablePageErr{
@@ -279,17 +357,25 @@ namespace storage
                     TablePageErrCode::InvalidSlotContent});
         }
 
+        // step 3: 把该 slot 挂入 deleted free list。
         slot->SetOffset(header->free_list_head);
         slot->SetDeleted();
         header->free_list_head = slot_id;
+
+        // step 4: 更新 alive / deleted 计数。
         if (header->alive_tuple_count > 0) {
             header->alive_tuple_count = static_cast<uint16_t>(header->alive_tuple_count - 1);
         }
         header->deleted_tuple_count = static_cast<uint16_t>(header->deleted_tuple_count + 1);
+
         page_->MarkDirty();
         return {};
     }
 
+    /**
+     * @param slot_id 目标槽位
+     * @param tuple   输出 tuple
+     */
     std::expected<void, TablePageErr> TablePage::GetTuple(slot_id_t slot_id, record::Tuple& tuple) const
     {
         if (page_ == nullptr) {
@@ -297,6 +383,8 @@ namespace storage
         }
 
         ReadPageGuard guard(page_);
+
+        // step 1: 检查 slot 合法性与删除状态。
         const auto* header = HeaderData();
         if (slot_id >= header->slot_count) {
             return std::unexpected(
@@ -309,6 +397,7 @@ namespace storage
                 TablePageErr{"TablePage::GetTuple: slot already deleted", TablePageErrCode::SlotAlreadyDeleted});
         }
 
+        // step 2: 检查 slot 指向的数据区是否合法。
         const uint16_t offset = slot->GetOffset();
         const uint16_t length = slot->GetLength();
         if (length == 0 || static_cast<size_t>(offset) + length > PAGE_SIZE) {
@@ -316,6 +405,7 @@ namespace storage
                 TablePageErr{"TablePage::GetTuple: invalid slot content", TablePageErrCode::InvalidSlotContent});
         }
 
+        // step 3: 从页面数据区构造 tuple 视图。
         std::byte* data_ptr = page_->RawData() + offset;
         tuple = record::Tuple(std::span<std::byte>(data_ptr, length));
         return {};
@@ -334,6 +424,7 @@ namespace storage
         if (page_ == nullptr) {
             return 0;
         }
+
         const auto* header = HeaderData();
         if (IsTupleCountersConsistent(header)) {
             return header->alive_tuple_count;
@@ -346,6 +437,7 @@ namespace storage
         if (page_ == nullptr) {
             return 0;
         }
+
         const auto* header = HeaderData();
         if (IsTupleCountersConsistent(header)) {
             return header->deleted_tuple_count;
@@ -358,10 +450,12 @@ namespace storage
         if (page_ == nullptr) {
             return;
         }
+
         auto* header = HeaderData();
         if (IsTupleCountersConsistent(header)) {
             return;
         }
+
         const auto counts = ComputeTupleCounters(*this, header);
         header->alive_tuple_count = counts.alive;
         header->deleted_tuple_count = counts.deleted;
@@ -388,6 +482,9 @@ namespace storage
         return &SlotArray()[slot_id];
     }
 
+    /**
+     * 返回当前 slot 区末尾与 tuple 数据区起点之间的连续空闲空间。
+     */
     uint16_t TablePage::FreeSpace()
     {
         const auto* header = HeaderData();
@@ -401,6 +498,10 @@ namespace storage
         return static_cast<uint16_t>(header->free_space_offset - slot_area_end);
     }
 
+    /**
+     * @param skip_slot 压缩时跳过的槽位
+     * @return 成功返回 true
+     */
     bool TablePage::CompactTupleBodies(slot_id_t skip_slot)
     {
         if (page_ == nullptr) {
@@ -411,6 +512,7 @@ namespace storage
         std::array<std::byte, PAGE_SIZE> compacted{};
         uint16_t write_offset = PAGE_SIZE;
 
+        // step 1: 遍历所有有效 slot，把未删除且未跳过的 tuple 重新顺序搬运到临时缓冲区。
         for (slot_id_t slot_id = 0; slot_id < header->slot_count; ++slot_id) {
             Slot* slot = GetSlot(slot_id);
             if (slot_id == skip_slot || slot->IsDeleted()) {
@@ -429,26 +531,27 @@ namespace storage
             }
 
             write_offset = static_cast<uint16_t>(write_offset - tuple_len);
-            std::memcpy(
-                compacted.data() + write_offset,
-                page_->RawData() + old_offset,
-                tuple_len);
+            std::memcpy(compacted.data() + write_offset, page_->RawData() + old_offset, tuple_len);
             slot->SetOffset(write_offset);
         }
 
+        // step 2: 检查压缩后的 tuple 区是否越过 slot 区。
         const uint32_t slot_area_end =
             static_cast<uint32_t>(sizeof(PersistentHeader)) +
             static_cast<uint32_t>(header->slot_count) * static_cast<uint32_t>(sizeof(Slot));
+
         if (write_offset < slot_area_end) {
             return false;
         }
 
+        // step 3: 把压缩后的 tuple body 回写到页面，并更新 free_space_offset。
         if (write_offset < PAGE_SIZE) {
             std::memcpy(
                 page_->RawData() + write_offset,
                 compacted.data() + write_offset,
                 PAGE_SIZE - write_offset);
         }
+
         header->free_space_offset = write_offset;
         page_->MarkDirty();
         return true;
