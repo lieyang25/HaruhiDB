@@ -16,12 +16,12 @@ namespace storage
         uint16_t max_size,
         page_id_t parent_page_id) noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
 
         // page_id is expected to be assigned by BufferPoolManager::NewPage.
-        const page_id_t page_id = page_->PageId();
+        const page_id_t page_id = GetPage()->PageId();
         if (page_id == INVALID_PAGE_ID) {
             return false;
         }
@@ -34,7 +34,7 @@ namespace storage
             max_size = physical_max_size;
         }
 
-        if (!InitForNewPage(page_id, PageType::INTERNAL, max_size, parent_page_id)) {
+        if (!tree_page_.InitForNewPage(page_id, PageType::INTERNAL, max_size, parent_page_id)) {
             return false;
         }
 
@@ -55,12 +55,12 @@ namespace storage
 
     page_id_t BPlusTreeInternalPage::GetLeftMostChild() const noexcept
     {
-        return GetNodeLinkPageId();
+        return tree_page_.GetNodeLinkPageId();
     }
 
     void BPlusTreeInternalPage::SetLeftMostChild(page_id_t child_page_id) noexcept
     {
-        SetNodeLinkPageId(child_page_id);
+        tree_page_.SetNodeLinkPageId(child_page_id);
     }
 
     const BPlusTreeInternalPage::MappingType& BPlusTreeInternalPage::ItemAt(uint16_t index) const noexcept
@@ -83,7 +83,7 @@ namespace storage
             return false;
         }
         array[index].key = key;
-        page_->MarkDirty();
+        GetPage()->MarkDirty();
         return true;
     }
 
@@ -155,7 +155,7 @@ namespace storage
         const KeyType& split_key,
         page_id_t right_child) noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
         if (GetPageType() != PageType::INTERNAL) {
@@ -185,7 +185,7 @@ namespace storage
         const KeyType& new_key,
         page_id_t new_child) noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
         if (old_child == INVALID_PAGE_ID || new_child == INVALID_PAGE_ID) {
@@ -246,7 +246,7 @@ namespace storage
 
     bool BPlusTreeInternalPage::RemoveChildAt(uint16_t child_index) noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
 
@@ -300,7 +300,7 @@ namespace storage
     void BPlusTreeInternalPage::MoveHalfTo(BPlusTreeInternalPage* recipient) noexcept
     {
         // Caller must hold write latches for both source and recipient pages.
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
         if (recipient == this) {
@@ -361,7 +361,7 @@ namespace storage
         KeyType* out_new_middle_key) noexcept
     {
         // Caller must hold write latches for both source and recipient pages.
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
         if (recipient == this || out_new_middle_key == nullptr) {
@@ -413,7 +413,7 @@ namespace storage
         KeyType* out_new_middle_key) noexcept
     {
         // Caller must hold write latches for both source and recipient pages.
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
         if (recipient == this || out_new_middle_key == nullptr) {
@@ -464,7 +464,7 @@ namespace storage
         const KeyType& middle_key) noexcept
     {
         // Caller must hold write latches for both source and recipient pages.
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
         if (recipient == this) {
@@ -508,21 +508,21 @@ namespace storage
 
     BPlusTreeInternalPage::MappingType* BPlusTreeInternalPage::Array() noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return nullptr;
         }
 
-        auto* raw = page_->RawData();
+        auto* raw = GetPage()->RawData();
         return reinterpret_cast<MappingType*>(raw + sizeof(PersistentHeader));
     }
 
     const BPlusTreeInternalPage::MappingType* BPlusTreeInternalPage::Array() const noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return nullptr;
         }
 
-        const auto* raw = page_->RawData();
+        const auto* raw = GetPage()->RawData();
         return reinterpret_cast<const MappingType*>(raw + sizeof(PersistentHeader));
     }
 

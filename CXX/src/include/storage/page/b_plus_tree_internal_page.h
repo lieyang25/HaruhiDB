@@ -13,7 +13,7 @@ namespace HaruhiDB
 {
 namespace storage
 {
-    class BPlusTreeInternalPage : public BPlusTreePage
+    class BPlusTreeInternalPage
     {
     public:
         using KeyType = int32_t;
@@ -33,9 +33,25 @@ namespace storage
         // Callers must hold appropriate page latches before mutating/reading the
         // page content. This wrapper does not acquire latches internally.
         explicit BPlusTreeInternalPage(Page* page)
-            : BPlusTreePage(page)
+            : tree_page_(page)
         {
         }
+
+        Page* GetPage() noexcept { return tree_page_.GetPage(); }
+        const Page* GetPage() const noexcept { return tree_page_.GetPage(); }
+        page_id_t GetPageId() const noexcept { return tree_page_.GetPageId(); }
+        PageType GetPageType() const noexcept { return tree_page_.GetPageType(); }
+        bool IsLeafPage() const noexcept { return tree_page_.IsLeafPage(); }
+        bool IsInternalPage() const noexcept { return tree_page_.IsInternalPage(); }
+        bool IsRootPage() const noexcept { return tree_page_.IsRootPage(); }
+        page_id_t GetParentPageId() const noexcept { return tree_page_.GetParentPageId(); }
+        void SetParentPageId(page_id_t parent_page_id) noexcept { tree_page_.SetParentPageId(parent_page_id); }
+        uint16_t GetSize() const noexcept { return tree_page_.GetSize(); }
+        void SetSize(uint16_t size) noexcept { tree_page_.SetSize(size); }
+        void IncreaseSize(int delta) noexcept { tree_page_.IncreaseSize(delta); }
+        uint16_t GetMaxSize() const noexcept { return tree_page_.GetMaxSize(); }
+        void SetMaxSize(uint16_t max_size) noexcept { tree_page_.SetMaxSize(max_size); }
+        uint16_t GetMinSize() const noexcept { return tree_page_.GetMinSize(); }
 
         bool InitForNewInternal(
             uint16_t max_size,
@@ -80,6 +96,9 @@ namespace storage
     private:
         MappingType* Array() noexcept;
         const MappingType* Array() const noexcept;
+
+    private:
+        BPlusTreePage tree_page_;
     };
 
 } // namespace storage

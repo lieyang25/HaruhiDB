@@ -56,11 +56,11 @@ namespace storage
         page_id_t parent_page_id) noexcept
     {
         // step 1: 检查底层 page 与 page_id 是否有效。
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
 
-        const page_id_t page_id = page_->PageId();
+        const page_id_t page_id = GetPage()->PageId();
         if (page_id == INVALID_PAGE_ID) {
             return false;
         }
@@ -75,7 +75,7 @@ namespace storage
         }
 
         // step 3: 初始化公共 B+Tree 页头。
-        if (!InitForNewPage(page_id, PageType::LEAF, max_size, parent_page_id)) {
+        if (!tree_page_.InitForNewPage(page_id, PageType::LEAF, max_size, parent_page_id)) {
             return false;
         }
 
@@ -97,12 +97,12 @@ namespace storage
 
     page_id_t BPlusTreeLeafPage::GetNextPageId() const noexcept
     {
-        return GetNodeLinkPageId();
+        return tree_page_.GetNodeLinkPageId();
     }
 
     void BPlusTreeLeafPage::SetNextPageId(page_id_t next_page_id) noexcept
     {
-        SetNodeLinkPageId(next_page_id);
+        tree_page_.SetNodeLinkPageId(next_page_id);
     }
 
     const BPlusTreeLeafPage::MappingType& BPlusTreeLeafPage::ItemAt(uint16_t index) const noexcept
@@ -187,7 +187,7 @@ namespace storage
     bool BPlusTreeLeafPage::Insert(const KeyType& key, const ValueType& value) noexcept
     {
         // step 1: 检查当前页与容量是否合法。
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
 
@@ -230,7 +230,7 @@ namespace storage
     bool BPlusTreeLeafPage::Remove(const KeyType& key) noexcept
     {
         // step 1: 检查当前页与数组状态。
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return false;
         }
 
@@ -269,7 +269,7 @@ namespace storage
     void BPlusTreeLeafPage::MoveHalfTo(BPlusTreeLeafPage* recipient) noexcept
     {
         // step 1: 检查源页、目标页和基本状态。
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
         if (recipient == this) {
@@ -324,7 +324,7 @@ namespace storage
     void BPlusTreeLeafPage::MoveAllTo(BPlusTreeLeafPage* recipient) noexcept
     {
         // step 1: 检查源页、目标页和基本状态。
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
         if (recipient == this) {
@@ -372,7 +372,7 @@ namespace storage
     bool BPlusTreeLeafPage::MoveFirstToEndOf(BPlusTreeLeafPage* recipient) noexcept
     {
         // step 1: 检查源页、目标页和容量状态。
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
         if (recipient == this) {
@@ -415,7 +415,7 @@ namespace storage
     bool BPlusTreeLeafPage::MoveLastToFrontOf(BPlusTreeLeafPage* recipient) noexcept
     {
         // step 1: 检查源页、目标页和容量状态。
-        if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
+        if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
         if (recipient == this) {
@@ -454,21 +454,21 @@ namespace storage
 
     BPlusTreeLeafPage::MappingType* BPlusTreeLeafPage::Array() noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return nullptr;
         }
 
-        auto* raw = page_->RawData();
+        auto* raw = GetPage()->RawData();
         return reinterpret_cast<MappingType*>(raw + sizeof(PersistentHeader));
     }
 
     const BPlusTreeLeafPage::MappingType* BPlusTreeLeafPage::Array() const noexcept
     {
-        if (page_ == nullptr) {
+        if (GetPage() == nullptr) {
             return nullptr;
         }
 
-        const auto* raw = page_->RawData();
+        const auto* raw = GetPage()->RawData();
         return reinterpret_cast<const MappingType*>(raw + sizeof(PersistentHeader));
     }
 

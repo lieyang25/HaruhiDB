@@ -220,7 +220,7 @@ namespace storage
             return GetMaxSize() / 2;
         }
 
-    protected:
+    public:
         /**
          * 返回节点专有链接页号。
          *
@@ -249,6 +249,7 @@ namespace storage
             page_->MarkDirty();
         }
 
+    protected:
         /**
          * 返回 B+Tree 公共 opaque 头部。
          */

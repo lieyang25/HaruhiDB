@@ -63,7 +63,7 @@ namespace HaruhiDB
 {
 namespace storage
 {
-    class BPlusTreeLeafPage : public BPlusTreePage
+    class BPlusTreeLeafPage
     {
     public:
         using KeyType = int32_t;
@@ -92,9 +92,25 @@ namespace storage
          * @param page 底层通用页面对象
          */
         explicit BPlusTreeLeafPage(Page* page)
-            : BPlusTreePage(page)
+            : tree_page_(page)
         {
         }
+
+        Page* GetPage() noexcept { return tree_page_.GetPage(); }
+        const Page* GetPage() const noexcept { return tree_page_.GetPage(); }
+        page_id_t GetPageId() const noexcept { return tree_page_.GetPageId(); }
+        PageType GetPageType() const noexcept { return tree_page_.GetPageType(); }
+        bool IsLeafPage() const noexcept { return tree_page_.IsLeafPage(); }
+        bool IsInternalPage() const noexcept { return tree_page_.IsInternalPage(); }
+        bool IsRootPage() const noexcept { return tree_page_.IsRootPage(); }
+        page_id_t GetParentPageId() const noexcept { return tree_page_.GetParentPageId(); }
+        void SetParentPageId(page_id_t parent_page_id) noexcept { tree_page_.SetParentPageId(parent_page_id); }
+        uint16_t GetSize() const noexcept { return tree_page_.GetSize(); }
+        void SetSize(uint16_t size) noexcept { tree_page_.SetSize(size); }
+        void IncreaseSize(int delta) noexcept { tree_page_.IncreaseSize(delta); }
+        uint16_t GetMaxSize() const noexcept { return tree_page_.GetMaxSize(); }
+        void SetMaxSize(uint16_t max_size) noexcept { tree_page_.SetMaxSize(max_size); }
+        uint16_t GetMinSize() const noexcept { return tree_page_.GetMinSize(); }
 
         /**
          * 将当前页面初始化为新的叶子页。
@@ -218,6 +234,9 @@ namespace storage
          * 返回映射数组首地址。
          */
         const MappingType* Array() const noexcept;
+
+    private:
+        BPlusTreePage tree_page_;
     };
 
 } // namespace storage
