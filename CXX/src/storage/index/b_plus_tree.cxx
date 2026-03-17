@@ -1,5 +1,39 @@
 /**
  * CXX/src/storage/index/b_plus_tree.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 BPlusTree 的整树逻辑。
+ *
+ * 主要完成：
+ *
+ * 1. header page 初始化与加载
+ * 2. 根页管理
+ * 3. 查找叶子页
+ * 4. 查询
+ * 5. 插入与分裂上传
+ * 6. 删除与重平衡
+ * 7. 迭代器起点定位
+ *
+ *
+ * ========================= 核心流程 =========================
+ *
+ * Insert:
+ *   查找目标叶子页
+ *   若未满则直接插入
+ *   若已满则分裂叶子页
+ *   再把 split_key 上传到父节点
+ *
+ * Remove:
+ *   查找目标叶子页
+ *   删除 key
+ *   若发生下溢则执行借键或合并
+ *   必要时调整根页
+ *
+ * FindLeafPage:
+ *   从 root 开始
+ *   在内部页中根据 key 路由
+ *   直到落到叶子页
  */
 
 #include "storage/index/b_plus_tree.h"
@@ -14,6 +48,9 @@ namespace storage
 {
     namespace
     {
+        /**
+         * header page 的 opaque 区域元数据。
+         */
         struct BPlusTreeMetaOpaque
         {
             uint32_t magic;
@@ -28,6 +65,9 @@ namespace storage
         static_assert(sizeof(BPlusTreeMetaOpaque) == PAGE_HEADER_OPAQUE_SIZE);
     } // namespace
 
+    /**
+     * @param bpm 缓冲池管理器
+     */
     BPlusTree::BPlusTree(buffer::BufferPoolManager* bpm)
         : bpm_(bpm)
     {
@@ -36,6 +76,10 @@ namespace storage
         }
     }
 
+    /**
+     * @param bpm            缓冲池管理器
+     * @param header_page_id header page id
+     */
     BPlusTree::BPlusTree(buffer::BufferPoolManager* bpm, page_id_t header_page_id)
         : bpm_(bpm)
     {
@@ -64,8 +108,13 @@ namespace storage
         return header_page_id_;
     }
 
+    /**
+     * @param key     目标键
+     * @param out_rid 成功时返回对应 RID
+     */
     bool BPlusTree::GetValue(int32_t key, record::RID* out_rid)
     {
+        // step 1: 检查参数与树状态。
         if (out_rid == nullptr || bpm_ == nullptr) {
             return false;
         }
@@ -75,11 +124,13 @@ namespace storage
             return false;
         }
 
+        // step 2: 找到目标叶子页。
         const page_id_t leaf_page_id = FindLeafPage(key);
         if (leaf_page_id == INVALID_PAGE_ID) {
             return false;
         }
 
+        // step 3: 在叶子页内查找 key。
         auto page_exp = bpm_->FetchPage(leaf_page_id);
         if (!page_exp.has_value()) {
             return false;
@@ -90,6 +141,7 @@ namespace storage
         BPlusTreeLeafPage leaf(page);
         const bool found = leaf.Lookup(key, out_rid);
         page->RUnLock();
+
         const bool unpinned = bpm_->UnpinPage(leaf_page_id, false);
         return found && unpinned;
     }
@@ -109,6 +161,9 @@ namespace storage
         return IndexIterator(bpm_, first_leaf, 0);
     }
 
+    /**
+     * @param key 起始键
+     */
     IndexIterator BPlusTree::Begin(int32_t key)
     {
         std::shared_lock lock(tree_latch_);
@@ -116,6 +171,7 @@ namespace storage
             return End();
         }
 
+        // step 1: 先找到 key 应落到的叶子页。
         page_id_t leaf_page_id = FindLeafPage(key);
         if (leaf_page_id == INVALID_PAGE_ID) {
             return End();
@@ -123,6 +179,7 @@ namespace storage
 
         uint16_t start_index = 0;
         {
+            // step 2: 在该叶子页中定位 lower_bound 起点。
             auto page_exp = bpm_->FetchPage(leaf_page_id);
             if (!page_exp.has_value()) {
                 return End();
@@ -159,6 +216,10 @@ namespace storage
         return IndexIterator();
     }
 
+    /**
+     * @param key 键
+     * @param rid 值
+     */
     bool BPlusTree::Insert(int32_t key, const record::RID& rid)
     {
         if (bpm_ == nullptr) {
@@ -166,10 +227,13 @@ namespace storage
         }
 
         std::unique_lock lock(tree_latch_);
+
+        // step 1: 空树时直接创建第一棵树。
         if (root_page_id_ == INVALID_PAGE_ID) {
             return StartNewTree(key, rid);
         }
 
+        // step 2: 找到目标叶子页。
         const page_id_t leaf_page_id = FindLeafPage(key);
         if (leaf_page_id == INVALID_PAGE_ID) {
             return false;
@@ -189,6 +253,7 @@ namespace storage
             return false;
         }
 
+        // step 3: 拒绝重复 key。
         record::RID existing;
         if (leaf.Lookup(key, &existing)) {
             leaf_page->WUnLock();
@@ -196,6 +261,7 @@ namespace storage
             return false;
         }
 
+        // step 4: 若叶子页未满，则直接插入。
         if (leaf.GetSize() < leaf.GetMaxSize()) {
             const bool inserted = leaf.Insert(key, rid);
             leaf_page->WUnLock();
@@ -203,6 +269,7 @@ namespace storage
             return inserted && unpinned;
         }
 
+        // step 5: 若叶子页已满，则新建右兄弟并做分裂。
         page_id_t new_leaf_page_id = INVALID_PAGE_ID;
         auto new_leaf_page_exp = bpm_->NewPage(&new_leaf_page_id, PageType::LEAF);
         if (!new_leaf_page_exp.has_value()) {
@@ -225,6 +292,8 @@ namespace storage
                 ok = false;
             }
         }
+
+        // step 6: 把新记录插入分裂后的正确一侧。
         if (ok) {
             if (key >= new_leaf.KeyAt(0)) {
                 ok = new_leaf.Insert(key, rid);
@@ -253,9 +322,13 @@ namespace storage
             return false;
         }
 
+        // step 7: 将 split_key 上传到父节点。
         return InsertIntoParent(leaf_page_id, split_key, new_leaf_page_id);
     }
 
+    /**
+     * @param key 目标键
+     */
     bool BPlusTree::Remove(int32_t key)
     {
         if (bpm_ == nullptr) {
@@ -267,6 +340,7 @@ namespace storage
             return false;
         }
 
+        // step 1: 找到目标叶子页。
         const page_id_t leaf_page_id = FindLeafPage(key);
         if (leaf_page_id == INVALID_PAGE_ID) {
             return false;
@@ -286,6 +360,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 删除 key。
         const bool removed = leaf.Remove(key);
         if (!removed) {
             leaf_page->WUnLock();
@@ -293,6 +368,7 @@ namespace storage
             return false;
         }
 
+        // step 3: 若删除发生在根叶子页，特殊处理空树情况。
         if (leaf_page_id == root_page_id_) {
             const bool should_reset_root = leaf.GetSize() == 0;
             leaf_page->WUnLock();
@@ -312,6 +388,7 @@ namespace storage
             return true;
         }
 
+        // step 4: 非根页若下溢，则进入重平衡。
         const bool need_rebalance = leaf.GetSize() < leaf.GetMinSize();
         leaf_page->WUnLock();
         if (!bpm_->UnpinPage(leaf_page_id, true)) {
@@ -325,6 +402,9 @@ namespace storage
         return RebalanceAfterDelete(leaf_page_id);
     }
 
+    /**
+     * @param key 目标键
+     */
     page_id_t BPlusTree::FindLeafPage(int32_t key)
     {
         if (bpm_ == nullptr || root_page_id_ == INVALID_PAGE_ID) {
@@ -343,6 +423,7 @@ namespace storage
             BPlusTreePage tree_page(page);
             const PageType page_type = tree_page.GetPageType();
 
+            // step 1: 若已到叶子页，则返回当前页号。
             if (page_type == PageType::LEAF) {
                 page->RUnLock();
                 if (!bpm_->UnpinPage(current, false)) {
@@ -351,12 +432,14 @@ namespace storage
                 return current;
             }
 
+            // step 2: 若不是内部页，说明树结构非法。
             if (page_type != PageType::INTERNAL) {
                 page->RUnLock();
                 bpm_->UnpinPage(current, false);
                 return INVALID_PAGE_ID;
             }
 
+            // step 3: 在内部页中路由到下一层 child。
             BPlusTreeInternalPage internal(page);
             const page_id_t next = internal.Lookup(key);
             page->RUnLock();
@@ -390,6 +473,7 @@ namespace storage
             BPlusTreePage node(page);
             const PageType type = node.GetPageType();
 
+            // step 1: 若已到叶子页，则返回当前页号。
             if (type == PageType::LEAF) {
                 page->RUnLock();
                 if (!bpm_->UnpinPage(current, false)) {
@@ -398,12 +482,14 @@ namespace storage
                 return current;
             }
 
+            // step 2: 若不是内部页，说明树结构非法。
             if (type != PageType::INTERNAL) {
                 page->RUnLock();
                 bpm_->UnpinPage(current, false);
                 return INVALID_PAGE_ID;
             }
 
+            // step 3: 按 left-most child 一路下降。
             BPlusTreeInternalPage internal(page);
             const page_id_t next = internal.GetLeftMostChild();
             page->RUnLock();
@@ -417,18 +503,24 @@ namespace storage
         return INVALID_PAGE_ID;
     }
 
+    /**
+     * @param key 键
+     * @param rid 值
+     */
     bool BPlusTree::StartNewTree(int32_t key, const record::RID& rid)
     {
         if (bpm_ == nullptr) {
             return false;
         }
 
+        // step 1: 分配一个新的根叶子页。
         page_id_t root_page_id = INVALID_PAGE_ID;
         auto root_page_exp = bpm_->NewPage(&root_page_id, PageType::LEAF);
         if (!root_page_exp.has_value()) {
             return false;
         }
 
+        // step 2: 初始化根叶子页并写入第一条记录。
         Page* root_page = root_page_exp.value();
         BPlusTreeLeafPage leaf(root_page);
 
@@ -439,16 +531,23 @@ namespace storage
             ok = leaf.Insert(key, rid);
             root_page->WUnLock();
         }
+
         const bool unpinned = bpm_->UnpinPage(root_page_id, ok);
         if (!ok || !unpinned) {
             bpm_->DeletePage(root_page_id);
             return false;
         }
 
+        // step 3: 更新根页号并持久化到 header page。
         root_page_id_ = root_page_id;
         return PersistRootPageIdLocked();
     }
 
+    /**
+     * @param old_page_id 原节点页号
+     * @param split_key   分裂键
+     * @param new_page_id 新节点页号
+     */
     bool BPlusTree::InsertIntoParent(
         page_id_t old_page_id,
         int32_t split_key,
@@ -460,6 +559,7 @@ namespace storage
             return false;
         }
 
+        // step 1: 先读取 old_page 的父页。
         auto old_page_exp = bpm_->FetchPage(old_page_id);
         if (!old_page_exp.has_value()) {
             return false;
@@ -474,6 +574,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 若 old_page 原本无父节点，则创建新根。
         if (parent_page_id == INVALID_PAGE_ID) {
             page_id_t new_root_page_id = INVALID_PAGE_ID;
             auto new_root_page_exp = bpm_->NewPage(&new_root_page_id, PageType::INTERNAL);
@@ -513,6 +614,7 @@ namespace storage
             return PersistRootPageIdLocked();
         }
 
+        // step 3: 若父节点未满，则直接插入父节点。
         auto parent_page_exp = bpm_->FetchPage(parent_page_id);
         if (!parent_page_exp.has_value()) {
             return false;
@@ -538,6 +640,7 @@ namespace storage
             return SetChildParent(new_page_id, parent_page_id);
         }
 
+        // step 4: 若父节点已满，则分裂父节点。
         page_id_t new_internal_page_id = INVALID_PAGE_ID;
         auto new_internal_page_exp = bpm_->NewPage(&new_internal_page_id, PageType::INTERNAL);
         if (!new_internal_page_exp.has_value()) {
@@ -582,6 +685,7 @@ namespace storage
         if (new_internal_locked) {
             new_internal_page->WUnLock();
         }
+
         const bool unpin_parent = bpm_->UnpinPage(parent_page_id, ok);
         const bool unpin_new_internal = bpm_->UnpinPage(new_internal_page_id, ok);
         if (!ok) {
@@ -592,6 +696,7 @@ namespace storage
             return false;
         }
 
+        // step 5: 修正新 child 的父指针，并递归上传 promoted_key。
         if (!SetChildParent(new_page_id, holder_page_id)) {
             return false;
         }
@@ -599,6 +704,10 @@ namespace storage
         return InsertIntoParent(parent_page_id, promoted_key, new_internal_page_id);
     }
 
+    /**
+     * @param child_page_id  子页页号
+     * @param parent_page_id 父页页号
+     */
     bool BPlusTree::SetChildParent(page_id_t child_page_id, page_id_t parent_page_id)
     {
         if (bpm_ == nullptr || child_page_id == INVALID_PAGE_ID) {
@@ -618,6 +727,10 @@ namespace storage
         return bpm_->UnpinPage(child_page_id, true);
     }
 
+    /**
+     * @param internal_page    目标内部页
+     * @param internal_page_id 该内部页页号
+     */
     bool BPlusTree::UpdateInternalChildrenParent(
         BPlusTreeInternalPage* internal_page,
         page_id_t internal_page_id)
@@ -645,12 +758,16 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param header_page_id_hint 给定的 header page，若无则创建
+     */
     bool BPlusTree::InitOrLoadHeaderPage(page_id_t header_page_id_hint)
     {
         if (bpm_ == nullptr) {
             return false;
         }
 
+        // step 1: 若未给定 header page，则新建一个 header page。
         if (header_page_id_hint == INVALID_PAGE_ID) {
             page_id_t new_header_page_id = INVALID_PAGE_ID;
             auto new_page_exp = bpm_->NewPage(&new_header_page_id, PageType::HEADER);
@@ -680,6 +797,7 @@ namespace storage
             return true;
         }
 
+        // step 2: 若给定了 header page，则加载并校验元数据。
         auto header_page_exp = bpm_->FetchPage(header_page_id_hint);
         if (!header_page_exp.has_value()) {
             return false;
@@ -744,12 +862,16 @@ namespace storage
         return bpm_->UnpinPage(header_page_id_, true);
     }
 
+    /**
+     * @param root_page_id 当前根页
+     */
     bool BPlusTree::AdjustRootAfterDelete(page_id_t root_page_id)
     {
         if (bpm_ == nullptr || root_page_id == INVALID_PAGE_ID) {
             return true;
         }
 
+        // step 1: 检查当前根页是否需要收缩。
         auto root_page_exp = bpm_->FetchPage(root_page_id);
         if (!root_page_exp.has_value()) {
             return false;
@@ -788,12 +910,14 @@ namespace storage
             return true;
         }
 
+        // step 2: 若发生根收缩，则修正新根父指针。
         if (new_root_page_id != INVALID_PAGE_ID) {
             if (!SetChildParent(new_root_page_id, INVALID_PAGE_ID)) {
                 return false;
             }
         }
 
+        // step 3: 更新 root_page_id_，写回 header，并删除旧根。
         root_page_id_ = new_root_page_id;
         if (!PersistRootPageIdLocked()) {
             return false;
@@ -802,6 +926,9 @@ namespace storage
         return bpm_->DeletePage(root_page_id);
     }
 
+    /**
+     * @param page_id 失衡节点页号
+     */
     bool BPlusTree::RebalanceAfterDelete(page_id_t page_id)
     {
         if (bpm_ == nullptr || page_id == INVALID_PAGE_ID) {
@@ -810,6 +937,7 @@ namespace storage
 
         page_id_t current_page_id = page_id;
         while (current_page_id != INVALID_PAGE_ID) {
+            // step 1: 若当前节点已成为根，则只需检查根收缩。
             if (current_page_id == root_page_id_) {
                 return AdjustRootAfterDelete(current_page_id);
             }
@@ -844,6 +972,7 @@ namespace storage
                 return bpm_->UnpinPage(current_page_id, false);
             }
 
+            // step 2: 取父页并定位当前节点在父页中的 child 下标。
             auto parent_page_exp = bpm_->FetchPage(parent_page_id);
             if (!parent_page_exp.has_value()) {
                 current_page->WUnLock();
@@ -887,7 +1016,7 @@ namespace storage
                 ? child_at_index(static_cast<uint16_t>(current_index + 1))
                 : INVALID_PAGE_ID;
 
-            // Try borrow from left sibling.
+            // step 3: 优先尝试向左兄弟借键。
             if (left_page_id != INVALID_PAGE_ID) {
                 auto left_page_exp = bpm_->FetchPage(left_page_id);
                 if (!left_page_exp.has_value()) {
@@ -954,7 +1083,7 @@ namespace storage
                 }
             }
 
-            // Try borrow from right sibling.
+            // step 4: 若左借失败，则尝试向右兄弟借键。
             if (right_page_id != INVALID_PAGE_ID) {
                 auto right_page_exp = bpm_->FetchPage(right_page_id);
                 if (!right_page_exp.has_value()) {
@@ -1017,7 +1146,7 @@ namespace storage
                 }
             }
 
-            // Merge with left sibling if possible.
+            // step 5: 若借键失败，则优先与左兄弟合并。
             if (left_page_id != INVALID_PAGE_ID) {
                 auto left_page_exp = bpm_->FetchPage(left_page_id);
                 if (!left_page_exp.has_value()) {
@@ -1067,7 +1196,7 @@ namespace storage
                 continue;
             }
 
-            // Merge right sibling into current.
+            // step 6: 若无左兄弟，则把右兄弟并入当前页。
             if (right_page_id != INVALID_PAGE_ID) {
                 auto right_page_exp = bpm_->FetchPage(right_page_id);
                 if (!right_page_exp.has_value()) {
