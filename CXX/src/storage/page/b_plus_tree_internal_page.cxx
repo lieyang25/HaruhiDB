@@ -1,5 +1,41 @@
 /**
  * CXX/src/storage/page/b_plus_tree_internal_page.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 BPlusTreeInternalPage 的内部页逻辑。
+ *
+ * 主要完成：
+ *
+ * 1. 内部页初始化
+ * 2. left-most child 读写
+ * 3. key / child 查找
+ * 4. 新根构造
+ * 5. 插入与删除 child
+ * 6. 分裂时半页搬移
+ * 7. 合并时整页搬移
+ * 8. 兄弟页再分配
+ *
+ *
+ * ========================= 核心机制 =========================
+ *
+ * Lookup:
+ *   对分隔键做 upper_bound 风格二分查找
+ *   再返回对应 child
+ *
+ * InsertAfter:
+ *   先找到 old_child 的逻辑位置
+ *   再把 [new_key, new_child] 插入其后
+ *
+ * RemoveChildAt:
+ *   child_index == 0 表示删除 left-most child
+ *   其他位置对应删除数组中的某个映射项
+ *
+ * MoveHalfTo / MoveAllTo:
+ *   用于分裂与合并
+ *
+ * MoveFirstToEndOf / MoveLastToFrontOf:
+ *   用于兄弟页再分配
  */
 
 #include "storage/page/b_plus_tree_internal_page.h"
@@ -12,20 +48,25 @@ namespace HaruhiDB
 namespace storage
 {
 
+    /**
+     * @param max_size       最大容量
+     * @param parent_page_id 父页页号
+     */
     bool BPlusTreeInternalPage::InitForNewInternal(
         uint16_t max_size,
         page_id_t parent_page_id) noexcept
     {
+        // step 1: 检查底层 page 与 page_id 是否有效。
         if (GetPage() == nullptr) {
             return false;
         }
 
-        // page_id is expected to be assigned by BufferPoolManager::NewPage.
         const page_id_t page_id = GetPage()->PageId();
         if (page_id == INVALID_PAGE_ID) {
             return false;
         }
 
+        // step 2: 根据物理页面能力修正 max_size。
         const uint16_t physical_max_size = ComputeMaxSize();
         if (physical_max_size == 0) {
             return false;
@@ -34,6 +75,7 @@ namespace storage
             max_size = physical_max_size;
         }
 
+        // step 3: 初始化公共 B+Tree 页头，并清空 left-most child。
         if (!tree_page_.InitForNewPage(page_id, PageType::INTERNAL, max_size, parent_page_id)) {
             return false;
         }
@@ -82,6 +124,7 @@ namespace storage
         if (array == nullptr || index >= GetSize()) {
             return false;
         }
+
         array[index].key = key;
         GetPage()->MarkDirty();
         return true;
@@ -92,6 +135,10 @@ namespace storage
         return ItemAt(index).child_page_id;
     }
 
+    /**
+     * @param child_page_id 目标 child
+     * @param out_index     成功时返回 child 下标
+     */
     bool BPlusTreeInternalPage::FindChildIndex(
         page_id_t child_page_id, uint16_t* out_index) const noexcept
     {
@@ -120,6 +167,9 @@ namespace storage
         return false;
     }
 
+    /**
+     * @param key 查找键
+     */
     page_id_t BPlusTreeInternalPage::Lookup(const KeyType& key) const noexcept
     {
         const uint16_t size = GetSize();
@@ -132,7 +182,7 @@ namespace storage
             return INVALID_PAGE_ID;
         }
 
-        // upper_bound on keys, then route to previous child.
+        // step 1: 对分隔键做 upper_bound 查找。
         uint16_t left = 0;
         uint16_t right = size;
         while (left < right) {
@@ -144,17 +194,24 @@ namespace storage
             }
         }
 
+        // step 2: 根据 upper_bound 结果选择目标 child。
         if (left == 0) {
             return GetLeftMostChild();
         }
         return array[left - 1].child_page_id;
     }
 
+    /**
+     * @param left_child  左子页
+     * @param split_key   分裂键
+     * @param right_child 右子页
+     */
     bool BPlusTreeInternalPage::PopulateNewRoot(
         page_id_t left_child,
         const KeyType& split_key,
         page_id_t right_child) noexcept
     {
+        // step 1: 检查当前页状态是否适合做新根。
         if (GetPage() == nullptr) {
             return false;
         }
@@ -173,6 +230,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 组织为 [left-most child] + [split_key -> right_child]。
         SetLeftMostChild(left_child);
         array[0].key = split_key;
         array[0].child_page_id = right_child;
@@ -180,11 +238,17 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param old_child 原有 child
+     * @param new_key   新分隔键
+     * @param new_child 新 child
+     */
     bool BPlusTreeInternalPage::InsertAfter(
         page_id_t old_child,
         const KeyType& new_key,
         page_id_t new_child) noexcept
     {
+        // step 1: 检查基础状态与容量。
         if (GetPage() == nullptr) {
             return false;
         }
@@ -203,6 +267,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 找到 old_child 的后继插入位置。
         uint16_t insert_idx = 0;
         if (old_child == GetLeftMostChild()) {
             insert_idx = 0;
@@ -220,6 +285,7 @@ namespace storage
             }
         }
 
+        // step 3: 做局部有序性检查。
         if (insert_idx < size) {
             if (new_key > array[insert_idx].key) {
                 return false;
@@ -231,6 +297,7 @@ namespace storage
             }
         }
 
+        // step 4: 整体后移并插入新映射项。
         if (insert_idx < size) {
             std::memmove(
                 array + insert_idx + 1,
@@ -244,8 +311,12 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param child_index child 下标
+     */
     bool BPlusTreeInternalPage::RemoveChildAt(uint16_t child_index) noexcept
     {
+        // step 1: 检查当前页状态。
         if (GetPage() == nullptr) {
             return false;
         }
@@ -260,6 +331,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 特殊处理空页。
         if (size == 0) {
             if (child_index != 0) {
                 return false;
@@ -268,6 +340,7 @@ namespace storage
             return true;
         }
 
+        // step 3: 删除 left-most child。
         if (child_index == 0) {
             SetLeftMostChild(array[0].child_page_id);
             if (size > 1) {
@@ -281,6 +354,7 @@ namespace storage
             return true;
         }
 
+        // step 4: 删除数组中的某个映射项。
         const uint16_t mapping_idx = static_cast<uint16_t>(child_index - 1);
         if (mapping_idx >= size) {
             return false;
@@ -297,9 +371,12 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param recipient 目标内部页
+     */
     void BPlusTreeInternalPage::MoveHalfTo(BPlusTreeInternalPage* recipient) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页和基本状态。
         if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
@@ -318,6 +395,7 @@ namespace storage
             return;
         }
 
+        // step 2: 计算后半部分映射项搬移范围。
         const uint16_t move_start = static_cast<uint16_t>(size / 2);
         const uint16_t move_count = static_cast<uint16_t>(size - move_start);
         if (move_count == 0 || recipient->GetMaxSize() < move_count) {
@@ -333,6 +411,7 @@ namespace storage
             return;
         }
 
+        // step 3: 计算 recipient 的 left-most child。
         page_id_t recipient_leftmost = GetLeftMostChild();
         if (move_start > 0) {
             recipient_leftmost = src[move_start - 1].child_page_id;
@@ -341,6 +420,7 @@ namespace storage
             return;
         }
 
+        // step 4: 搬移后半段数据并更新两页状态。
         std::memcpy(
             dst,
             src + move_start,
@@ -350,17 +430,23 @@ namespace storage
         recipient->SetLeftMostChild(recipient_leftmost);
         recipient->SetSize(move_count);
         SetSize(move_start);
+
         if (move_start == 0) {
             SetLeftMostChild(INVALID_PAGE_ID);
         }
     }
 
+    /**
+     * @param recipient          目标内部页
+     * @param middle_key         父页下推键
+     * @param out_new_middle_key 成功时返回新的上推键
+     */
     bool BPlusTreeInternalPage::MoveFirstToEndOf(
         BPlusTreeInternalPage* recipient,
         const KeyType& middle_key,
         KeyType* out_new_middle_key) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页与参数状态。
         if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
@@ -388,12 +474,15 @@ namespace storage
             return false;
         }
 
+        // step 2: 把父页下推键与当前 left-most child 追加到 recipient 尾部。
         dst[dst_size].key = middle_key;
         dst[dst_size].child_page_id = moved_child;
 
+        // step 3: 当前页提升新的 middle key，并更新 left-most child。
         *out_new_middle_key = src[0].key;
         SetLeftMostChild(src[0].child_page_id);
 
+        // step 4: 删掉源页最前面的映射项。
         if (src_size > 1) {
             std::memmove(
                 src,
@@ -407,12 +496,17 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param recipient          目标内部页
+     * @param middle_key         父页下推键
+     * @param out_new_middle_key 成功时返回新的上推键
+     */
     bool BPlusTreeInternalPage::MoveLastToFrontOf(
         BPlusTreeInternalPage* recipient,
         const KeyType& middle_key,
         KeyType* out_new_middle_key) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页与参数状态。
         if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
@@ -441,6 +535,7 @@ namespace storage
             return false;
         }
 
+        // step 2: recipient 整体后移，把父页下推键插入头部。
         if (dst_size > 0) {
             std::memmove(
                 dst + 1,
@@ -449,8 +544,11 @@ namespace storage
         }
         dst[0].key = middle_key;
         dst[0].child_page_id = recipient->GetLeftMostChild();
+
+        // step 3: 用借来的 child 替换 recipient 的 left-most child。
         recipient->SetLeftMostChild(borrowed_child);
 
+        // step 4: 删除源页最后一个映射项，并把其 key 上推。
         std::memset(src + (src_size - 1), 0, sizeof(MappingType));
 
         recipient->SetSize(static_cast<uint16_t>(dst_size + 1));
@@ -459,11 +557,15 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param recipient  目标内部页
+     * @param middle_key 父页下推键
+     */
     void BPlusTreeInternalPage::MoveAllTo(
         BPlusTreeInternalPage* recipient,
         const KeyType& middle_key) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页和容量状态。
         if (GetPage() == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
@@ -491,8 +593,11 @@ namespace storage
             return;
         }
 
+        // step 2: 先把父页下推键与 src 的 left-most child 追加到 recipient。
         dst[dst_size].key = middle_key;
         dst[dst_size].child_page_id = src_leftmost;
+
+        // step 3: 再把 src 的全部映射项整体搬到 recipient 尾部。
         if (src_size > 0) {
             std::memcpy(
                 dst + dst_size + 1,
@@ -501,6 +606,7 @@ namespace storage
             std::memset(src, 0, sizeof(MappingType) * src_size);
         }
 
+        // step 4: 清空源页逻辑内容。
         recipient->SetSize(static_cast<uint16_t>(dst_size + src_size + 1));
         SetLeftMostChild(INVALID_PAGE_ID);
         SetSize(0);
