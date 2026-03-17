@@ -78,6 +78,8 @@ namespace HaruhiDB
 namespace table
 {
 
+class TableIterator;
+
 class TableHeap {
 public:
     /**

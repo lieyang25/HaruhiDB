@@ -3,32 +3,60 @@
  *
  * ========================= 设计目标 =========================
  *
- * TableIterator 负责在 TableHeap 上做顺序扫描。
+ * TableIterator 用于在 TableHeap 上做顺序扫描。
  *
- * 它提供 STL 风格的最小前向迭代接口：
+ * 它提供最小前向迭代能力，
+ * 用于按页链顺序访问表中的有效 tuple。
  *
- * - `operator*` 读取当前 tuple（拷贝语义）
- * - `operator++` 前进到下一条可见记录
- * - `IsEnd` 判断是否到达末尾
+ * 核心职责：
+ *
+ * 1. 维护当前位置
+ * 2. 跳过已删除记录
+ * 3. 跨页前进
+ * 4. 返回当前 tuple 的拷贝
+ * 5. 返回当前记录 RID
  *
  *
- * ========================= 与 TableHeap 的关系 =========================
+ * ========================= 为什么需要 TableIterator =========================
  *
- * TableHeap 持有页链结构和 BufferPoolManager。
- * TableIterator 依赖 TableHeap 完成：
+ * TableHeap 负责表级组织，
+ * 但顺序扫描整张表时，调用方不应手动处理：
  *
- * - 取页（FetchPage）
- * - 解除 pin（UnpinPage）
- * - 页链跳转（NextPageId）
+ * - 当前页号
+ * - 当前 slot
+ * - 页尾跳转
+ * - 删除记录跳过
+ * - 取页与 unpin
  *
- * 迭代器本身不拥有任何页对象，只维护当前位置状态。
+ * 这些都由 TableIterator 统一封装。
+ *
+ *
+ * ========================= TableIterator 在系统中的位置 =========================
+ *
+ * TableHeap
+ *   ├── Begin()
+ *   └── End()
+ *        │
+ *        ▼
+ *   TableIterator
+ *        │
+ *        ├── operator*()
+ *        ├── operator++()
+ *        └── GetRID()
+ *
+ *
+ * ========================= 当前语义 =========================
+ *
+ * 1. 仅遍历未删除 tuple
+ * 2. 解引用返回 tuple 拷贝
+ * 3. 迭代器本身不拥有页面对象
+ * 4. 页访问期间依赖 TableHeap + BufferPoolManager 完成 pin/unpin
  */
 
 #pragma once
 
 #include "storage/record/rid.h"
 #include "storage/record/tuple.h"
-#include "table/table_heap.h"
 
 #include <cstddef>
 #include <vector>
@@ -37,14 +65,10 @@ namespace HaruhiDB
 {
 namespace table
 {
-/**
- * TableIterator
- *
- * 作用：
- * - 跨页顺序扫描表中的有效 tuple
- * - 在读取期间配合页锁与 pin/unpin 保证访问安全
- */
-class TableIterator {
+class TableHeap;
+
+class TableIterator
+{
 public:
     /**
      * 构造 end 迭代器。
@@ -52,11 +76,11 @@ public:
     TableIterator();
 
     /**
-     * 构造从指定位置开始的迭代器。
+     * 从指定位置构造迭代器。
      *
-     * @param heap       关联的表堆
+     * @param heap       关联表堆
      * @param start_page 起始页号
-     * @param start_slot 起始 slot
+     * @param start_slot 起始槽位
      */
     TableIterator(TableHeap* heap, page_id_t start_page, slot_id_t start_slot);
 
@@ -66,9 +90,9 @@ public:
     record::Tuple operator*() const;
 
     /**
-     * 返回当前迭代器指向记录的 RID。
+     * 返回当前记录的 RID。
      *
-     * 若为 end 迭代器，返回 INVALID RID。
+     * @note 若为 end 迭代器，则返回无效 RID
      */
     record::RID GetRID() const noexcept;
 
@@ -77,17 +101,26 @@ public:
      */
     TableIterator& operator++();
 
+    /**
+     * 比较两个迭代器是否相等。
+     */
     bool operator==(const TableIterator& other) const noexcept;
+
+    /**
+     * 比较两个迭代器是否不等。
+     */
     bool operator!=(const TableIterator& other) const noexcept;
 
+    /**
+     * 判断当前是否为 end 迭代器。
+     */
     bool IsEnd() const noexcept { return at_end_; }
 
 private:
     /**
-     * 从当前 `(cur_page_id_, cur_slot_)` 出发，
-     * 定位下一条可见 tuple。
+     * 从当前位置开始定位下一条有效 tuple。
      *
-     * @return 找到返回 true，否则 false
+     * @return 找到返回 true，否则返回 false
      */
     bool AdvanceToNextValid();
 
@@ -95,7 +128,11 @@ private:
     page_id_t cur_page_id_{INVALID_PAGE_ID};
     slot_id_t cur_slot_{INVALID_SLOT_ID};
     bool at_end_{true};
+
+    /// 当前 tuple 的缓存拷贝
     mutable std::vector<std::byte> tuple_buffer_;
+
+    /// 当前缓存是否有效
     mutable bool tuple_cached_{false};
 };
 
