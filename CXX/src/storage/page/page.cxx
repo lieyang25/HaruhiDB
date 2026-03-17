@@ -27,6 +27,7 @@
 #include "storage/page/page.h"
 
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 
 namespace HaruhiDB
@@ -36,6 +37,11 @@ namespace storage
 
     Page::Page() : pin_count_(0), is_dirty_(false)
     {
+        // 对齐约束：后续会把 RawData 解释为 PersistentHeader/索引页结构体。
+        const auto raw_addr = reinterpret_cast<std::uintptr_t>(data_.data());
+        assert((raw_addr % alignof(PersistentHeader)) == 0 &&
+               "Page::data_ must satisfy PersistentHeader alignment");
+
         // step 1: 清空整页原始字节。
         std::memset(data_.data(), 0, PAGE_SIZE);
 

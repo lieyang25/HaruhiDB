@@ -38,20 +38,13 @@ namespace storage
             return false;
         }
 
-        auto* internal = InternalHeader();
-        if (internal == nullptr) {
-            return false;
-        }
-
-        internal->leftmost_child_page_id = INVALID_PAGE_ID;
-        page_->MarkDirty();
+        SetLeftMostChild(INVALID_PAGE_ID);
         return true;
     }
 
     uint16_t BPlusTreeInternalPage::ComputeMaxSize() const noexcept
     {
-        constexpr size_t body_offset =
-            sizeof(PersistentHeader) + sizeof(BPlusTreeInternalExtraHeader);
+        constexpr size_t body_offset = sizeof(PersistentHeader);
 
         if (body_offset >= PAGE_SIZE) {
             return 0;
@@ -62,19 +55,12 @@ namespace storage
 
     page_id_t BPlusTreeInternalPage::GetLeftMostChild() const noexcept
     {
-        const auto* header = InternalHeader();
-        return header == nullptr ? INVALID_PAGE_ID : header->leftmost_child_page_id;
+        return GetNodeLinkPageId();
     }
 
     void BPlusTreeInternalPage::SetLeftMostChild(page_id_t child_page_id) noexcept
     {
-        auto* header = InternalHeader();
-        if (header == nullptr) {
-            return;
-        }
-
-        header->leftmost_child_page_id = child_page_id;
-        page_->MarkDirty();
+        SetNodeLinkPageId(child_page_id);
     }
 
     const BPlusTreeInternalPage::MappingType& BPlusTreeInternalPage::ItemAt(uint16_t index) const noexcept
@@ -520,26 +506,6 @@ namespace storage
         SetSize(0);
     }
 
-    BPlusTreeInternalExtraHeader* BPlusTreeInternalPage::InternalHeader() noexcept
-    {
-        if (page_ == nullptr) {
-            return nullptr;
-        }
-
-        auto* raw = page_->RawData();
-        return reinterpret_cast<BPlusTreeInternalExtraHeader*>(raw + sizeof(PersistentHeader));
-    }
-
-    const BPlusTreeInternalExtraHeader* BPlusTreeInternalPage::InternalHeader() const noexcept
-    {
-        if (page_ == nullptr) {
-            return nullptr;
-        }
-
-        const auto* raw = page_->RawData();
-        return reinterpret_cast<const BPlusTreeInternalExtraHeader*>(raw + sizeof(PersistentHeader));
-    }
-
     BPlusTreeInternalPage::MappingType* BPlusTreeInternalPage::Array() noexcept
     {
         if (page_ == nullptr) {
@@ -547,8 +513,7 @@ namespace storage
         }
 
         auto* raw = page_->RawData();
-        return reinterpret_cast<MappingType*>(
-            raw + sizeof(PersistentHeader) + sizeof(BPlusTreeInternalExtraHeader));
+        return reinterpret_cast<MappingType*>(raw + sizeof(PersistentHeader));
     }
 
     const BPlusTreeInternalPage::MappingType* BPlusTreeInternalPage::Array() const noexcept
@@ -558,8 +523,7 @@ namespace storage
         }
 
         const auto* raw = page_->RawData();
-        return reinterpret_cast<const MappingType*>(
-            raw + sizeof(PersistentHeader) + sizeof(BPlusTreeInternalExtraHeader));
+        return reinterpret_cast<const MappingType*>(raw + sizeof(PersistentHeader));
     }
 
 } // namespace storage

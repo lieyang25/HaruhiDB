@@ -4,9 +4,12 @@
 
 #include "gtest/gtest.h"
 
+#include "storage/page/b_plus_tree_internal_page.h"
+#include "storage/page/b_plus_tree_leaf_page.h"
 #include "storage/page/b_plus_tree_page.h"
 #include "storage/page/page.h"
 
+#include <cstdint>
 #include <limits>
 
 namespace HaruhiDB::storage
@@ -76,6 +79,23 @@ TEST(BPlusTreePageTest, RejectInvalidPageTypeForInit)
     BPlusTreePage tree_page(&page);
 
     EXPECT_FALSE(tree_page.InitForNewPage(5, PageType::HEAP, 32));
+}
+
+TEST(BPlusTreePageTest, BPlusTreeLayoutAlignment)
+{
+    Page page;
+
+    const auto raw = reinterpret_cast<std::uintptr_t>(page.RawData());
+    EXPECT_EQ(raw % alignof(PersistentHeader), 0u);
+
+    const auto opaque = reinterpret_cast<std::uintptr_t>(page.Header()->opaque);
+    EXPECT_EQ(opaque % alignof(BPlusTreeOpaqueHeader), 0u);
+
+    const auto leaf_array = raw + sizeof(PersistentHeader);
+    EXPECT_EQ(leaf_array % alignof(BPlusTreeLeafPage::MappingType), 0u);
+
+    const auto internal_array = raw + sizeof(PersistentHeader);
+    EXPECT_EQ(internal_array % alignof(BPlusTreeInternalPage::MappingType), 0u);
 }
 
 } // namespace HaruhiDB::storage

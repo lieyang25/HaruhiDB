@@ -65,7 +65,8 @@ namespace storage
         opaque->parent_page_id = parent_page_id;
         opaque->size = 0;
         opaque->max_size = max_size;
-        std::fill(std::begin(opaque->reserved), std::end(opaque->reserved), 0);
+        opaque->node_link_page_id = INVALID_PAGE_ID;
+        opaque->reserved = 0;
 
         // step 4: 标记脏页并释放写锁。
         page_->MarkDirty();

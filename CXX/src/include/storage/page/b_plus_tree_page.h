@@ -15,7 +15,8 @@
  * 2. 维护 parent_page_id
  * 3. 维护当前键数量 size
  * 4. 维护容量上限 max_size
- * 5. 提供根页 / 叶页 / 内部页判断
+ * 5. 维护节点专有链接页号（LEAF next / INTERNAL leftmost child）
+ * 6. 提供根页 / 叶页 / 内部页判断
  *
  *
  * ========================= 为什么需要 BPlusTreePage =========================
@@ -77,7 +78,9 @@ namespace storage
         page_id_t parent_page_id{INVALID_PAGE_ID};
         uint16_t size{0};
         uint16_t max_size{0};
-        uint8_t reserved[8]{};
+        // LEAF: next_page_id, INTERNAL: leftmost_child_page_id
+        page_id_t node_link_page_id{INVALID_PAGE_ID};
+        uint32_t reserved{0};
     };
 
     static_assert(std::is_trivially_copyable_v<BPlusTreeOpaqueHeader>);
@@ -218,6 +221,34 @@ namespace storage
         }
 
     protected:
+        /**
+         * 返回节点专有链接页号。
+         *
+         * LEAF: next_page_id
+         * INTERNAL: leftmost_child_page_id
+         */
+        page_id_t GetNodeLinkPageId() const noexcept
+        {
+            const auto* header = OpaqueHeader();
+            return header == nullptr ? INVALID_PAGE_ID : header->node_link_page_id;
+        }
+
+        /**
+         * 设置节点专有链接页号。
+         *
+         * LEAF: next_page_id
+         * INTERNAL: leftmost_child_page_id
+         */
+        void SetNodeLinkPageId(page_id_t link_page_id) noexcept
+        {
+            auto* header = OpaqueHeader();
+            if (header == nullptr) {
+                return;
+            }
+            header->node_link_page_id = link_page_id;
+            page_->MarkDirty();
+        }
+
         /**
          * 返回 B+Tree 公共 opaque 头部。
          */

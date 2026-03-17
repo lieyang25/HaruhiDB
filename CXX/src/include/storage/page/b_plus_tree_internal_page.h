@@ -13,15 +13,6 @@ namespace HaruhiDB
 {
 namespace storage
 {
-
-    struct BPlusTreeInternalExtraHeader
-    {
-        page_id_t leftmost_child_page_id{INVALID_PAGE_ID};
-    };
-
-    static_assert(std::is_trivially_copyable_v<BPlusTreeInternalExtraHeader>);
-    static_assert((sizeof(PersistentHeader) % alignof(BPlusTreeInternalExtraHeader)) == 0);
-
     class BPlusTreeInternalPage : public BPlusTreePage
     {
     public:
@@ -35,8 +26,7 @@ namespace storage
         };
 
         static_assert(std::is_trivially_copyable_v<MappingType>);
-        static_assert(
-            ((sizeof(PersistentHeader) + sizeof(BPlusTreeInternalExtraHeader)) % alignof(MappingType)) == 0);
+        static_assert((sizeof(PersistentHeader) % alignof(MappingType)) == 0);
 
     public:
         // Concurrency contract:
@@ -88,9 +78,6 @@ namespace storage
         void MoveAllTo(BPlusTreeInternalPage* recipient, const KeyType& middle_key) noexcept;
 
     private:
-        BPlusTreeInternalExtraHeader* InternalHeader() noexcept;
-        const BPlusTreeInternalExtraHeader* InternalHeader() const noexcept;
-
         MappingType* Array() noexcept;
         const MappingType* Array() const noexcept;
     };

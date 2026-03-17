@@ -1,5 +1,40 @@
 /**
  * CXX/src/storage/page/b_plus_tree_leaf_page.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 BPlusTreeLeafPage 的叶子页逻辑。
+ *
+ * 主要完成：
+ *
+ * 1. 叶子页初始化
+ * 2. next_page_id 读写
+ * 3. 有序数组查找
+ * 4. 插入与删除
+ * 5. 分裂时半页搬移
+ * 6. 合并时整页搬移
+ * 7. 兄弟页间借键
+ *
+ *
+ * ========================= 核心机制 =========================
+ *
+ * KeyIndex:
+ *   对有序数组做 lower_bound 风格二分查找
+ *
+ * Insert:
+ *   先定位插入位置
+ *   再整体后移
+ *   最后写入新项
+ *
+ * Remove:
+ *   先定位目标项
+ *   再整体前移
+ *
+ * MoveHalfTo / MoveAllTo:
+ *   用于分裂与合并场景
+ *
+ * MoveFirstToEndOf / MoveLastToFrontOf:
+ *   用于兄弟页再分配场景
  */
 
 #include "storage/page/b_plus_tree_leaf_page.h"
@@ -12,20 +47,25 @@ namespace HaruhiDB
 namespace storage
 {
 
+    /**
+     * @param max_size       最大容量
+     * @param parent_page_id 父页页号
+     */
     bool BPlusTreeLeafPage::InitForNewLeaf(
         uint16_t max_size,
         page_id_t parent_page_id) noexcept
     {
+        // step 1: 检查底层 page 与 page_id 是否有效。
         if (page_ == nullptr) {
             return false;
         }
 
-        // page_id is expected to be assigned by BufferPoolManager::NewPage.
         const page_id_t page_id = page_->PageId();
         if (page_id == INVALID_PAGE_ID) {
             return false;
         }
 
+        // step 2: 根据物理页面能力修正 max_size。
         const uint16_t physical_max_size = ComputeMaxSize();
         if (physical_max_size == 0) {
             return false;
@@ -34,24 +74,19 @@ namespace storage
             max_size = physical_max_size;
         }
 
+        // step 3: 初始化公共 B+Tree 页头。
         if (!InitForNewPage(page_id, PageType::LEAF, max_size, parent_page_id)) {
             return false;
         }
 
-        auto* leaf = LeafHeader();
-        if (leaf == nullptr) {
-            return false;
-        }
-
-        leaf->next_page_id = INVALID_PAGE_ID;
-        page_->MarkDirty();
+        // step 4: 初始化叶子链表指针。
+        SetNextPageId(INVALID_PAGE_ID);
         return true;
     }
 
     uint16_t BPlusTreeLeafPage::ComputeMaxSize() const noexcept
     {
-        constexpr size_t body_offset =
-            sizeof(PersistentHeader) + sizeof(BPlusTreeLeafExtraHeader);
+        constexpr size_t body_offset = sizeof(PersistentHeader);
 
         if (body_offset >= PAGE_SIZE) {
             return 0;
@@ -62,19 +97,12 @@ namespace storage
 
     page_id_t BPlusTreeLeafPage::GetNextPageId() const noexcept
     {
-        const auto* header = LeafHeader();
-        return header == nullptr ? INVALID_PAGE_ID : header->next_page_id;
+        return GetNodeLinkPageId();
     }
 
     void BPlusTreeLeafPage::SetNextPageId(page_id_t next_page_id) noexcept
     {
-        auto* header = LeafHeader();
-        if (header == nullptr) {
-            return;
-        }
-
-        header->next_page_id = next_page_id;
-        page_->MarkDirty();
+        SetNodeLinkPageId(next_page_id);
     }
 
     const BPlusTreeLeafPage::MappingType& BPlusTreeLeafPage::ItemAt(uint16_t index) const noexcept
@@ -95,6 +123,9 @@ namespace storage
         return ItemAt(index).value;
     }
 
+    /**
+     * @param key 目标键
+     */
     uint16_t BPlusTreeLeafPage::KeyIndex(const KeyType& key) const noexcept
     {
         const auto* array = Array();
@@ -116,6 +147,10 @@ namespace storage
         return left;
     }
 
+    /**
+     * @param key       目标键
+     * @param out_value 成功时返回对应 RID
+     */
     bool BPlusTreeLeafPage::Lookup(const KeyType& key, ValueType* out_value) const noexcept
     {
         if (out_value == nullptr) {
@@ -145,8 +180,13 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param key   键
+     * @param value 值
+     */
     bool BPlusTreeLeafPage::Insert(const KeyType& key, const ValueType& value) noexcept
     {
+        // step 1: 检查当前页与容量是否合法。
         if (page_ == nullptr) {
             return false;
         }
@@ -162,11 +202,13 @@ namespace storage
             return false;
         }
 
+        // step 2: 找到插入位置，并拒绝重复 key。
         const uint16_t idx = KeyIndex(key);
         if (idx < size && array[idx].key == key) {
             return false;
         }
 
+        // step 3: 为新元素腾出位置。
         if (idx < size) {
             std::memmove(
                 array + idx + 1,
@@ -174,6 +216,7 @@ namespace storage
                 sizeof(MappingType) * (size - idx));
         }
 
+        // step 4: 写入新元素并更新 size。
         array[idx].key = key;
         array[idx].value = value;
 
@@ -181,8 +224,12 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param key 目标键
+     */
     bool BPlusTreeLeafPage::Remove(const KeyType& key) noexcept
     {
+        // step 1: 检查当前页与数组状态。
         if (page_ == nullptr) {
             return false;
         }
@@ -197,11 +244,13 @@ namespace storage
             return false;
         }
 
+        // step 2: 定位目标 key。
         const uint16_t idx = KeyIndex(key);
         if (idx >= size || array[idx].key != key) {
             return false;
         }
 
+        // step 3: 删除目标项并整体前移。
         if (idx + 1 < size) {
             std::memmove(
                 array + idx,
@@ -214,9 +263,12 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param recipient 目标叶子页
+     */
     void BPlusTreeLeafPage::MoveHalfTo(BPlusTreeLeafPage* recipient) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页和基本状态。
         if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
@@ -235,6 +287,7 @@ namespace storage
             return;
         }
 
+        // step 2: 计算后半部分搬移范围。
         const uint16_t move_start = static_cast<uint16_t>(size / 2);
         const uint16_t move_count = static_cast<uint16_t>(size - move_start);
         if (move_count == 0 || recipient->GetMaxSize() < move_count) {
@@ -250,6 +303,7 @@ namespace storage
             return;
         }
 
+        // step 3: 复制后半段到目标页，并清理源页尾部。
         std::memcpy(
             dst,
             src + move_start,
@@ -259,13 +313,17 @@ namespace storage
         recipient->SetSize(move_count);
         SetSize(move_start);
 
+        // step 4: 维护叶子链表。
         recipient->SetNextPageId(GetNextPageId());
         SetNextPageId(recipient->GetPageId());
     }
 
+    /**
+     * @param recipient 目标叶子页
+     */
     void BPlusTreeLeafPage::MoveAllTo(BPlusTreeLeafPage* recipient) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页和基本状态。
         if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return;
         }
@@ -293,6 +351,7 @@ namespace storage
             return;
         }
 
+        // step 2: 把源页全部内容追加到目标页末尾。
         std::memcpy(
             dst + dst_size,
             src,
@@ -301,13 +360,18 @@ namespace storage
 
         recipient->SetSize(static_cast<uint16_t>(dst_size + src_size));
         SetSize(0);
+
+        // step 3: 维护叶子链表。
         recipient->SetNextPageId(GetNextPageId());
         SetNextPageId(INVALID_PAGE_ID);
     }
 
+    /**
+     * @param recipient 目标叶子页
+     */
     bool BPlusTreeLeafPage::MoveFirstToEndOf(BPlusTreeLeafPage* recipient) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页和容量状态。
         if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
@@ -330,6 +394,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 把源页首元素追加到目标页尾部，并回收源页首位。
         dst[dst_size] = src[0];
         if (src_size > 1) {
             std::memmove(
@@ -344,9 +409,12 @@ namespace storage
         return true;
     }
 
+    /**
+     * @param recipient 目标叶子页
+     */
     bool BPlusTreeLeafPage::MoveLastToFrontOf(BPlusTreeLeafPage* recipient) noexcept
     {
-        // Caller must hold write latches for both source and recipient pages.
+        // step 1: 检查源页、目标页和容量状态。
         if (page_ == nullptr || recipient == nullptr || recipient->GetPage() == nullptr) {
             return false;
         }
@@ -369,6 +437,7 @@ namespace storage
             return false;
         }
 
+        // step 2: 目标页整体后移，把源页尾元素插入到目标页头部。
         if (dst_size > 0) {
             std::memmove(
                 dst + 1,
@@ -383,26 +452,6 @@ namespace storage
         return true;
     }
 
-    BPlusTreeLeafExtraHeader* BPlusTreeLeafPage::LeafHeader() noexcept
-    {
-        if (page_ == nullptr) {
-            return nullptr;
-        }
-
-        auto* raw = page_->RawData();
-        return reinterpret_cast<BPlusTreeLeafExtraHeader*>(raw + sizeof(PersistentHeader));
-    }
-
-    const BPlusTreeLeafExtraHeader* BPlusTreeLeafPage::LeafHeader() const noexcept
-    {
-        if (page_ == nullptr) {
-            return nullptr;
-        }
-
-        const auto* raw = page_->RawData();
-        return reinterpret_cast<const BPlusTreeLeafExtraHeader*>(raw + sizeof(PersistentHeader));
-    }
-
     BPlusTreeLeafPage::MappingType* BPlusTreeLeafPage::Array() noexcept
     {
         if (page_ == nullptr) {
@@ -410,8 +459,7 @@ namespace storage
         }
 
         auto* raw = page_->RawData();
-        return reinterpret_cast<MappingType*>(
-            raw + sizeof(PersistentHeader) + sizeof(BPlusTreeLeafExtraHeader));
+        return reinterpret_cast<MappingType*>(raw + sizeof(PersistentHeader));
     }
 
     const BPlusTreeLeafPage::MappingType* BPlusTreeLeafPage::Array() const noexcept
@@ -421,8 +469,7 @@ namespace storage
         }
 
         const auto* raw = page_->RawData();
-        return reinterpret_cast<const MappingType*>(
-            raw + sizeof(PersistentHeader) + sizeof(BPlusTreeLeafExtraHeader));
+        return reinterpret_cast<const MappingType*>(raw + sizeof(PersistentHeader));
     }
 
 } // namespace storage

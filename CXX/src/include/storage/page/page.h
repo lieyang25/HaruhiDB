@@ -222,8 +222,8 @@ namespace storage
         /// 当前页面是否为脏页
         std::atomic<bool> is_dirty_;
 
-        /// 页面完整原始字节数据
-        page_data_t data_;
+        /// 页面完整原始字节数据。强制按 max_align_t 对齐，保证结构化解释安全。
+        alignas(std::max_align_t) page_data_t data_;
 
         /// 页级读写锁
         std::shared_mutex latch_;
