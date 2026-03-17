@@ -1,5 +1,34 @@
 /**
  * CXX/src/catalog/table_info.cxx
+ *
+ * ========================= 实现目标 =========================
+ *
+ * 本文件实现 TableInfo 的运行时组织逻辑。
+ *
+ * 主要完成：
+ *
+ * 1. 表信息对象构造
+ * 2. 索引 oid 登记
+ * 3. 索引创建
+ * 4. 索引加载
+ * 5. 索引查找
+ * 6. 调试字符串输出
+ *
+ *
+ * ========================= 核心流程 =========================
+ *
+ * CreateIndex:
+ *   检查参数
+ *   检查 oid / name 冲突
+ *   创建 BPlusTree
+ *   记录 header_page_id
+ *   挂接到 indexes_
+ *
+ * LoadIndex:
+ *   检查参数
+ *   检查 oid / name 冲突
+ *   用已有 header_page_id 构造 BPlusTree
+ *   挂接到 indexes_
  */
 
 #include "catalog/table_info.h"
@@ -16,6 +45,12 @@ namespace catalog
 {
     namespace
     {
+        /**
+         * 将索引名标准化为小写。
+         *
+         * @param index_name 原始索引名
+         * @return 标准化后的索引名
+         */
         std::string NormalizeIndexName(std::string_view index_name)
         {
             std::string normalized(index_name);
@@ -26,6 +61,12 @@ namespace catalog
         }
     } // namespace
 
+    /**
+     * @param oid        表 oid
+     * @param name       表名
+     * @param schema     表结构
+     * @param table_heap 表数据入口
+     */
     TableInfo::TableInfo(
         table_oid_t oid,
         std::string name,
@@ -45,6 +86,9 @@ namespace catalog
         }
     }
 
+    /**
+     * @param index_oid 索引 oid
+     */
     void TableInfo::AddIndexOid(index_oid_t index_oid)
     {
         if (!std::ranges::contains(index_oids_, index_oid)) {
@@ -52,11 +96,17 @@ namespace catalog
         }
     }
 
+    /**
+     * @param index_oid  索引 oid
+     * @param index_name 索引名
+     * @param bpm        缓冲池管理器
+     */
     std::expected<storage::BPlusTree*, std::string> TableInfo::CreateIndex(
         index_oid_t index_oid,
         std::string index_name,
         buffer::BufferPoolManager* bpm)
     {
+        // step 1: 检查基础参数。
         if (bpm == nullptr) {
             return std::unexpected("TableInfo::CreateIndex: buffer pool manager is null");
         }
@@ -64,6 +114,7 @@ namespace catalog
             return std::unexpected("TableInfo::CreateIndex: index name must not be empty");
         }
 
+        // step 2: 检查索引 oid 与名称是否冲突。
         const std::string normalized = NormalizeIndexName(index_name);
         for (const auto& entry : indexes_) {
             if (entry.index_oid == index_oid) {
@@ -74,12 +125,14 @@ namespace catalog
             }
         }
 
+        // step 3: 创建索引对象并检查 header page。
         auto index = std::make_unique<storage::BPlusTree>(bpm);
         const page_id_t header_page_id = index->HeaderPageId();
         if (header_page_id == INVALID_PAGE_ID) {
             return std::unexpected("TableInfo::CreateIndex: failed to allocate index header page");
         }
 
+        // step 4: 把索引挂接到当前表信息。
         AddIndexOid(index_oid);
         indexes_.push_back(IndexEntry{
             .index_oid = index_oid,
@@ -87,15 +140,23 @@ namespace catalog
             .header_page_id = header_page_id,
             .index = std::move(index),
         });
+
         return indexes_.back().index.get();
     }
 
+    /**
+     * @param index_oid      索引 oid
+     * @param index_name     索引名
+     * @param header_page_id 索引 header page
+     * @param bpm            缓冲池管理器
+     */
     std::expected<storage::BPlusTree*, std::string> TableInfo::LoadIndex(
         index_oid_t index_oid,
         std::string index_name,
         page_id_t header_page_id,
         buffer::BufferPoolManager* bpm)
     {
+        // step 1: 检查基础参数。
         if (bpm == nullptr) {
             return std::unexpected("TableInfo::LoadIndex: buffer pool manager is null");
         }
@@ -106,6 +167,7 @@ namespace catalog
             return std::unexpected("TableInfo::LoadIndex: header page id is invalid");
         }
 
+        // step 2: 检查索引 oid 与名称是否冲突。
         const std::string normalized = NormalizeIndexName(index_name);
         for (const auto& entry : indexes_) {
             if (entry.index_oid == index_oid) {
@@ -116,11 +178,13 @@ namespace catalog
             }
         }
 
+        // step 3: 按给定 header page 加载索引对象。
         auto index = std::make_unique<storage::BPlusTree>(bpm, header_page_id);
         if (index->HeaderPageId() != header_page_id) {
             return std::unexpected("TableInfo::LoadIndex: header page id mismatch");
         }
 
+        // step 4: 把索引挂接到当前表信息。
         AddIndexOid(index_oid);
         indexes_.push_back(IndexEntry{
             .index_oid = index_oid,
@@ -128,6 +192,7 @@ namespace catalog
             .header_page_id = header_page_id,
             .index = std::move(index),
         });
+
         return indexes_.back().index.get();
     }
 
