@@ -14,6 +14,7 @@
 - [系统架构总览](CXX/docs/architecture_overview.md)
 - [运行与数据链路](CXX/docs/execution_and_dataflow.md)
 - [持久化与恢复](CXX/docs/persistence_and_recovery.md)
+- [数据库文件与 WAL 布局](CXX/docs/file_layout.md)
 - [当前实现使用方法](CXX/docs/integration_guide.md)
 - [可运行示例](CXX/example/README.md)
 

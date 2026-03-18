@@ -14,7 +14,8 @@
 1. [系统架构总览](architecture_overview.md)
 2. [运行与数据链路](execution_and_dataflow.md)
 3. [持久化与恢复](persistence_and_recovery.md)
-4. [当前实现使用方法](integration_guide.md)
+4. [数据库文件与 WAL 布局](file_layout.md)
+5. [当前实现使用方法](integration_guide.md)
 
 如果只是想快速恢复全局理解，先读第 1 篇；如果要继续改代码，建议按上面的顺序读完。
 
@@ -48,6 +49,15 @@
 - `Catalog`、`TableHeap`、`BPlusTree` 的恢复入口分别是什么
 - `BufferPoolManager`、`DiskManager`、`WalManager` 如何配合
 - 当前恢复语义有哪些边界
+
+### [file_layout.md](file_layout.md)
+
+回答下面这些问题：
+
+- 当前 `.db` 文件按什么方式组织
+- 多张表与索引如何共享同一个全局页空间
+- 表和索引分别靠什么入口页恢复
+- `.wal` 文件当前按什么记录格式顺序追加
 
 ### [integration_guide.md](integration_guide.md)
 
