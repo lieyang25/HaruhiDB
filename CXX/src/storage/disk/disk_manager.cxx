@@ -151,6 +151,7 @@ namespace storage
             dbheader.version = DB_VERSION;
             dbheader.next_page_id = next_page_id_;
             dbheader.free_list_head = INVALID_PAGE_ID;
+            dbheader.catalog_meta_page_id = INVALID_PAGE_ID;
 
             std::array<std::byte, PAGE_SIZE> buffer{};
             std::memcpy(buffer.data(), &dbheader, sizeof(DBHeader));
@@ -203,9 +204,13 @@ namespace storage
         // step 3: 用头页内容恢复内存中的分配状态。
         next_page_id_ = static_cast<page_id_t>(dbheader.next_page_id);
         free_list_head_ = static_cast<page_id_t>(dbheader.free_list_head);
+        catalog_meta_page_id_ = static_cast<page_id_t>(dbheader.catalog_meta_page_id);
 
         if (next_page_id_ < 1) {
             next_page_id_ = 1;
+        }
+        if (catalog_meta_page_id_ == 0) {
+            catalog_meta_page_id_ = INVALID_PAGE_ID;
         }
 
         return {};
@@ -222,6 +227,7 @@ namespace storage
         dbheader.version = DB_VERSION;
         dbheader.next_page_id = next_page_id_;
         dbheader.free_list_head = free_list_head_;
+        dbheader.catalog_meta_page_id = catalog_meta_page_id_;
 
         // step 2: 序列化后覆盖写入 Page 0。
         std::array<std::byte, PAGE_SIZE> buffer{};
@@ -504,6 +510,27 @@ namespace storage
 
         file_.flush();
         return {};
+    }
+
+    /**
+     * @param catalog_meta_page_id catalog 元数据入口页号
+     */
+    std::expected<void, IOErr> DiskManager::SetCatalogMetaPageId(page_id_t catalog_meta_page_id)
+    {
+        if (catalog_meta_page_id == 0) {
+            return std::unexpected(IOErr{
+                "SetCatalogMetaPageId: page 0 is reserved for DB header",
+                HaruhiDB::ErrorCode::PersistHeaderFailed});
+        }
+        if (catalog_meta_page_id != INVALID_PAGE_ID &&
+            catalog_meta_page_id >= next_page_id_) {
+            return std::unexpected(IOErr{
+                "SetCatalogMetaPageId: page id out of range",
+                HaruhiDB::ErrorCode::PersistHeaderFailed});
+        }
+
+        catalog_meta_page_id_ = catalog_meta_page_id;
+        return PersistHeader();
     }
 
 } // namespace storage

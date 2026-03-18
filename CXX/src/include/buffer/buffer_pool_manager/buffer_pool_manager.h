@@ -166,6 +166,11 @@ namespace buffer
          */
         std::expected<void, BufferPoolErr> FlushAllPages();
 
+        /**
+         * 返回底层 DiskManager。
+         */
+        storage::DiskManager* GetDiskManager() const noexcept { return disk_manager_; }
+
     private:
         /**
          * 获取一个可用 frame。

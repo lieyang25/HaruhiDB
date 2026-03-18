@@ -3,6 +3,7 @@
 补充阅读：
 
 - [功能闭环审查与 Catalog 持久化补充说明](CXX/docs/functional_closure_review.md)
+- [功能闭环审查更新（2026-03-18）](CXX/docs/functional_closure_review_update_20260318.md)
 
 ## 项目概述
 

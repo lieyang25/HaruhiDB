@@ -71,10 +71,11 @@ namespace storage
         uint32_t version;
         page_id_t next_page_id;
         page_id_t free_list_head;
+        page_id_t catalog_meta_page_id;
     };
 
     static_assert(std::is_trivially_copyable_v<DBHeader>);
-    static_assert(sizeof(DBHeader) == 16, "DBHeader size must be 16 bytes");
+    static_assert(sizeof(DBHeader) == 20, "DBHeader size must be 20 bytes");
 
     /**
      * 磁盘 I/O 错误信息。
@@ -147,6 +148,18 @@ namespace storage
          */
         auto Flush() -> std::expected<void, IOErr>;
 
+        /**
+         * 返回 catalog 元数据入口页号。
+         */
+        page_id_t CatalogMetaPageId() const noexcept { return catalog_meta_page_id_; }
+
+        /**
+         * 设置 catalog 元数据入口页号并持久化到头页。
+         *
+         * @param catalog_meta_page_id 入口页号，允许 INVALID_PAGE_ID 表示未初始化
+         */
+        auto SetCatalogMetaPageId(page_id_t catalog_meta_page_id) -> std::expected<void, IOErr>;
+
     private:
         /**
          * 打开数据库文件；若不存在则创建。
@@ -180,6 +193,9 @@ namespace storage
 
         /// 空闲页链表头
         page_id_t free_list_head_{INVALID_PAGE_ID};
+
+        /// catalog 元数据页链入口
+        page_id_t catalog_meta_page_id_{INVALID_PAGE_ID};
     };
 
 } // namespace storage

@@ -55,12 +55,12 @@
  *
  * ========================= 当前语义 =========================
  *
- * 当前为最小内存版 Catalog：
+ * 当前为最小持久化 Catalog：
  *
- * - 不做持久化 catalog
- * - 不做系统表恢复
- * - 不做复杂 DDL
- * - 提供最小索引登记 / 恢复入口
+ * - 支持表与索引元数据的持久化与重启自动恢复
+ * - 持久化入口由数据库头页中的 catalog_meta_page_id 指向
+ * - 不做系统表 SQL 自举
+ * - 不做复杂 DDL 历史管理
  * - 表与索引对象生命周期由 Catalog 持有
  */
 
@@ -72,6 +72,7 @@
 
 #include <expected>
 #include <memory>
+#include <span>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -237,6 +238,90 @@ namespace catalog
         index_oid_t NextIndexOid() const noexcept;
 
     private:
+        struct TableMeta
+        {
+            table_oid_t table_oid{0};
+            std::string table_name;
+            Schema schema;
+            page_id_t first_page_id{INVALID_PAGE_ID};
+        };
+
+        struct IndexMeta
+        {
+            index_oid_t index_oid{0};
+            table_oid_t table_oid{0};
+            std::string index_name;
+            page_id_t header_page_id{INVALID_PAGE_ID};
+        };
+
+        struct CatalogMetaSnapshot
+        {
+            table_oid_t next_table_oid{0};
+            index_oid_t next_index_oid{0};
+            std::vector<TableMeta> tables;
+            std::vector<IndexMeta> indexes;
+        };
+
+        /**
+         * 从持久化 catalog 元数据重建运行时目录。
+         */
+        std::expected<void, std::string> LoadCatalogMeta();
+
+        /**
+         * 将当前运行时目录序列化并写回 catalog 元数据页链。
+         *
+         * @note 调用方需已持有 latch_ 写锁
+         */
+        std::expected<void, std::string> PersistCatalogMetaLocked();
+
+        /**
+         * 读取 catalog 元数据页链。
+         */
+        std::expected<std::vector<std::byte>, std::string>
+        ReadCatalogMetaPayload(page_id_t catalog_meta_page_id) const;
+
+        /**
+         * 把给定 payload 写入 catalog 元数据页链。
+         *
+         * @note 调用方需已持有 latch_ 写锁
+         */
+        std::expected<void, std::string>
+        WriteCatalogMetaPayloadLocked(std::span<const std::byte> payload);
+
+        /**
+         * 确保存在 catalog 元数据入口页。
+         *
+         * @note 调用方需已持有 latch_ 写锁
+         */
+        std::expected<page_id_t, std::string> EnsureCatalogMetaEntryPageLocked();
+
+        /**
+         * 采集当前目录状态为持久化快照。
+         *
+         * @note 调用方需已持有 latch_ 锁
+         */
+        CatalogMetaSnapshot BuildMetaSnapshotLocked() const;
+
+        /**
+         * 序列化 catalog 快照。
+         */
+        std::expected<std::vector<std::byte>, std::string>
+        SerializeCatalogMeta(const CatalogMetaSnapshot& snapshot) const;
+
+        /**
+         * 反序列化 catalog 快照。
+         */
+        std::expected<CatalogMetaSnapshot, std::string>
+        DeserializeCatalogMeta(std::span<const std::byte> payload) const;
+
+        /**
+         * 根据快照重建运行时目录。
+         *
+         * @note 调用方需已持有 latch_ 写锁
+         */
+        std::expected<void, std::string>
+        BuildRuntimeFromMetaLocked(const CatalogMetaSnapshot& snapshot);
+
         /**
          * 创建一张新的 table heap。
          */

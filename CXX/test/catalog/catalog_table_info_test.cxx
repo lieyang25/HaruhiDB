@@ -9,8 +9,11 @@
 #include "catalog/column.h"
 #include "catalog/schema.h"
 #include "storage/disk/disk_manager.h"
+#include "storage/record/tuple.h"
+#include "storage/wal/wal_manager.h"
 #include "type/type.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -29,6 +32,15 @@ namespace
         });
         EXPECT_TRUE(schema_exp.has_value());
         return std::move(schema_exp.value());
+    }
+
+    record::Tuple MakeTupleFromString(const std::string& text)
+    {
+        std::vector<std::byte> bytes(text.size());
+        for (size_t i = 0; i < text.size(); ++i) {
+            bytes[i] = static_cast<std::byte>(text[i]);
+        }
+        return record::Tuple(std::move(bytes));
     }
 } // namespace
 
@@ -162,16 +174,47 @@ TEST_F(CatalogTableInfoTest, CatalogCreateIndexAndLookup)
     EXPECT_EQ(out, record::RID(100, 20));
 }
 
-TEST_F(CatalogTableInfoTest, CatalogLoadIndexFromHeaderPageId)
+TEST_F(CatalogTableInfoTest, CatalogAutoDiscoversTableAndSchemaAfterRestart)
 {
-    page_id_t index_header_page_id = INVALID_PAGE_ID;
-    constexpr index_oid_t kIndexOid = 7;
+    page_id_t first_page_id = INVALID_PAGE_ID;
 
     {
         Catalog catalog(buffer_pool_manager_.get());
-        Schema schema = MakeSimpleSchema();
+        auto created = catalog.CreateTable("student", MakeSimpleSchema());
+        ASSERT_TRUE(created.has_value());
+        ASSERT_NE(created.value(), nullptr);
 
-        auto created = catalog.CreateTable("student", schema);
+        first_page_id = created.value()->GetTableHeap()->FirstPageId();
+        ASSERT_NE(first_page_id, INVALID_PAGE_ID);
+        ASSERT_TRUE(buffer_pool_manager_->FlushAllPages().has_value());
+    }
+
+    buffer_pool_manager_.reset();
+    disk_manager_.reset();
+    disk_manager_ = std::make_unique<storage::DiskManager>(db_path_);
+    buffer_pool_manager_ = std::make_unique<buffer::BufferPoolManager>(8, disk_manager_.get());
+
+    Catalog recovered_catalog(buffer_pool_manager_.get());
+    const TableInfo* recovered = recovered_catalog.GetTable("student");
+    ASSERT_NE(recovered, nullptr);
+    ASSERT_NE(recovered->GetTableHeap(), nullptr);
+    EXPECT_EQ(recovered->GetTableHeap()->FirstPageId(), first_page_id);
+    EXPECT_EQ(recovered->GetSchema().ColumnCount(), 2u);
+    EXPECT_EQ(recovered->GetSchema().GetColumn(0).Name(), "id");
+    EXPECT_EQ(recovered->GetSchema().GetColumn(0).Type(), type::TypeId::INTEGER);
+    EXPECT_EQ(recovered->GetSchema().GetColumn(1).Name(), "name");
+    EXPECT_EQ(recovered->GetSchema().GetColumn(1).Type(), type::TypeId::VARCHAR);
+    EXPECT_EQ(recovered->GetSchema().GetColumn(1).Length(), 32u);
+}
+
+TEST_F(CatalogTableInfoTest, CatalogAutoRecoversIndexFromHeaderPageId)
+{
+    page_id_t index_header_page_id = INVALID_PAGE_ID;
+    constexpr index_oid_t kIndexOid = 0;
+
+    {
+        Catalog catalog(buffer_pool_manager_.get());
+        auto created = catalog.CreateTable("student", MakeSimpleSchema());
         ASSERT_TRUE(created.has_value());
 
         auto index_exp = catalog.CreateIndex("student", "idx_student_id");
@@ -183,7 +226,7 @@ TEST_F(CatalogTableInfoTest, CatalogLoadIndexFromHeaderPageId)
         ASSERT_TRUE(index->Insert(2, record::RID(77, 2)));
         ASSERT_TRUE(index->Insert(3, record::RID(77, 3)));
 
-        auto header_page_id = created.value()->GetIndexHeaderPageId(0);
+        auto header_page_id = created.value()->GetIndexHeaderPageId(kIndexOid);
         ASSERT_TRUE(header_page_id.has_value());
         index_header_page_id = header_page_id.value();
         ASSERT_NE(index_header_page_id, INVALID_PAGE_ID);
@@ -195,30 +238,91 @@ TEST_F(CatalogTableInfoTest, CatalogLoadIndexFromHeaderPageId)
     disk_manager_ = std::make_unique<storage::DiskManager>(db_path_);
     buffer_pool_manager_ = std::make_unique<buffer::BufferPoolManager>(8, disk_manager_.get());
 
+    Catalog recovered_catalog(buffer_pool_manager_.get());
+    const TableInfo* recovered_table = recovered_catalog.GetTable("student");
+    ASSERT_NE(recovered_table, nullptr);
+    auto recovered_header = recovered_table->GetIndexHeaderPageId(kIndexOid);
+    ASSERT_TRUE(recovered_header.has_value());
+    EXPECT_EQ(recovered_header.value(), index_header_page_id);
+
+    storage::BPlusTree* recovered_index = recovered_catalog.GetIndex(recovered_table->Oid(), kIndexOid);
+    ASSERT_NE(recovered_index, nullptr);
+    record::RID out;
+    ASSERT_TRUE(recovered_index->GetValue(1, &out));
+    EXPECT_EQ(out, record::RID(77, 1));
+    ASSERT_TRUE(recovered_index->GetValue(2, &out));
+    EXPECT_EQ(out, record::RID(77, 2));
+    ASSERT_TRUE(recovered_index->GetValue(3, &out));
+    EXPECT_EQ(out, record::RID(77, 3));
+}
+
+TEST_F(CatalogTableInfoTest, WalRecoverThenCatalogLoadKeepsEntrypointsConsistent)
+{
+    auto wal_path = db_path_;
+    wal_path.replace_extension(".wal");
+    std::error_code ec;
+    std::filesystem::remove(wal_path, ec);
+
+    page_id_t first_page_id = INVALID_PAGE_ID;
+    page_id_t index_header_page_id = INVALID_PAGE_ID;
+    record::RID tuple_rid;
+    constexpr int32_t kIndexKey = 42;
+
     {
-        Catalog recovered_catalog(buffer_pool_manager_.get());
-        Schema schema = MakeSimpleSchema();
-        auto created = recovered_catalog.CreateTable("student", schema);
+        Catalog catalog(buffer_pool_manager_.get());
+        auto created = catalog.CreateTable("student", MakeSimpleSchema());
         ASSERT_TRUE(created.has_value());
-        const table_oid_t recovered_table_oid = created.value()->Oid();
+        TableInfo* table = created.value();
+        ASSERT_NE(table, nullptr);
 
-        auto load_exp = recovered_catalog.LoadIndex(
-            recovered_table_oid,
-            kIndexOid,
-            "idx_student_id_recovered",
-            index_header_page_id);
-        ASSERT_TRUE(load_exp.has_value());
-        storage::BPlusTree* recovered_index = load_exp.value();
-        ASSERT_NE(recovered_index, nullptr);
+        auto index_exp = catalog.CreateIndex("student", "idx_student_id");
+        ASSERT_TRUE(index_exp.has_value());
+        storage::BPlusTree* index = index_exp.value();
+        ASSERT_NE(index, nullptr);
 
-        record::RID out;
-        ASSERT_TRUE(recovered_index->GetValue(1, &out));
-        EXPECT_EQ(out, record::RID(77, 1));
-        ASSERT_TRUE(recovered_index->GetValue(2, &out));
-        EXPECT_EQ(out, record::RID(77, 2));
-        ASSERT_TRUE(recovered_index->GetValue(3, &out));
-        EXPECT_EQ(out, record::RID(77, 3));
+        storage::wal::WalManager wal(wal_path);
+        table->GetTableHeap()->SetWalManager(&wal);
+        ASSERT_TRUE(table->GetTableHeap()->InsertTuple(MakeTupleFromString("wal_catalog_row"), &tuple_rid));
+        ASSERT_TRUE(index->Insert(kIndexKey, tuple_rid));
+
+        first_page_id = table->GetTableHeap()->FirstPageId();
+        auto header_page_id = table->GetIndexHeaderPageId(0);
+        ASSERT_TRUE(header_page_id.has_value());
+        index_header_page_id = header_page_id.value();
+        ASSERT_TRUE(buffer_pool_manager_->FlushAllPages().has_value());
     }
+
+    buffer_pool_manager_.reset();
+    disk_manager_.reset();
+    disk_manager_ = std::make_unique<storage::DiskManager>(db_path_);
+    buffer_pool_manager_ = std::make_unique<buffer::BufferPoolManager>(8, disk_manager_.get());
+
+    {
+        storage::wal::WalManager wal(wal_path);
+        ASSERT_TRUE(wal.Recover(buffer_pool_manager_.get()));
+    }
+
+    Catalog recovered_catalog(buffer_pool_manager_.get());
+    TableInfo* recovered_table = recovered_catalog.GetTable("student");
+    ASSERT_NE(recovered_table, nullptr);
+    ASSERT_NE(recovered_table->GetTableHeap(), nullptr);
+    EXPECT_EQ(recovered_table->GetTableHeap()->FirstPageId(), first_page_id);
+    auto recovered_header_page_id = recovered_table->GetIndexHeaderPageId(0);
+    ASSERT_TRUE(recovered_header_page_id.has_value());
+    EXPECT_EQ(recovered_header_page_id.value(), index_header_page_id);
+
+    storage::BPlusTree* recovered_index = recovered_catalog.GetIndex(recovered_table->Oid(), 0);
+    ASSERT_NE(recovered_index, nullptr);
+    record::RID recovered_rid;
+    ASSERT_TRUE(recovered_index->GetValue(kIndexKey, &recovered_rid));
+    EXPECT_EQ(recovered_rid, tuple_rid);
+
+    record::Tuple out_tuple;
+    ASSERT_TRUE(recovered_table->GetTableHeap()->GetTuple(tuple_rid, &out_tuple));
+    std::string recovered_payload(
+        reinterpret_cast<const char*>(out_tuple.Data()),
+        reinterpret_cast<const char*>(out_tuple.Data()) + out_tuple.Size());
+    EXPECT_EQ(recovered_payload, "wal_catalog_row");
 }
 
 } // namespace HaruhiDB::catalog
