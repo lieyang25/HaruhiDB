@@ -164,16 +164,6 @@ TEST_F(ExecutorSmokeTest, IndexScanExecutorWorks)
     ExecutorRow insert_result;
     ASSERT_TRUE(insert.Next(&insert_result));
 
-    SeqScanExecutor scan_for_index(&exec_ctx, table_info);
-    scan_for_index.Init();
-    ExecutorRow indexed_row;
-    while (scan_for_index.Next(&indexed_row)) {
-        ASSERT_TRUE(indexed_row.has_rid);
-        const int32_t* key = indexed_row.values[0].TryAs<int32_t>();
-        ASSERT_NE(key, nullptr);
-        ASSERT_TRUE(index->Insert(*key, indexed_row.rid));
-    }
-
     IndexScanExecutor index_scan(&exec_ctx, table_info, index, 20);
     index_scan.Init();
 

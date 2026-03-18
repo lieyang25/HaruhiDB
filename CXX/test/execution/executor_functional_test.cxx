@@ -1247,7 +1247,6 @@ TEST_F(ExecutorFunctionalTest, IndexScanSortsUnorderedInsertsAndSkipsInvalidRid)
     }
     EXPECT_EQ(keys, (std::vector<int32_t>{10, 20, 30}));
 
-    // 使用 table_info 模式时，非法 RID 对应项应被跳过。
     auto live_index_exp = catalog.CreateIndex(table_info->Oid(), "idx_student_live");
     ASSERT_TRUE(live_index_exp.has_value()) << live_index_exp.error();
     storage::BPlusTree* live_index = live_index_exp.value();
@@ -1260,8 +1259,7 @@ TEST_F(ExecutorFunctionalTest, IndexScanSortsUnorderedInsertsAndSkipsInvalidRid)
     ASSERT_TRUE(scan.Next(&live_row));
     ASSERT_TRUE(live_row.has_rid);
 
-    ASSERT_TRUE(live_index->Insert(1, record::RID{})); // 非法 RID
-    ASSERT_TRUE(live_index->Insert(2, live_row.rid));
+    ASSERT_TRUE(live_index->Insert(1, record::RID{})); // 非法 RID，IndexScan(table_info 模式) 应跳过
 
     IndexScanExecutor with_table_scan(&exec_ctx, table_info, live_index, 0);
     with_table_scan.Init();
@@ -1519,6 +1517,7 @@ TEST_F(ExecutorFunctionalTest, IndexAutoBackfillAndDmlAutoMaintenance)
     ASSERT_NE(index, nullptr);
 
     EXPECT_EQ(CollectIdsByIndexScan(&exec_ctx, table_info, index), (std::vector<int32_t>{1, 2, 3}));
+    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1, 2, 3}));
 
     auto scan_child = std::make_unique<SeqScanExecutor>(&exec_ctx, table_info);
     auto filter = std::make_unique<FilterExecutor>(
@@ -1535,7 +1534,7 @@ TEST_F(ExecutorFunctionalTest, IndexAutoBackfillAndDmlAutoMaintenance)
     EXPECT_EQ(delete_result.values[0], type::Value::Int32(1));
 
     EXPECT_EQ(CollectIdsByIndexScan(&exec_ctx, table_info, index), (std::vector<int32_t>{1, 3}));
-    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1, 2, 3}));
+    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1, 3}));
 
     ASSERT_EQ(
         InsertRows(
