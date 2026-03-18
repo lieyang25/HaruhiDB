@@ -1,501 +1,525 @@
-# HaruhiDB 项目架构与API文档(README版本)
+# HaruhiDB 架构总览
 
-补充阅读：
+这份 README 不再把项目写成一份平铺的 API 名录，而是把当前系统重新组织成一条自上而下的主线：
 
-- [功能闭环审查与 Catalog 持久化补充说明](CXX/docs/functional_closure_review.md)
-- [功能闭环审查更新（2026-03-18）](CXX/docs/functional_closure_review_update_20260318.md)
+`运行入口 -> 执行层 -> 目录层 -> 表与记录层 -> 索引层 -> 缓冲与存储层 -> WAL / 磁盘层`
 
-## 项目概述
+目标只有一个：先恢复对整体结构的控制力，再继续迭代功能。
 
-HaruhiDB 是一个C++关系型数据库实现，采用模块化设计，分为7个主要层次：
+## 文档入口
 
-```
-┌─────────────────────────────────────────────────┐
-│         Execution Layer (执行层)                 │
-│  ├── SeqScanExecutor, FilterExecutor            │
-│  ├── ProjectionExecutor, InsertExecutor         │
-│  ├── DeleteExecutor, UpdateExecutor             │
-│  ├── ValuesExecutor, IndexScanExecutor          │
-│  └── AbstractExecutor, ExecutorContext          │
-├─────────────────────────────────────────────────┤
-│         Table Layer (表管理层)                   │
-│  ├── TableHeap (表数据堆)                       │
-│  └── TableIterator (表扫描迭代器)               │
-├─────────────────────────────────────────────────┤
-│         Catalog Layer (目录层)                   │
-│  ├── Catalog (表目录)                           │
-│  ├── TableInfo (表信息)                         │
-│  ├── Schema (表结构)                            │
-│  └── Column (列定义)                            │
-├─────────────────────────────────────────────────┤
-│         Buffer Layer (缓冲层)                    │
-│  ├── BufferPoolManager (缓冲池管理)             │
-│  └── LruKReplacer (页面替换)                    │
-├─────────────────────────────────────────────────┤
-│         Storage Layer (存储层)                   │
-│  ├── Disk Management (磁盘管理)                 │
-│  │   └── DiskManager                            │
-│  ├── Page Management (页管理)                   │
-│  │   ├── Page, BPlusTreePage                    │
-│  │   ├── BPlusTreeLeafPage, BPlusTreeInternalPage
-│  │   └── TablePage                              │
-│  ├── Record Management (记录管理)               │
-│  │   ├── RID, Tuple, TupleCodec                 │
-│  ├── Index Management (索引管理)                │
-│  │   ├── BPlusTree, IndexIterator               │
-│  └── WAL (预写日志)                             │
-│      └── WalManager                             │
-├─────────────────────────────────────────────────┤
-│         Type Layer (类型系统)                    │
-│  ├── TypeId, TypeUtil                           │
-│  └── Value (通用值表示)                         │
-├─────────────────────────────────────────────────┤
-│         Common Layer (公共配置)                  │
-│  ├── Constants (PAGE_SIZE, HEADER_SIZE等)      │
-│  └── ErrorCode (错误处理)                       │
-└─────────────────────────────────────────────────┘
-```
+除了本 README，`CXX/docs/` 现在还维护了一套面向当前实现的架构文档：
 
----
+- [文档索引](CXX/docs/README.md)
+- [系统架构总览](CXX/docs/architecture_overview.md)
+- [运行与数据链路](CXX/docs/execution_and_dataflow.md)
+- [持久化与恢复](CXX/docs/persistence_and_recovery.md)
+- [当前实现使用方法](CXX/docs/integration_guide.md)
+- [可运行示例](CXX/example/README.md)
 
-## 第一层: Type Module (类型系统)
+## 项目当前定位
 
-**位置**: `CXX/src/include/type/`
+HaruhiDB 目前可以理解为一个正在持续收敛中的 C++23 单机关系型数据库内核，已经具备以下主干能力：
 
-### 1.1 TypeId 枚举
-数据库支持的基本类型：BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, DOUBLE, DECIMAL, VARCHAR
+- 统一运行入口：`runtime::DatabaseRuntime::Open()`
+- 执行器流水线：`Values / SeqScan / Filter / Projection / Insert / Delete / Update / IndexScan`
+- 最小持久化目录：`Catalog` 会把表与索引元数据持久化，并在重启后自动恢复
+- 表存储主线：`TableHeap + TablePage + TupleCodec`
+- 索引主线：整数键 `BPlusTree`，支持恢复、扫描、回填与执行层维护
+- 缓冲与页管理：`BufferPoolManager + LRU-K + DiskManager`
+- 崩溃恢复主线：`WalManager` 基于整页 after-image 做 redo 恢复
 
-### 1.2 TypeUtil (静态工具类)
-```cpp
-class TypeUtil {
-  // 类型检验
-  static constexpr bool IsValid(TypeId t);           // 类型有效性
-  static constexpr bool IsVariableLength(TypeId t);  // 变长类型检查
-  static constexpr bool IsIntegral(TypeId t);        // 整数检查
-  static constexpr bool IsFloatingPoint(TypeId t);   // 浮点检查
-  static constexpr bool IsNumeric(TypeId t);         // 数值检查
-  
-  // 类型信息
-  static constexpr int FixedLengthSize(TypeId t);           // 固定长度大小
-  static constexpr std::string_view TypeName(TypeId t);     // 类型名
-  static inline std::optional<TypeId> ParseType(std::string_view name); // 字符串转类型
-};
+同时也要明确当前边界：
+
+- 还没有 SQL parser / optimizer / planner
+- 执行计划目前由上层代码手工拼装执行器
+- 当前索引语义聚焦于“首列为 `INTEGER NOT NULL` 的键”
+- 事务、并发控制、checkpoint、undo 日志还不在当前闭环范围内
+
+## 一条主线看全系统
+
+```text
+Client / Test / Demo code
+        |
+        v
+runtime::DatabaseRuntime::Open(db_path, options)
+        |
+        +-- DiskManager
+        +-- BufferPoolManager
+        +-- WalManager::Recover()        [可选]
+        +-- Catalog                      [装载表/索引元数据]
+        +-- Catalog::BindWalManager()
+        `-- ExecutorContext
+
+Executor tree
+        |
+        +-- SeqScanExecutor ------------> TableInfo -> TableHeap -> BufferPoolManager
+        +-- IndexScanExecutor ----------> TableInfo -> BPlusTree -> BufferPoolManager
+        +-- Insert/Delete/Update -------> TableHeap + BPlusTree(index maintenance)
+        `-- Filter/Projection/Values --> 纯执行层行流转
+
+BufferPoolManager
+        |
+        +-- LruKReplacer
+        `-- DiskManager <-> database file
+
+TableHeap / page mutations
+        |
+        `-- WalManager (append after-image, flush log, redo on restart)
 ```
 
-### 1.3 Value 类
-通用值容器，使用std::variant存储不同类型数据。支持序列化/反序列化、类型转换、值比较。
-
-**主要方法**:
-- 构造和工厂方法: `Value()`, `Boolean()`, `Int32()`, `VarChar()`, `Null()`
-- 类型检查: `IsNull()`, `Type()`, `TryAs<T>()`
-- 值操作: `CanCastTo()`, `AsLongDouble()`, `Compare()`, `ToString()`
-- 序列化: `Serialize()`, `TryDeserialize()`, `Deserialize()`
-
----
-
-## 第二层: Buffer Layer (缓冲池管理)
-
-**位置**: `CXX/src/include/buffer/`
-
-缓冲池采用LRU-K替换算法，管理内存中的页面。
-
-### 2.1 LruKReplacer 类
-实现LRU-K页面替换策略。
-
-**主要方法**:
-- `explicit LruKReplacer(size_t pool_size, size_t k = 2)` - 构造
-- `void RecordAccess(frame_id_t frame_id)` - 记录访问
-- `void SetEvictable(frame_id_t frame_id, bool evictable)` - 标记可淘汰
-- `bool Victim(frame_id_t& frame_id)` - 选择被淘汰的Frame
-- `void Remove(frame_id_t frame_id)` - 移除Frame
-- `size_t Size() const` - 获取可淘汰Frame数量
-
-### 2.2 BufferPoolManager 类
-缓冲池管理器，管理与磁盘的页面交互。
-
-**主要方法**:
-- `std::expected<storage::Page*,BufferPoolErr> FetchPage(page_id_t page_id)` - 获取页
-- `std::expected<storage::Page*,BufferPoolErr> NewPage(page_id_t *page_id)` - 创建新页
-- `bool UnpinPage(page_id_t page_id, bool is_dirty)` - Unpin页
-- `bool DeletePage(page_id_t page_id)` - 删除页
-- `std::expected<void,BufferPoolErr> FlushPage(page_id_t page_id)` - 刷新单页
-- `std::expected<void,BufferPoolErr> FlushAllPages()` - 刷新所有页
-
----
-
-## 第三层: Storage Layer (存储系统)
-
-**位置**: `CXX/src/include/storage/`
-
-### 3.1 Disk Manager (磁盘管理)
-
-#### DiskManager 类
-管理数据库文件的物理存储。
-
-**主要方法**:
-- `auto ReadPage(page_id_t page_id, page_data_t& data) -> std::expected<void,IOErr>` - 读页
-- `auto WritePage(page_id_t page_id, const page_data_t& data) -> std::expected<void,IOErr>` - 写页
-- `auto AllocatePage() -> std::expected<page_id_t,IOErr>` - 分配新页
-- `auto DeallocatePage(page_id_t page_id) -> std::expected<void,IOErr>` - 释放页
-- `auto Flush() -> std::expected<void,IOErr>` - 刷新
-
-### 3.2 Page Management (页管理)
-
-#### Page 类
-内存中的页面表示。
-
-**主要方法**:
-- 初始化: `void InitBlank(page_id_t, PageType)`, `void ResetMetaData(page_id_t)`
-- 访问元数据: `PersistentHeader* Header()`, `page_id_t PageId()`, `PageType Type()`
-- Pin管理: `void Pin()`, `void UnPin()`, `int PinCount()`
-- 脏标记: `void MarkDirty()`, `void ClearDirty()`, `bool IsDirty()`
-- 并发访问: `void RLock()`, `void RUnLock()`, `void WLock()`, `void WUnLock()`
-- 数据访问: `std::byte* RawData()`, `page_data_t& Data()`
-
-#### BPlusTreePage 类 (B+树页基类)
-**主要方法**:
-- `bool InitForNewPage(page_id_t, PageType, uint16_t max_size, page_id_t parent = INVALID)`
-- `page_id_t GetPageId()`, `PageType GetPageType()`
-- `bool IsLeafPage()`, `bool IsInternalPage()`, `bool IsRootPage()`
-- `page_id_t GetParentPageId()`, `void SetParentPageId(page_id_t)`
-- `uint16_t GetSize()`, `uint16_t GetMaxSize()`, `uint16_t GetMinSize()`
-
-#### BPlusTreeLeafPage 类
-B+树叶子页，存储键值对(int32_t key -> RID value)。
-
-**主要方法**:
-- `bool InitForNewLeaf(uint16_t max_size, page_id_t parent = INVALID)`
-- `page_id_t GetNextPageId()`, `void SetNextPageId(page_id_t)`
-- `const MappingType& ItemAt(uint16_t index)`, `const KeyType& KeyAt(uint16_t index)`, `const ValueType& ValueAt(uint16_t index)`
-- `uint16_t KeyIndex(const KeyType& key)`, `bool Lookup(const KeyType& key, ValueType* out_value)`
-- `bool Insert(const KeyType&, const ValueType&)`, `bool Remove(const KeyType&)`
-- `void MoveHalfTo()`, `void MoveAllTo()`, `bool MoveFirstToEndOf()`, `bool MoveLastToFrontOf()`
-
-#### BPlusTreeInternalPage 类
-B+树内部页，存储分支键和子页指针(int32_t key -> page_id_t child_page_id)。
-
-**主要方法**:
-- `bool InitForNewInternal(uint16_t max_size, page_id_t parent = INVALID)`
-- `page_id_t GetLeftMostChild()`, `void SetLeftMostChild(page_id_t)`
-- `const MappingType& ItemAt()`, `const KeyType& KeyAt()`, `bool SetKeyAt()`
-- `page_id_t ChildAt()`, `bool FindChildIndex()`
-- `page_id_t Lookup(const KeyType&)` - 根据键查找子页
-- `bool PopulateNewRoot()`, `bool InsertAfter()`, `bool RemoveChildAt()`
-- `void MoveHalfTo()`, `bool MoveFirstToEndOf()`, `bool MoveLastToFrontOf()`, `void MoveAllTo()`
-
-#### TablePage 类
-表数据页，管理行数据和Slot。
-
-**主要方法**:
-- `void InitForNewPage(page_id_t page_id)`
-- `TablePageHeaderData* HeaderData()` - 获取页头数据
-- `page_id_t NextPageId()`, `void SetNextPageId(page_id_t)`, `slot_id_t SlotCount()`
-- `auto InsertTuple(const record::Tuple&) -> std::expected<slot_id_t, TablePageErr>` - 插入行
-- `auto UpdateTuple(slot_id_t, const record::Tuple&) -> std::expected<void, TablePageErr>` - 更新行
-- `auto MarkDelTuple(slot_id_t) -> std::expected<void, TablePageErr>` - 标记删除
-- `auto GetTuple(slot_id_t, record::Tuple&) -> std::expected<void, TablePageErr>` - 获取行
-- `bool TupleCountersConsistent()`, `void RepairTupleCounters()`
-- `uint16_t AliveTupleCount()`, `uint16_t DeletedTupleCount()`
-- `Slot* SlotArray()`, `Slot* GetSlot(slot_id_t)`, `uint16_t FreeSpace()`
-
-### 3.3 Record Management (记录管理)
-
-#### RID 类
-Record Identifier，标识一条记录的位置(page_id + slot_id)。
-
-**主要方法**:
-- `RID(page_id_t page_id, slot_id_t slot_id)` - 构造
-- `page_id_t GetPageId()`, `slot_id_t GetSlotId()`
-- `void SetRID(page_id_t, slot_id_t)` - 设置RID
-- `bool operator==(const RID&)` - 相等比较
-
-#### Tuple 类
-数据库元组，包含字节数据向量。
-
-**主要方法**:
-- `explicit Tuple(std::span<const std::byte> data)` - 从跨度构造
-- `explicit Tuple(std::vector<std::byte> data)` - 从向量构造
-- `uint16_t Size()` - 获取元组大小
-- `const std::byte* Data()`, `std::byte* Data()` - 获取数据指针
-
-#### TupleCodec 类
-元组编解码器，在Value向量和Tuple二进制表示间转换。
-
-**主要方法**:
-- `static std::expected<Tuple, TupleCodecErr> Encode(const Schema&, std::span<const Value> values)` - 编码Value为Tuple
-- `static std::expected<std::vector<Value>, TupleCodecErr> Decode(const Schema&, const Tuple&)` - 解码Tuple为Value
-- `static std::expected<Value, TupleCodecErr> DecodeAt(const Schema&, const Tuple&, size_t column_index)` - 解码特定列
-
-### 3.4 Index Management (索引管理)
-
-#### IndexIterator 类
-B+树索引迭代器。
-
-**主要方法**:
-- `IndexIterator()` - 默认构造(end迭代器)
-- `IndexIterator(BufferPoolManager*, page_id_t leaf_page_id, uint16_t index)` - 构造
-- `MappingType operator*()` - 解引用，返回(key, RID)对
-- `IndexIterator& operator++()` - 前缀递增
-- `bool operator==(const IndexIterator&)`, `bool operator!=(const IndexIterator&)`
-- `bool IsEnd()` - 是否为结束迭代器
-
-#### BPlusTree 类
-B+树索引。
-
-**主要方法**:
-- `explicit BPlusTree(BufferPoolManager*)` - 构造(新树)
-- `BPlusTree(BufferPoolManager*, page_id_t header_page_id)` - 构造(加载已有树)
-- `bool IsEmpty()` - 是否为空
-- `bool GetValue(int32_t key, RID* out_rid)` - 查询
-- `bool Insert(int32_t key, const RID& rid)` - 插入
-- `bool Remove(int32_t key)` - 删除
-- `IndexIterator Begin()`, `IndexIterator Begin(int32_t key)`, `IndexIterator End()`
-- `page_id_t RootPageId()`, `page_id_t HeaderPageId()`
-
-### 3.5 WAL - Write-Ahead Logging (预写日志)
-
-#### WalManager 类
-管理数据库日志以支持恢复。
-
-**主要方法**:
-- `explicit WalManager(std::filesystem::path wal_path)` - 构造
-- `bool AppendLog(const LogRecord&)` - 追加日志记录
-- `bool FlushLog()` - 刷新日志
-- `bool Recover(BufferPoolManager*)` - 恢复数据库
-- `bool Redo(const LogRecord&, BufferPoolManager*)` - 重做日志
-
----
-
-## 第四层: Catalog Layer (目录管理)
-
-**位置**: `CXX/src/include/catalog/`
-
-### 4.1 Column 类
-表列的元数据描述。
-
-**主要方法**:
-- `Column(std::string name, TypeId type, bool nullable = true, std::optional<Value> = {})` - 固定长度列构造
-- `Column(std::string name, TypeId type, uint32_t length, bool nullable, std::optional<Value> = {})` - 变长列构造
-- `const std::string& Name()` - 列名
-- `TypeId Type()` - 列类型
-- `uint32_t Length()` - 列长度
-- `bool Nullable()` - 是否允许NULL
-- `bool IsInlined()`, `bool IsVarlen()` - 存储格式
-- `uint32_t Offset()`, `void SetOffset(uint32_t)` - Tuple内Offset
-
-### 4.2 Schema 类
-表结构定义，包含多个Column，计算Tuple布局。
-
-**主要方法**:
-- `explicit Schema(std::vector<Column> columns)` - 构造
-- `static std::expected<Schema, std::string> Create(std::vector<Column>)` - 安全创建
-- `const std::vector<Column>& Columns()` - 获取所有列
-- `size_t ColumnCount()` - 列数量
-- `bool Empty()` - 是否为空
-- `const Column& GetColumn(size_t index)`, `Column& GetColumn(size_t index)` - 按索引获取列
-- `std::optional<size_t> TryGetColumnIndex(std::string_view name)` - 按名字查找列索引
-- `size_t GetColumnIndex(std::string_view name)` - 按名字获取列索引(异常版本)
-- `bool HasColumn(std::string_view name)` - 是否存在列
-- `const Column* FindColumn(std::string_view name)`, `Column* FindColumn(std::string_view name)` - 按名字查找列
-- `bool IsTupleInlined()` - Tuple是否完全内联(不含VARCHAR)
-
-### 4.3 TableInfo 类
-表的运行时信息(OID、名称、Schema、TableHeap)。
-
-**主要方法**:
-- `TableInfo(table_oid_t oid, std::string name, Schema schema, std::unique_ptr<TableHeap> table_heap)` - 构造
-- `table_oid_t Oid()` - 表OID
-- `const std::string& Name()` - 表名
-- `const Schema& GetSchema()`, `Schema& GetSchema()` - 获取Schema
-- `TableHeap* GetTableHeap()` - 获取TableHeap指针
-- `bool HasTableHeap()` - 是否有有效TableHeap
-
-### 4.4 Catalog 类
-数据库表目录，管理所有表。
-
-**主要方法**:
-- `explicit Catalog(BufferPoolManager* bpm)` - 构造
-- `std::expected<TableInfo*, std::string> CreateTable(std::string table_name, const Schema&)` - 创建表
-- `TableInfo* GetTable(std::string_view table_name)` - 按名字查找表
-- `TableInfo* GetTable(std::string_view table_name) const` - 按名字查找表(常数版本)
-
----
-
-## 第五层: Table Layer (表管理)
-
-**位置**: `CXX/src/include/table/`
-
-### 5.1 TableIterator 类
-在表中顺序扫描，跨页管理。
-
-**主要方法**:
-- `TableIterator()` - 默认构造(end迭代器)
-- `TableIterator(TableHeap*, page_id_t start_page, slot_id_t start_slot)` - 构造
-- `record::Tuple operator*()` - 解引用，返回当前行
-- `record::RID GetRID()` - 获取当前行RID
-- `TableIterator& operator++()` - 前缀递增
-- `bool operator==(const TableIterator&)`, `bool operator!=(const TableIterator&)`
-- `bool IsEnd()` - 是否为结束迭代器
-
-### 5.2 TableHeap 类
-表数据堆，管理表的页链和行操作。
-
-**主要方法**:
-- `static std::expected<std::unique_ptr<TableHeap>, std::string> Create(BufferPoolManager*)` - 创建表堆
-- `explicit TableHeap(BufferPoolManager*, page_id_t first_page_id = INVALID_PAGE_ID)` - 构造
-- `bool InsertTuple(const Tuple&, RID* out_rid = {})` - 插入行
-- `bool GetTuple(const RID&, Tuple* out_tuple)` - 获取行
-- `bool DeleteTuple(const RID&)` - 删除行
-- `bool UpdateTuple(const RID&, const Tuple& new_tuple, RID* out_rid = {})` - 更新行
-- `TableIterator Begin()`, `TableIterator End()` - 获取迭代器
-- `void SetWalManager(WalManager*)`, `WalManager* GetWalManager()` - WAL管理
-- `page_id_t FirstPageId()`, `void SetFirstPageId(page_id_t)` - 首页ID
-
----
-
-## 第六层: Execution Layer (查询执行)
-
-**位置**: `CXX/src/include/execution/`
-
-### 6.1 ExecutorContext 类
-执行器上下文，持有目录引用。
-
-**主要方法**:
-- `explicit ExecutorContext(Catalog*)` - 构造
-- `Catalog* GetCatalog()` - 获取目录
-
-### 6.2 AbstractExecutor 类 (执行器基类)
-所有执行器的接口。
-
-**主要方法**:
-- `explicit AbstractExecutor(ExecutorContext*)` - 构造
-- `virtual void Init() = 0` - 初始化
-- `virtual bool Next(ExecutorRow* row) = 0` - 获取下一行
-
-### 6.3 SeqScanExecutor 类
-顺序扫描执行器。
-
-**主要方法**:
-- `SeqScanExecutor(ExecutorContext*, TableInfo*)` - 构造
-- `void Init() override` - 初始化迭代器
-- `bool Next(ExecutorRow* row) override` - 扫描下一行
-
-### 6.4 FilterExecutor 类
-过滤执行器(WHERE子句)。
-
-**主要方法**:
-- `FilterExecutor(ExecutorContext*, std::unique_ptr<AbstractExecutor> child, Predicate)` - 构造(child是数据源)
-- `void Init() override` - 初始化
-- `bool Next(ExecutorRow* row) override` - 返回满足谓词的行
-
-### 6.5 ProjectionExecutor 类
-投影执行器(SELECT子句)。
-
-**主要方法**:
-- `ProjectionExecutor(ExecutorContext*, std::unique_ptr<AbstractExecutor> child, std::vector<uint32_t> column_indices)` - 构造
-- `void Init() override` - 初始化
-- `bool Next(ExecutorRow* row) override` - 返回指定列的行
-
-### 6.6 InsertExecutor 类
-插入执行器。
-
-**主要方法**:
-- `InsertExecutor(ExecutorContext*, TableInfo*, std::unique_ptr<AbstractExecutor> child)` - 构造
-- `void Init() override` - 初始化
-- `bool Next(ExecutorRow* row) override` - 执行插入
-
-### 6.7 DeleteExecutor 类
-删除执行器。
-
-**主要方法**:
-- `DeleteExecutor(ExecutorContext*, TableInfo*, std::unique_ptr<AbstractExecutor> child)` - 构造
-- `void Init() override` - 初始化
-- `bool Next(ExecutorRow* row) override` - 执行删除
-
-### 6.8 UpdateExecutor 类
-更新执行器。
-
-**主要方法**:
-- `UpdateExecutor(ExecutorContext*, TableInfo*, std::unique_ptr<AbstractExecutor> child, Updater)` - 构造
-- `void Init() override` - 初始化
-- `bool Next(ExecutorRow* row) override` - 执行更新
-
-### 6.9 ValuesExecutor 类
-值执行器(VALUES子句)。
-
-**主要方法**:
-- `ValuesExecutor(ExecutorContext*, std::vector<std::vector<Value>> rows)` - 构造
-- `void Init() override` - 初始化
-- `bool Next(ExecutorRow* row) override` - 返回下一行
-
-### 6.10 IndexScanExecutor 类
-索引扫描执行器。
-
-**主要方法**:
-- `IndexScanExecutor(ExecutorContext*, TableInfo*, BPlusTree*, std::optional<int32_t> start_key = {})` - 构造
-- `void Init() override` - 初始化迭代器
-- `bool Next(ExecutorRow* row) override` - 扫描下一行
-
----
-
-## 系统常量 (Common)
-
-```cpp
-constexpr size_t PAGE_SIZE = 4096;           // 页大小
-constexpr size_t HEADER_SIZE = 32;           // 页头大小
-constexpr uint32_t DB_MAGIC = 0x48415255;    // DB标识
-constexpr uint32_t DB_VERSION = 1;           // DB版本
-
-using page_id_t = uint32_t;                  // 页ID类型
-using frame_id_t = size_t;                   // Frame ID类型
-using table_oid_t = uint32_t;                // 表OID类型
-using slot_id_t = uint16_t;                  // Slot ID类型
-using lsn_t = uint64_t;                      // 日志序列号类型
+如果只抓住一件事，那就是：
+
+- `DatabaseRuntime` 负责把系统装起来
+- `Executor` 负责把“逻辑操作”往下压
+- `Catalog` 负责把“数据库对象”组织起来
+- `TableHeap / BPlusTree` 负责真正的数据入口
+- `BufferPoolManager` 负责把页留在内存里并最终写回磁盘
+- `WalManager` 负责在页落盘前先把恢复所需的信息写下来
+
+## 启动顺序
+
+当前系统最重要的入口是 [`CXX/src/include/runtime/database_runtime.h`](CXX/src/include/runtime/database_runtime.h) 中的 `DatabaseRuntime::Open()`，它把原本分散的启动动作收束成固定顺序：
+
+1. 打开 `DiskManager`
+   - 负责数据库文件、`DBHeader`、`next_page_id`、`free_list_head`、`catalog_meta_page_id`
+2. 创建 `BufferPoolManager`
+   - 建立页缓存、`page_table_`、空闲 frame 与 LRU-K 替换器
+3. 如果启用 WAL，创建 `WalManager` 并执行 `Recover()`
+   - 先做 redo 恢复，再把恢复后的脏页统一刷盘，并截断 WAL
+4. 创建 `Catalog`
+   - 从 `DBHeader.catalog_meta_page_id` 装载表和索引元数据
+   - 重建 `TableInfo -> TableHeap -> BPlusTree` 这条对象链
+5. 将 `WalManager` 绑定回 `Catalog` 里已恢复和后续新建的表对象
+6. 创建 `ExecutorContext`
+   - 作为执行器树的共享上下文入口
+
+这条顺序很关键，因为它回答了“系统从哪里开始”和“各层初始化依赖谁”。
+
+## 分层梳理
+
+| 层次 | 负责什么 | 依赖什么 | 对外提供什么 |
+| --- | --- | --- | --- |
+| Runtime | 统一装配运行时对象，固定启动与恢复顺序 | DiskManager, BufferPoolManager, WalManager, Catalog | `Catalog*`, `ExecutorContext*`, `BufferPoolManager*`, `DiskManager*`, `WalManager*` |
+| Execution | 组织行级执行流水线，承接扫描、过滤、投影和 DML | ExecutorContext, TableInfo, BPlusTree, TupleCodec | `ExecutorRow` 流、行数统计、DML 调用 |
+| Catalog | 管理表/索引对象及其持久化元数据 | BufferPoolManager, DiskManager, TableHeap, BPlusTree | `CreateTable`, `GetTable`, `CreateIndex`, `GetIndex`, `GetAllTables` |
+| Table / Record | 组织表页链、RID、Tuple 编解码与跨页读写 | BufferPoolManager, TablePage, WalManager | `InsertTuple`, `GetTuple`, `DeleteTuple`, `UpdateTuple`, `TableIterator` |
+| Index | 维护键到 RID 的组织、恢复和范围扫描 | BufferPoolManager, B+Tree pages | `Insert`, `Remove`, `GetValue`, `Begin`, `IndexIterator` |
+| Buffer | 管理页驻留、替换、pin/unpin、刷盘 | DiskManager, LruKReplacer | `FetchPage`, `NewPage`, `FlushPage`, `FlushAllPages`, `DeletePage` |
+| Storage / WAL | 处理数据库文件页 I/O、DBHeader、redo 日志 | filesystem | `ReadPage`, `WritePage`, `AllocatePage`, `Recover`, `FlushLog` |
+| Type / Common | 统一值类型、列类型、常量与错误码 | 基础库 | `TypeId`, `Value`, `PAGE_SIZE`, `page_id_t` 等 |
+
+### 1. Runtime：系统真正的入口层
+
+关键文件：
+
+- `CXX/src/include/runtime/database_runtime.h`
+- `CXX/src/runtime/database_runtime.cxx`
+
+这一层不负责具体的数据读写，也不负责执行算子逻辑。它的职责只有两个：
+
+- 统一把数据库运行时所需对象按正确顺序装配起来
+- 给上层提供一个“开箱可用”的系统入口，避免调用方自己拼接 `DiskManager -> BufferPoolManager -> Catalog -> ExecutorContext`
+
+可以把它看成当前项目中最接近“Database 实例”的对象。
+
+### 2. Execution：把逻辑操作压成一条执行链
+
+关键文件：
+
+- `CXX/src/include/execution/executor.h`
+- `CXX/src/include/execution/executor_context.h`
+- `CXX/src/include/execution/*.h`
+- `CXX/src/execution/*.cxx`
+
+执行层当前采用非常清晰的 iterator/pipeline 风格：
+
+- `AbstractExecutor` 定义 `Init()` / `Next()` 协议
+- `ExecutorRow` 是执行层统一的中间行表示，附带可选 `RID`
+- `ExecutorContext` 目前主要向执行器提供 `Catalog`
+
+当前执行器可以按职责分为三类：
+
+#### 2.1 数据源执行器
+
+- `ValuesExecutor`：从内存里的值列表产生行
+- `SeqScanExecutor`：通过 `TableHeap::Begin()/End()` 顺序扫描表
+- `IndexScanExecutor`：从 `BPlusTree` 扫描键，再按 `RID` 回表取 tuple
+
+#### 2.2 行变换执行器
+
+- `FilterExecutor`：保留满足谓词的行
+- `ProjectionExecutor`：裁剪或重排列
+
+#### 2.3 数据修改执行器
+
+- `InsertExecutor`
+- `DeleteExecutor`
+- `UpdateExecutor`
+
+这三者的共同特点是：
+
+- 输入是子执行器产出的 `ExecutorRow`
+- 真实写入通过 `TableInfo -> TableHeap` 完成
+- 如果表上已挂接索引，会通过 `execution/index_maintenance.*` 自动维护索引
+
+当前这条 DML 主线的语义边界是：
+
+- 索引键取表的第 1 列
+- 该列必须是 `INTEGER NOT NULL`
+- `CreateIndex()` 会对已有表数据做回填
+- `Insert/Delete/Update` 经过执行层时会同步维护索引
+- `UpdateExecutor` 当前不允许修改索引键本身，只允许在键不变前提下更新其他列或迁移 RID
+
+这意味着现在的“索引一致性闭环”已经主要收敛在执行层路径内；如果直接绕过执行层手工操作 `TableHeap`，就需要调用方自己承担索引一致性。
+
+### 3. Catalog：数据库对象的组织层
+
+关键文件：
+
+- `CXX/src/include/catalog/catalog.h`
+- `CXX/src/include/catalog/table_info.h`
+- `CXX/src/include/catalog/schema.h`
+- `CXX/src/include/catalog/column.h`
+- `CXX/src/catalog/catalog.cxx`
+
+这一层解决的是“数据库里到底有哪些对象，它们如何被找到”的问题。
+
+#### 3.1 Catalog 的职责
+
+`Catalog` 当前负责：
+
+- 创建表
+- 用表名或 `table_oid` 查表
+- 枚举所有表
+- 创建索引 / 加载已有索引
+- 分配连续的 `table_oid` 和 `index_oid`
+- 把元数据持久化到 catalog meta page 链
+- 在重启时自动恢复 `TableInfo / TableHeap / BPlusTree`
+
+#### 3.2 TableInfo 的职责
+
+`TableInfo` 不是表数据本身，而是一张表的运行时对象壳：
+
+- `oid`
+- `name`
+- `schema`
+- `table_heap`
+- `indexes`
+
+因此，执行层和上层代码通常不直接持有一堆离散对象，而是通过 `TableInfo` 进入一张表。
+
+#### 3.3 Schema / Column 的职责
+
+- `Column` 定义列名、类型、长度、nullable、默认值等元数据
+- `Schema` 负责把多列组织起来，并计算 tuple 布局与列偏移
+
+换句话说：
+
+- `Schema` 决定“逻辑上这张表长什么样”
+- `TableHeap` 决定“物理上这些 tuple 放在哪里”
+- `TableInfo` 把两者挂到同一张表对象上
+
+### 4. Table 与 Record：表级数据入口
+
+关键文件：
+
+- `CXX/src/include/table/table_heap.h`
+- `CXX/src/include/table/table_iterator.h`
+- `CXX/src/include/storage/page/table_page.h`
+- `CXX/src/include/storage/record/rid.h`
+- `CXX/src/include/storage/record/tuple.h`
+- `CXX/src/include/storage/record/tuple_codec.h`
+
+这是系统真正开始接触“表数据本体”的地方。
+
+#### 4.1 TableHeap 管什么
+
+`TableHeap` 是“表级堆组织”，它不关心 SQL，也不关心列语义，它关心的是：
+
+- 首页页号是什么
+- 尾页在哪里
+- 哪些页还有空闲空间
+- 插入应该落到哪一页
+- 更新时是否需要迁移到新页
+- 删除后是否可能回收空页
+- 如何沿页链遍历整张表
+
+可以把它理解为：`TablePage` 只会管单页内部，`TableHeap` 才真正把“跨多个页的一张表”组织起来。
+
+#### 4.2 Record 子层负责什么
+
+- `RID`：记录的物理地址，形如 `(page_id, slot_id)`
+- `Tuple`：原始字节载体
+- `TupleCodec`：在 `vector<Value>` 和二进制 tuple 之间做编解码
+
+这层的作用非常关键，因为它是执行层和物理存储之间的桥：
+
+- 执行器读到的是 `Value`
+- 页里存的是二进制 tuple
+- `TupleCodec` 负责在这两者之间往返
+
+#### 4.3 TableIterator 的位置
+
+`TableIterator` 是顺序扫描的游标对象。`SeqScanExecutor` 并不自己维护页遍历逻辑，而是直接复用 `TableHeap` 暴露出来的迭代器能力。
+
+### 5. Index：独立于表页链的键访问路径
+
+关键文件：
+
+- `CXX/src/include/storage/index/b_plus_tree.h`
+- `CXX/src/include/storage/index/index_iterator.h`
+- `CXX/src/include/storage/page/b_plus_tree_page.h`
+- `CXX/src/include/storage/page/b_plus_tree_leaf_page.h`
+- `CXX/src/include/storage/page/b_plus_tree_internal_page.h`
+
+索引层当前实现的是整数键 B+Tree。
+
+#### 5.1 BPlusTree 负责什么
+
+- 管理 `root_page_id_`
+- 管理 `header_page_id_`
+- 从根一路下降到叶子
+- 处理插入分裂与删除重平衡
+- 提供范围扫描迭代器
+- 把根页信息持久化到 header page
+
+#### 5.2 IndexIterator 负责什么
+
+它只负责在叶子页链上顺序前进，返回 `(key, RID)` 对；真正“回表解码 tuple”的动作是在 `IndexScanExecutor` 里完成的。
+
+#### 5.3 当前索引路径的特点
+
+- 索引对象挂在 `TableInfo` 下，不独立漂浮在系统外面
+- `Catalog::CreateIndex()` 会回填已有表数据
+- `IndexScanExecutor` 遇到 stale RID 时会跳过而不是直接失败
+- 因此，索引层本身负责“键到 RID”，执行层负责“RID 到行值”
+
+### 6. Buffer：所有页访问的中间层
+
+关键文件：
+
+- `CXX/src/include/buffer/buffer_pool_manager/buffer_pool_manager.h`
+- `CXX/src/include/buffer/replacer/lru_k_replacer.h`
+
+缓冲层是整个系统里最典型的“承上启下层”：
+
+- 上面连接 `TableHeap`、`BPlusTree`、恢复逻辑
+- 下面连接 `DiskManager`
+
+`BufferPoolManager` 解决的是“页如何在内存中驻留和替换”的问题，核心职责包括：
+
+- `page_id -> frame_id` 映射
+- 空闲 frame 管理
+- 被 pin 页与可淘汰页管理
+- 通过 `LruKReplacer` 做淘汰选择
+- 在页进入和离开内存时与 `DiskManager` 协作
+
+所有真正落到表页、索引页的读写，最后都要经过这一层。
+
+### 7. Storage / WAL：真正与磁盘状态打交道的层
+
+关键文件：
+
+- `CXX/src/include/storage/disk/disk_manager.h`
+- `CXX/src/include/storage/page/page.h`
+- `CXX/src/include/storage/page/table_page.h`
+- `CXX/src/include/storage/wal/wal_manager.h`
+
+#### 7.1 DiskManager
+
+`DiskManager` 负责数据库文件的页级 I/O，是页模型与文件模型之间的转换器。它管理：
+
+- `DBHeader`
+- `next_page_id`
+- `free_list_head`
+- `catalog_meta_page_id`
+- 普通页读写
+- 页分配和回收
+
+数据库文件当前最重要的持久化入口是：
+
+- Page 0 存放 `DBHeader`
+- `DBHeader.catalog_meta_page_id` 指向 `Catalog` 元数据页链入口
+
+#### 7.2 Page / TablePage / B+TreePage
+
+这些对象是页内语义层：
+
+- `Page`：内存中的通用页对象，带 metadata、pin count、dirty 标记、读写锁
+- `TablePage`：负责单页 tuple slot 布局
+- `BPlusTreePage` 及其子类：负责 B+Tree 节点页布局
+
+一句话区分它们：
+
+- `DiskManager` 负责“把整页读写到文件”
+- `BufferPoolManager` 负责“把整页缓存到内存”
+- `TablePage / B+TreePage` 负责“解释页内字节该怎么用”
+
+#### 7.3 WalManager
+
+当前 WAL 是最小可用 redo WAL，采用整页 after-image 策略：
+
+- 每条记录携带完整页面镜像
+- `TableHeap` 修改页面后先 `AppendLog()`，再 `FlushLog()`
+- 重启时 `Recover()` 顺序扫描 WAL，调用 `Redo()` 覆盖目标页
+- 恢复成功后统一刷盘，并截断整个 WAL 文件
+
+当前 WAL 的能力边界也需要明确：
+
+- 只有 redo，没有 undo
+- 没有 checkpoint
+- 日志粒度是整页 after-image，不是逻辑操作
+- 当前页级写入路径中，`TableHeap` 是主要的 WAL 触发者
+
+## 四条关键数据路径
+
+### 1. 启动与恢复路径
+
+```text
+DatabaseRuntime::Open()
+  -> DiskManager
+  -> BufferPoolManager
+  -> WalManager::Recover()      [可选]
+  -> Catalog::LoadCatalogMeta()
+  -> rebuild TableInfo / TableHeap / BPlusTree
+  -> bind WalManager
+  -> ExecutorContext
 ```
 
----
+这是当前整个系统的“零号主线”。
 
-## 数据流示例
+### 2. 插入路径
 
-### 插入数据流
-```
-Client Code
-   ↓
-Catalog::CreateTable() → TableInfo (Schema + TableHeap)
-   ↓
-TableHeap::InsertTuple(Tuple) 
-   ↓ Tuple通过TupleCodec从Values编码
-TablePage::InsertTuple()
-   ↓ 在页中分配Slot
-DiskManager::WritePage()  (如果页被Pin,最终通过BufferPoolManager持久化)
+```text
+ValuesExecutor
+  -> InsertExecutor
+  -> TupleCodec::Encode(schema, values)
+  -> TableHeap::InsertTuple(tuple)
+  -> TablePage::InsertTuple(slot allocation)
+  -> WAL append + flush         [如果表已绑定 WalManager]
+  -> BufferPoolManager::UnpinPage(is_dirty=true)
+  -> index_maintenance::InsertIntoIndexesByKey()   [如果表有索引]
 ```
 
-### 查询数据流
-```
-Client Code
-   ↓
-ExecutorContext(Catalog)
-   ↓
-SeqScanExecutor(TableInfo) → BufferPoolManager → TableHeap::TableIterator
-   ↓ 遍历所有活跃行,返回ExecutorRow
-FilterExecutor(child, predicate) → 过滤行
-   ↓
-ProjectionExecutor(child, columns) → 选择列
-   ↓
-ExecutorRow → 最终结果
+这里最值得注意的是两点：
+
+- tuple 写入和索引写入都已经纳入执行层 DML 路径
+- 执行器层面已经承担了“数据修改 + 索引同步”的协调职责
+
+### 3. 顺序扫描路径
+
+```text
+SeqScanExecutor
+  -> TableHeap::Begin()
+  -> TableIterator
+  -> TablePage / RID / Tuple
+  -> TupleCodec::Decode(schema, tuple)
+  -> ExecutorRow
+  -> FilterExecutor / ProjectionExecutor   [可选]
 ```
 
-### 索引查询流
+### 4. 索引扫描路径
+
+```text
+IndexScanExecutor
+  -> BPlusTree::Begin(start_key)
+  -> IndexIterator yields (key, RID)
+  -> TableHeap::GetTuple(RID)              [如果提供了 TableInfo]
+  -> TupleCodec::Decode()
+  -> ExecutorRow
 ```
-IndexScanExecutor(BPlusTree, start_key)
-   ↓
-BPlusTree::Begin(key) → IndexIterator
-   ↓ 查找键,得到RID
-TableHeap::GetTuple(RID)
-   ↓ 根据RID定位页和Slot
-TablePage::GetTuple(slot_id)
-   ↓
-Tuple → TupleCodec::Decode() → Values
-   ↓
-ExecutorRow
+
+如果没有 `TableInfo`，`IndexScanExecutor` 也可以退化成“只返回 key/RID 语义”的扫描器。
+
+## 每层边界再说一遍
+
+为了避免后续开发再次回到“局部修改、整体失序”，这里把每层边界压缩成最短版本：
+
+- `DatabaseRuntime`
+  - 负责装配与启动顺序
+  - 不负责具体算子逻辑
+- `Executor`
+  - 负责行流转与 DML 协调
+  - 不负责页缓存和页布局
+- `Catalog`
+  - 负责对象目录、元数据持久化与恢复
+  - 不负责 tuple 字节读写
+- `TableHeap`
+  - 负责表页链和表级记录操作
+  - 不负责列语义和查询计划
+- `BPlusTree`
+  - 负责键到 RID 的组织
+  - 不负责 tuple 解码
+- `BufferPoolManager`
+  - 负责页驻留、替换、刷回
+  - 不负责 schema 和索引语义
+- `DiskManager`
+  - 负责数据库文件和页级 I/O
+  - 不负责缓存策略
+- `WalManager`
+  - 负责 redo 恢复材料
+  - 不负责事务级别的回滚语义
+
+## 当前源码阅读顺序
+
+如果接下来要继续做系统化整理，推荐按下面顺序读代码：
+
+1. `CXX/src/include/runtime/database_runtime.h`
+2. `CXX/src/runtime/database_runtime.cxx`
+3. `CXX/src/include/execution/` 和 `CXX/src/execution/`
+4. `CXX/src/include/catalog/` 和 `CXX/src/catalog/catalog.cxx`
+5. `CXX/src/include/table/` 和 `CXX/src/table/table_heap.cxx`
+6. `CXX/src/include/storage/index/` 与 `CXX/src/storage/index/`
+7. `CXX/src/include/buffer/` 与 `CXX/src/buffer/`
+8. `CXX/src/include/storage/disk/`, `CXX/src/include/storage/wal/`
+9. `CXX/src/include/type/` 与 `CXX/src/include/common/`
+
+这个顺序和系统真实依赖方向是一致的，更适合继续做架构收敛。
+
+## 目录结构速览
+
+```text
+CXX/
+├── src/
+│   ├── runtime/          # 统一运行入口
+│   ├── execution/        # 执行器树
+│   ├── catalog/          # 表/索引目录与元数据持久化
+│   ├── table/            # 表级堆组织与迭代器
+│   ├── buffer/           # 缓冲池与替换器
+│   ├── storage/
+│   │   ├── disk/         # 数据库文件页 I/O
+│   │   ├── page/         # 页结构
+│   │   ├── record/       # RID / Tuple / TupleCodec
+│   │   ├── index/        # B+Tree / IndexIterator
+│   │   └── wal/          # WAL redo
+│   ├── type/             # TypeId / Value
+│   └── include/          # 公共头文件
+└── test/                 # 分层测试与功能测试
 ```
+
+## 构建与测试
+
+```bash
+cmake -S CXX -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+测试目前按模块拆分，重点覆盖：
+
+- `storage`：页、索引、WAL、磁盘
+- `buffer`：缓冲池与替换策略
+- `catalog`：表/索引元数据持久化与恢复
+- `table`：堆表操作与 WAL 路径
+- `execution`：执行器行为、恢复后的可用性、索引自动维护
+
+## 这份 README 的使用方式
+
+后续如果继续整理项目，建议始终围绕下面三个问题往下推进：
+
+1. 这一层只负责什么，不负责什么？
+2. 这一层依赖哪些下层对象？
+3. 这一层向上层暴露的稳定入口是什么？
+
+只要这个骨架始终不丢，后面无论继续补 SQL、事务还是优化器，项目都还能沿着同一条主线演进，而不是再次散成一堆局部修补。
