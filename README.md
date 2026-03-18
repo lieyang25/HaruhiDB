@@ -1,5 +1,9 @@
 # HaruhiDB 项目架构与API文档(README版本)
 
+补充阅读：
+
+- [功能闭环审查与 Catalog 持久化补充说明](CXX/docs/functional_closure_review.md)
+
 ## 项目概述
 
 HaruhiDB 是一个C++关系型数据库实现，采用模块化设计，分为7个主要层次：
