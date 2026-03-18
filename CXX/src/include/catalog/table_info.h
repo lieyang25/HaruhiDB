@@ -166,6 +166,14 @@ namespace catalog
             buffer::BufferPoolManager* bpm);
 
         /**
+         * 按 oid 移除并返回索引项。
+         *
+         * @param index_oid 索引 oid
+         * @return 找到则返回被移除的索引项
+         */
+        std::optional<IndexEntry> RemoveIndex(index_oid_t index_oid);
+
+        /**
          * 按 oid 获取索引。
          */
         storage::BPlusTree* GetIndex(index_oid_t index_oid) noexcept;

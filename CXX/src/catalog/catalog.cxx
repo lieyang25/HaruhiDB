@@ -19,6 +19,9 @@
 
 #include "catalog/catalog.h"
 
+#include "storage/record/tuple_codec.h"
+#include "table/table_iterator.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -40,11 +43,7 @@ namespace catalog
 {
     namespace
     {
-        constexpr uint32_t CATALOG_META_MAGIC = 0x4341544DU;         // "CATM"
-        constexpr uint32_t CATALOG_META_VERSION = 1U;
-        constexpr uint32_t CATALOG_META_PAGE_MAGIC = 0x434D4554U;    // "CMET"
-        constexpr uint32_t CATALOG_META_PAGE_VERSION = 1U;
-
+        
         struct CatalogMetaPageOpaque
         {
             uint32_t magic;
@@ -62,6 +61,80 @@ namespace catalog
                 return static_cast<char>(std::tolower(ch));
             });
             return normalized;
+        }
+
+        std::expected<void, std::string> ValidatePrimaryIndexSchema(const Schema& schema)
+        {
+            if (schema.ColumnCount() == 0) {
+                return std::unexpected("Catalog::CreateIndex: table schema has no columns");
+            }
+
+            const auto& key_column = schema.GetColumn(0);
+            if (key_column.Type() != type::TypeId::INTEGER) {
+                return std::unexpected("Catalog::CreateIndex: indexed key (first column) must be INTEGER");
+            }
+            if (key_column.Nullable()) {
+                return std::unexpected("Catalog::CreateIndex: indexed key (first column) must be NOT NULL");
+            }
+
+            return {};
+        }
+
+        std::expected<int32_t, std::string> ExtractPrimaryIndexKeyFromTuple(
+            const Schema& schema, const record::Tuple& tuple)
+        {
+            auto schema_validated = ValidatePrimaryIndexSchema(schema);
+            if (!schema_validated.has_value()) {
+                return std::unexpected(schema_validated.error());
+            }
+
+            auto key_value_exp = record::TupleCodec::DecodeAt(schema, tuple, 0);
+            if (!key_value_exp.has_value()) {
+                return std::unexpected(
+                    "Catalog::CreateIndex: decode index key failed: " + key_value_exp.error().msg);
+            }
+
+            const int32_t* key = key_value_exp.value().TryAs<int32_t>();
+            if (key == nullptr) {
+                return std::unexpected("Catalog::CreateIndex: index key is not INTEGER");
+            }
+
+            return *key;
+        }
+
+        std::expected<void, std::string> BackfillIndexFromTable(
+            TableInfo* table_info, storage::BPlusTree* index)
+        {
+            if (table_info == nullptr) {
+                return std::unexpected("Catalog::CreateIndex: table info is null");
+            }
+            if (index == nullptr) {
+                return std::unexpected("Catalog::CreateIndex: created index is null");
+            }
+            if (table_info->GetTableHeap() == nullptr) {
+                return std::unexpected("Catalog::CreateIndex: table heap is null");
+            }
+
+            const auto schema_validated = ValidatePrimaryIndexSchema(table_info->GetSchema());
+            if (!schema_validated.has_value()) {
+                return std::unexpected(schema_validated.error());
+            }
+
+            for (auto it = table_info->GetTableHeap()->Begin(); it != table_info->GetTableHeap()->End(); ++it) {
+                const record::Tuple tuple = *it;
+                const record::RID rid = it.GetRID();
+
+                auto key_exp = ExtractPrimaryIndexKeyFromTuple(table_info->GetSchema(), tuple);
+                if (!key_exp.has_value()) {
+                    return std::unexpected(key_exp.error());
+                }
+
+                if (!index->Insert(key_exp.value(), rid)) {
+                    return std::unexpected("Catalog::CreateIndex: index backfill insert failed");
+                }
+            }
+
+            return {};
         }
 
         void BestEffortRecycleNewTableHeap(
@@ -330,6 +403,10 @@ namespace catalog
     Catalog::Catalog(buffer::BufferPoolManager* bpm)
         : bpm_(bpm)
     {
+        if (bpm_ == nullptr) {
+            throw std::invalid_argument("Catalog: buffer pool manager must not be null");
+        }
+
         auto loaded = LoadCatalogMeta();
         if (!loaded.has_value()) {
             throw std::runtime_error("Catalog: failed to load persisted metadata: " + loaded.error());
@@ -379,6 +456,9 @@ namespace catalog
             table_oid, std::move(table_name), schema, std::move(table_heap));
 
         TableInfo* table_info_ptr = table_info.get();
+        if (wal_manager_ != nullptr && table_info_ptr->GetTableHeap() != nullptr) {
+            table_info_ptr->GetTableHeap()->SetWalManager(wal_manager_);
+        }
         name_to_oid_[normalized_name] = table_oid;
         tables_[table_oid] = std::move(table_info);
 
@@ -502,6 +582,11 @@ namespace catalog
     std::expected<storage::BPlusTree*, std::string> Catalog::CreateIndex(
         table_oid_t table_oid, std::string index_name)
     {
+        auto validated = ValidateIndexName(index_name);
+        if (!validated.has_value()) {
+            return std::unexpected(validated.error());
+        }
+
         // step 1: 定位目标表。
         std::unique_lock lock(latch_);
         const auto it = tables_.find(table_oid);
@@ -510,15 +595,36 @@ namespace catalog
         }
 
         // step 2: 分配新的 index oid，并委托 TableInfo 创建索引。
+        const index_oid_t old_next_index_oid = next_index_oid_;
         const index_oid_t index_oid = AllocateIndexOid();
         auto created = it->second->CreateIndex(index_oid, std::move(index_name), bpm_);
         if (!created.has_value()) {
+            next_index_oid_ = old_next_index_oid;
             return std::unexpected(created.error());
         }
 
-        // step 3: 持久化 catalog 目录。
+        // step 3: 先同步回填整张表，确保索引创建即刻可用。
+        auto backfilled = BackfillIndexFromTable(it->second.get(), created.value());
+        if (!backfilled.has_value()) {
+            auto removed = it->second->RemoveIndex(index_oid);
+            next_index_oid_ = old_next_index_oid;
+
+            if (removed.has_value() && removed->header_page_id != INVALID_PAGE_ID && bpm_ != nullptr) {
+                (void)bpm_->DeletePage(removed->header_page_id);
+            }
+            return std::unexpected(
+                "Catalog::CreateIndex: index backfill failed: " + backfilled.error());
+        }
+
+        // step 4: 持久化 catalog 目录。
         auto persisted = PersistCatalogMetaLocked();
         if (!persisted.has_value()) {
+            auto removed = it->second->RemoveIndex(index_oid);
+            next_index_oid_ = old_next_index_oid;
+
+            if (removed.has_value() && removed->header_page_id != INVALID_PAGE_ID && bpm_ != nullptr) {
+                (void)bpm_->DeletePage(removed->header_page_id);
+            }
             return std::unexpected("Catalog::CreateIndex: persist catalog meta failed: " + persisted.error());
         }
 
@@ -557,12 +663,19 @@ namespace catalog
         std::string index_name,
         page_id_t header_page_id)
     {
+        auto validated = ValidateIndexName(index_name);
+        if (!validated.has_value()) {
+            return std::unexpected(validated.error());
+        }
+
         // step 1: 定位目标表。
         std::unique_lock lock(latch_);
         const auto it = tables_.find(table_oid);
         if (it == tables_.end() || it->second == nullptr) {
             return std::unexpected("Catalog::LoadIndex: table oid not found");
         }
+
+        const index_oid_t old_next_index_oid = next_index_oid_;
 
         // step 2: 委托 TableInfo 加载索引。
         auto loaded = it->second->LoadIndex(
@@ -571,6 +684,7 @@ namespace catalog
             header_page_id,
             bpm_);
         if (!loaded.has_value()) {
+            next_index_oid_ = old_next_index_oid;
             return std::unexpected(loaded.error());
         }
 
@@ -582,6 +696,8 @@ namespace catalog
         // step 4: 持久化 catalog 目录。
         auto persisted = PersistCatalogMetaLocked();
         if (!persisted.has_value()) {
+            (void)it->second->RemoveIndex(index_oid);
+            next_index_oid_ = old_next_index_oid;
             return std::unexpected("Catalog::LoadIndex: persist catalog meta failed: " + persisted.error());
         }
 
@@ -639,10 +755,23 @@ namespace catalog
         return next_index_oid_;
     }
 
+    void Catalog::BindWalManager(storage::wal::WalManager* wal_manager) noexcept
+    {
+        std::unique_lock lock(latch_);
+        wal_manager_ = wal_manager;
+
+        for (auto& [table_oid, table_info] : tables_) {
+            (void)table_oid;
+            if (table_info != nullptr && table_info->GetTableHeap() != nullptr) {
+                table_info->GetTableHeap()->SetWalManager(wal_manager_);
+            }
+        }
+    }
+
     std::expected<void, std::string> Catalog::LoadCatalogMeta()
     {
         if (bpm_ == nullptr) {
-            return {};
+            return std::unexpected("Catalog::LoadCatalogMeta: buffer pool manager is null");
         }
 
         auto* disk_manager = bpm_->GetDiskManager();
@@ -671,6 +800,11 @@ namespace catalog
 
     std::expected<void, std::string> Catalog::PersistCatalogMetaLocked()
     {
+        if (fail_next_persists_for_test_ > 0) {
+            --fail_next_persists_for_test_;
+            return std::unexpected("Catalog::PersistCatalogMetaLocked: injected failure for test");
+        }
+
         auto snapshot = BuildMetaSnapshotLocked();
 
         auto serialized_exp = SerializeCatalogMeta(snapshot);
@@ -739,6 +873,11 @@ namespace catalog
                 page_payload + static_cast<size_t>(opaque.payload_size));
 
             const page_id_t next_page_id = opaque.next_page_id;
+            if (next_page_id == 0) {
+                page->RUnLock();
+                bpm_->UnpinPage(current_page_id, false);
+                return std::unexpected("Catalog::ReadCatalogMetaPayload: next_page_id must not be 0");
+            }
 
             page->RUnLock();
             if (!bpm_->UnpinPage(current_page_id, false)) {
@@ -793,6 +932,11 @@ namespace catalog
             CatalogMetaPageOpaque opaque{};
             std::memcpy(&opaque, persistent->opaque, sizeof(opaque));
             const page_id_t next_page_id = opaque.next_page_id;
+            if (next_page_id == 0) {
+                page->RUnLock();
+                bpm_->UnpinPage(current_page_id, false);
+                return std::unexpected("Catalog::WriteCatalogMetaPayloadLocked: next_page_id must not be 0");
+            }
             page->RUnLock();
 
             if (!bpm_->UnpinPage(current_page_id, false)) {
@@ -1085,6 +1229,25 @@ namespace catalog
         const uint32_t table_count = table_count_exp.value();
         const uint32_t index_count = index_count_exp.value();
 
+        constexpr uint32_t kMaxCatalogEntries = 1U << 20;
+        if (table_count > kMaxCatalogEntries || index_count > kMaxCatalogEntries) {
+            return std::unexpected("Catalog meta: table/index count is unreasonably large");
+        }
+
+        constexpr size_t kMinTableMetaBytes =
+            sizeof(table_oid_t) + sizeof(page_id_t) + sizeof(uint32_t) + sizeof(uint32_t);
+        constexpr size_t kMinIndexMetaBytes =
+            sizeof(index_oid_t) + sizeof(table_oid_t) + sizeof(page_id_t) + sizeof(uint32_t);
+        const size_t payload_size = payload.size();
+        if (table_count > 0 &&
+            static_cast<size_t>(table_count) > (payload_size / kMinTableMetaBytes)) {
+            return std::unexpected("Catalog meta: table_count exceeds payload capacity");
+        }
+        if (index_count > 0 &&
+            static_cast<size_t>(index_count) > (payload_size / kMinIndexMetaBytes)) {
+            return std::unexpected("Catalog meta: index_count exceeds payload capacity");
+        }
+
         snapshot.tables.reserve(table_count);
         for (uint32_t i = 0; i < table_count; ++i) {
             auto table_oid_exp = reader.ReadPod<table_oid_t>();
@@ -1110,11 +1273,21 @@ namespace catalog
                 return std::unexpected(schema_exp.error());
             }
 
+            const page_id_t first_page_id = first_page_id_exp.value();
+            if (first_page_id == INVALID_PAGE_ID || first_page_id == 0) {
+                return std::unexpected("Catalog meta: invalid table first_page_id");
+            }
+            auto validated_table_name = ValidateTableName(table_name_exp.value());
+            if (!validated_table_name.has_value()) {
+                return std::unexpected(
+                    "Catalog meta: invalid table name: " + validated_table_name.error());
+            }
+
             snapshot.tables.push_back(TableMeta{
                 .table_oid = table_oid_exp.value(),
                 .table_name = std::move(table_name_exp.value()),
                 .schema = std::move(schema_exp.value()),
-                .first_page_id = first_page_id_exp.value(),
+                .first_page_id = first_page_id,
             });
         }
 
@@ -1132,16 +1305,42 @@ namespace catalog
                 return std::unexpected("Catalog meta: malformed index meta");
             }
 
+            const page_id_t header_page_id = header_page_id_exp.value();
+            if (header_page_id == INVALID_PAGE_ID || header_page_id == 0) {
+                return std::unexpected("Catalog meta: invalid index header_page_id");
+            }
+            auto validated_index_name = ValidateIndexName(index_name_exp.value());
+            if (!validated_index_name.has_value()) {
+                return std::unexpected(
+                    "Catalog meta: invalid index name: " + validated_index_name.error());
+            }
+
             snapshot.indexes.push_back(IndexMeta{
                 .index_oid = index_oid_exp.value(),
                 .table_oid = table_oid_exp.value(),
                 .index_name = std::move(index_name_exp.value()),
-                .header_page_id = header_page_id_exp.value(),
+                .header_page_id = header_page_id,
             });
         }
 
         if (!reader.Exhausted()) {
             return std::unexpected("Catalog meta: payload has trailing bytes");
+        }
+
+        if (!snapshot.tables.empty()) {
+            const auto max_table_oid = std::ranges::max_element(
+                snapshot.tables, {}, &TableMeta::table_oid)->table_oid;
+            if (snapshot.next_table_oid <= max_table_oid) {
+                return std::unexpected("Catalog meta: next_table_oid is smaller than existing max table oid");
+            }
+        }
+
+        if (!snapshot.indexes.empty()) {
+            const auto max_index_oid = std::ranges::max_element(
+                snapshot.indexes, {}, &IndexMeta::index_oid)->index_oid;
+            if (snapshot.next_index_oid <= max_index_oid) {
+                return std::unexpected("Catalog meta: next_index_oid is smaller than existing max index oid");
+            }
         }
 
         return snapshot;
@@ -1159,8 +1358,10 @@ namespace catalog
         bool has_table = false;
 
         for (const auto& table_meta : snapshot.tables) {
-            if (table_meta.table_name.empty()) {
-                return std::unexpected("Catalog meta: empty table name");
+            auto validated_table_name = ValidateTableName(table_meta.table_name);
+            if (!validated_table_name.has_value()) {
+                return std::unexpected(
+                    "Catalog meta: invalid table name: " + validated_table_name.error());
             }
             if (table_meta.first_page_id == INVALID_PAGE_ID || table_meta.first_page_id == 0) {
                 return std::unexpected("Catalog meta: invalid table first_page_id");
@@ -1180,6 +1381,9 @@ namespace catalog
                 table_meta.table_name,
                 table_meta.schema,
                 std::move(table_heap));
+            if (wal_manager_ != nullptr && table_info->GetTableHeap() != nullptr) {
+                table_info->GetTableHeap()->SetWalManager(wal_manager_);
+            }
 
             name_to_oid_[normalized_name] = table_meta.table_oid;
             tables_[table_meta.table_oid] = std::move(table_info);
@@ -1201,6 +1405,11 @@ namespace catalog
             if (index_meta.header_page_id == INVALID_PAGE_ID || index_meta.header_page_id == 0) {
                 return std::unexpected("Catalog meta: invalid index header_page_id");
             }
+            auto validated_index_name = ValidateIndexName(index_meta.index_name);
+            if (!validated_index_name.has_value()) {
+                return std::unexpected(
+                    "Catalog meta: invalid index name: " + validated_index_name.error());
+            }
 
             auto loaded = it->second->LoadIndex(
                 index_meta.index_oid,
@@ -1218,15 +1427,15 @@ namespace catalog
             }
         }
 
-        next_table_oid_ = snapshot.next_table_oid;
-        if (has_table && next_table_oid_ <= max_table_oid) {
-            next_table_oid_ = max_table_oid + 1;
+        if (has_table && snapshot.next_table_oid <= max_table_oid) {
+            return std::unexpected("Catalog meta: next_table_oid is smaller than existing max table oid");
+        }
+        if (has_index && snapshot.next_index_oid <= max_index_oid) {
+            return std::unexpected("Catalog meta: next_index_oid is smaller than existing max index oid");
         }
 
+        next_table_oid_ = snapshot.next_table_oid;
         next_index_oid_ = snapshot.next_index_oid;
-        if (has_index && next_index_oid_ <= max_index_oid) {
-            next_index_oid_ = max_index_oid + 1;
-        }
 
         return {};
     }
@@ -1256,7 +1465,13 @@ namespace catalog
             return std::unexpected("Catalog: table name must not be empty");
         }
 
-        // step 2: 不能全为空白。
+        // step 2: 不允许首尾空白字符。
+        if (std::isspace(static_cast<unsigned char>(table_name.front())) != 0 ||
+            std::isspace(static_cast<unsigned char>(table_name.back())) != 0) {
+            return std::unexpected("Catalog: table name leading/trailing spaces not allowed");
+        }
+
+        // step 3: 不能全为空白。
         const bool all_space = std::ranges::all_of(table_name, [](unsigned char ch) {
             return std::isspace(ch) != 0;
         });
@@ -1264,10 +1479,32 @@ namespace catalog
             return std::unexpected("Catalog: table name must not be blank");
         }
 
-        // step 3: 不能包含控制字符。
+        // step 4: 不能包含控制字符。
         for (unsigned char ch : table_name) {
             if (std::iscntrl(ch) != 0) {
                 return std::unexpected("Catalog: table name must not contain control characters");
+            }
+        }
+
+        return {};
+    }
+
+    std::expected<void, std::string> Catalog::ValidateIndexName(std::string_view index_name)
+    {
+        if (index_name.empty()) {
+            return std::unexpected("Catalog: index name must not be empty");
+        }
+
+        const bool all_space = std::ranges::all_of(index_name, [](unsigned char ch) {
+            return std::isspace(ch) != 0;
+        });
+        if (all_space) {
+            return std::unexpected("Catalog: index name must not be blank");
+        }
+
+        for (unsigned char ch : index_name) {
+            if (std::iscntrl(ch) != 0) {
+                return std::unexpected("Catalog: index name must not contain control characters");
             }
         }
 

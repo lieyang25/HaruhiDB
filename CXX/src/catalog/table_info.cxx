@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -224,6 +225,22 @@ namespace catalog
             }
         }
         return std::nullopt;
+    }
+
+    std::optional<TableInfo::IndexEntry> TableInfo::RemoveIndex(index_oid_t index_oid)
+    {
+        const auto it = std::find_if(indexes_.begin(), indexes_.end(), [&](const IndexEntry& entry) {
+            return entry.index_oid == index_oid;
+        });
+        if (it == indexes_.end()) {
+            return std::nullopt;
+        }
+
+        IndexEntry removed = std::move(*it);
+        indexes_.erase(it);
+
+        std::erase(index_oids_, index_oid);
+        return removed;
     }
 
     std::string TableInfo::ToString() const

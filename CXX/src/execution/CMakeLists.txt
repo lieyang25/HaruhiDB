@@ -1,4 +1,5 @@
 add_library(haruhi_execution
+    index_maintenance.cxx
     values_executor.cxx
     seq_scan_executor.cxx
     filter_executor.cxx

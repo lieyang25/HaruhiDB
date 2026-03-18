@@ -10,6 +10,11 @@
 
 namespace HaruhiDB
 {
+    constexpr uint32_t CATALOG_META_MAGIC = 0x4341544DU;         // "CATM"
+    constexpr uint32_t CATALOG_META_VERSION = 1U;
+    constexpr uint32_t CATALOG_META_PAGE_MAGIC = 0x434D4554U;    // "CMET"
+    constexpr uint32_t CATALOG_META_PAGE_VERSION = 1U;
+
 
     constexpr size_t HEADER_SIZE = 32;
     constexpr size_t PAGE_SIZE = 4096;

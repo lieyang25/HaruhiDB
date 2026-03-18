@@ -14,10 +14,12 @@
 #include "execution/update_executor.h"
 #include "execution/values_executor.h"
 #include "storage/disk/disk_manager.h"
+#include "storage/wal/wal_manager.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -70,35 +72,6 @@ int32_t InsertRows(
     return count == nullptr ? -1 : *count;
 }
 
-bool BuildIndexFromTableRows(
-    ExecutorContext* exec_ctx,
-    catalog::TableInfo* table_info,
-    storage::BPlusTree* index)
-{
-    if (exec_ctx == nullptr || table_info == nullptr || index == nullptr) {
-        return false;
-    }
-
-    SeqScanExecutor scan(exec_ctx, table_info);
-    scan.Init();
-
-    ExecutorRow row;
-    while (scan.Next(&row)) {
-        if (!row.has_rid || row.values.empty()) {
-            return false;
-        }
-        const int32_t* key = row.values[0].TryAs<int32_t>();
-        if (key == nullptr) {
-            return false;
-        }
-        if (!index->Insert(*key, row.rid)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 std::vector<int32_t> CollectIdsBySeqScan(ExecutorContext* exec_ctx, catalog::TableInfo* table_info)
 {
     std::vector<int32_t> ids;
@@ -117,6 +90,53 @@ std::vector<int32_t> CollectIdsBySeqScan(ExecutorContext* exec_ctx, catalog::Tab
         }
     }
     return ids;
+}
+
+std::vector<int32_t> CollectIdsByIndexScan(
+    ExecutorContext* exec_ctx,
+    catalog::TableInfo* table_info,
+    storage::BPlusTree* index,
+    std::optional<int32_t> start_key = std::nullopt)
+{
+    std::vector<int32_t> ids;
+    if (exec_ctx == nullptr || table_info == nullptr || index == nullptr) {
+        return ids;
+    }
+
+    IndexScanExecutor scan(exec_ctx, table_info, index, start_key);
+    scan.Init();
+
+    ExecutorRow row;
+    while (scan.Next(&row)) {
+        const int32_t* id = row.values.empty() ? nullptr : row.values[0].TryAs<int32_t>();
+        if (id != nullptr) {
+            ids.push_back(*id);
+        }
+    }
+    return ids;
+}
+
+std::vector<int32_t> CollectKeysByIndexScan(
+    ExecutorContext* exec_ctx,
+    storage::BPlusTree* index,
+    std::optional<int32_t> start_key = std::nullopt)
+{
+    std::vector<int32_t> keys;
+    if (exec_ctx == nullptr || index == nullptr) {
+        return keys;
+    }
+
+    IndexScanExecutor scan(exec_ctx, nullptr, index, start_key);
+    scan.Init();
+
+    ExecutorRow row;
+    while (scan.Next(&row)) {
+        const int32_t* key = row.values.empty() ? nullptr : row.values[0].TryAs<int32_t>();
+        if (key != nullptr) {
+            keys.push_back(*key);
+        }
+    }
+    return keys;
 }
 
 class VectorRowExecutor : public AbstractExecutor
@@ -154,19 +174,23 @@ protected:
     void SetUp() override
     {
         const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-        const auto filename = std::string("execution_functional_") + info->test_suite_name() + "_" + info->name() + ".db";
-        db_path_ = std::filesystem::temp_directory_path() / filename;
+        const auto stem = std::string("execution_functional_") + info->test_suite_name() + "_" + info->name();
+        db_path_ = std::filesystem::temp_directory_path() / (stem + ".db");
+        wal_path_ = std::filesystem::temp_directory_path() / (stem + ".wal");
         std::error_code ec;
         std::filesystem::remove(db_path_, ec);
+        std::filesystem::remove(wal_path_, ec);
     }
 
     void TearDown() override
     {
         std::error_code ec;
         std::filesystem::remove(db_path_, ec);
+        std::filesystem::remove(wal_path_, ec);
     }
 
     std::filesystem::path db_path_;
+    std::filesystem::path wal_path_;
 };
 
 TEST_F(ExecutorFunctionalTest, ValuesExecutorOrderAndReinit)
@@ -1056,8 +1080,6 @@ TEST_F(ExecutorFunctionalTest, IndexScanRespectsStartKeyAndOrder)
             }),
         3);
 
-    ASSERT_TRUE(BuildIndexFromTableRows(&exec_ctx, table_info, index));
-
     IndexScanExecutor scan(&exec_ctx, table_info, index, 20);
     scan.Init();
 
@@ -1095,8 +1117,6 @@ TEST_F(ExecutorFunctionalTest, IndexScanSkipsStaleEntries)
                 {type::Value::Int32(20), type::Value::VarChar("b")},
             }),
         2);
-    ASSERT_TRUE(BuildIndexFromTableRows(&exec_ctx, table_info, index));
-
     auto scan_child = std::make_unique<SeqScanExecutor>(&exec_ctx, table_info);
     auto filter = std::make_unique<FilterExecutor>(
         &exec_ctx,
@@ -1376,6 +1396,371 @@ TEST_F(ExecutorFunctionalTest, BoundaryLargeDataAcrossPages)
     ASSERT_EQ(ids.size(), 1200u);
     EXPECT_EQ(ids.front(), 0);
     EXPECT_EQ(ids.back(), 1199);
+}
+
+TEST_F(ExecutorFunctionalTest, RestartRecoversCatalogAndExecutorsRemainUsable)
+{
+    table_oid_t table_oid = 0;
+    index_oid_t index_oid = 0;
+
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(64, &dm);
+        catalog::Catalog catalog(&bpm);
+
+        catalog::TableInfo* table_info = CreateStudentTable(&catalog, "student");
+        ASSERT_NE(table_info, nullptr);
+
+        ExecutorContext exec_ctx(&catalog);
+        ASSERT_EQ(
+            InsertRows(
+                &exec_ctx,
+                table_info,
+                {
+                    {type::Value::Int32(1), type::Value::VarChar("a")},
+                    {type::Value::Int32(2), type::Value::VarChar("b")},
+                    {type::Value::Int32(3), type::Value::VarChar("c")},
+                    {type::Value::Int32(4), type::Value::VarChar("d")},
+                }),
+            4);
+
+        auto index_exp = catalog.CreateIndex(table_info->Oid(), "idx_student_id");
+        ASSERT_TRUE(index_exp.has_value()) << index_exp.error();
+        ASSERT_NE(index_exp.value(), nullptr);
+        table_oid = table_info->Oid();
+        ASSERT_FALSE(table_info->IndexOids().empty());
+        index_oid = table_info->IndexOids().front();
+        ASSERT_TRUE(bpm.FlushAllPages().has_value());
+    }
+
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(64, &dm);
+        catalog::Catalog recovered_catalog(&bpm);
+
+        catalog::TableInfo* recovered_table = recovered_catalog.GetTable(table_oid);
+        ASSERT_NE(recovered_table, nullptr);
+        storage::BPlusTree* recovered_index = recovered_catalog.GetIndex(table_oid, index_oid);
+        ASSERT_NE(recovered_index, nullptr);
+
+        ExecutorContext exec_ctx(&recovered_catalog);
+        EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, recovered_table), (std::vector<int32_t>{1, 2, 3, 4}));
+        EXPECT_EQ(
+            CollectIdsByIndexScan(&exec_ctx, recovered_table, recovered_index, 2),
+            (std::vector<int32_t>{2, 3, 4}));
+    }
+}
+
+TEST_F(ExecutorFunctionalTest, WalRecoverThenCatalogLoadSupportsExecutorScan)
+{
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(16, &dm);
+        catalog::Catalog catalog(&bpm);
+
+        catalog::TableInfo* table_info = CreateStudentTable(&catalog, "student");
+        ASSERT_NE(table_info, nullptr);
+
+        storage::wal::WalManager wal(wal_path_);
+        table_info->GetTableHeap()->SetWalManager(&wal);
+
+        ExecutorContext exec_ctx(&catalog);
+        ASSERT_EQ(
+            InsertRows(
+                &exec_ctx,
+                table_info,
+                {
+                    {type::Value::Int32(10), type::Value::VarChar("x")},
+                    {type::Value::Int32(20), type::Value::VarChar("y")},
+                    {type::Value::Int32(30), type::Value::VarChar("z")},
+                }),
+            3);
+    }
+
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(16, &dm);
+        storage::wal::WalManager wal(wal_path_);
+        ASSERT_TRUE(wal.Recover(&bpm));
+
+        catalog::Catalog recovered_catalog(&bpm);
+        catalog::TableInfo* recovered_table = recovered_catalog.GetTable("student");
+        ASSERT_NE(recovered_table, nullptr);
+
+        ExecutorContext exec_ctx(&recovered_catalog);
+        EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, recovered_table), (std::vector<int32_t>{10, 20, 30}));
+    }
+}
+
+TEST_F(ExecutorFunctionalTest, IndexAutoBackfillAndDmlAutoMaintenance)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(64, &dm);
+    catalog::Catalog catalog(&bpm);
+
+    catalog::TableInfo* table_info = CreateStudentTable(&catalog, "student");
+    ASSERT_NE(table_info, nullptr);
+
+    ExecutorContext exec_ctx(&catalog);
+    ASSERT_EQ(
+        InsertRows(
+            &exec_ctx,
+            table_info,
+            {
+                {type::Value::Int32(1), type::Value::VarChar("a")},
+                {type::Value::Int32(2), type::Value::VarChar("b")},
+                {type::Value::Int32(3), type::Value::VarChar("c")},
+            }),
+        3);
+
+    auto index_exp = catalog.CreateIndex(table_info->Oid(), "idx_student_id");
+    ASSERT_TRUE(index_exp.has_value()) << index_exp.error();
+    storage::BPlusTree* index = index_exp.value();
+    ASSERT_NE(index, nullptr);
+
+    EXPECT_EQ(CollectIdsByIndexScan(&exec_ctx, table_info, index), (std::vector<int32_t>{1, 2, 3}));
+
+    auto scan_child = std::make_unique<SeqScanExecutor>(&exec_ctx, table_info);
+    auto filter = std::make_unique<FilterExecutor>(
+        &exec_ctx,
+        std::move(scan_child),
+        [](const ExecutorRow& row) {
+            const int32_t* id = row.values[0].TryAs<int32_t>();
+            return id != nullptr && *id == 2;
+        });
+    DeleteExecutor deleter(&exec_ctx, table_info, std::move(filter));
+    deleter.Init();
+    ExecutorRow delete_result;
+    ASSERT_TRUE(deleter.Next(&delete_result));
+    EXPECT_EQ(delete_result.values[0], type::Value::Int32(1));
+
+    EXPECT_EQ(CollectIdsByIndexScan(&exec_ctx, table_info, index), (std::vector<int32_t>{1, 3}));
+    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1, 2, 3}));
+
+    ASSERT_EQ(
+        InsertRows(
+            &exec_ctx,
+            table_info,
+            {
+                {type::Value::Int32(4), type::Value::VarChar("d")},
+            }),
+        1);
+
+    auto seq_ids_after_insert = CollectIdsBySeqScan(&exec_ctx, table_info);
+    std::ranges::sort(seq_ids_after_insert);
+    EXPECT_EQ(seq_ids_after_insert, (std::vector<int32_t>{1, 3, 4}));
+    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1, 3, 4}));
+    EXPECT_EQ(CollectIdsByIndexScan(&exec_ctx, table_info, index), (std::vector<int32_t>{1, 3, 4}));
+}
+
+TEST_F(ExecutorFunctionalTest, InsertWithIndexDuplicateKeyRollsBackTupleWrite)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(64, &dm);
+    catalog::Catalog catalog(&bpm);
+
+    catalog::TableInfo* table_info = CreateStudentTable(&catalog, "student");
+    ASSERT_NE(table_info, nullptr);
+
+    auto index_exp = catalog.CreateIndex(table_info->Oid(), "idx_student_id");
+    ASSERT_TRUE(index_exp.has_value()) << index_exp.error();
+    storage::BPlusTree* index = index_exp.value();
+    ASSERT_NE(index, nullptr);
+
+    ExecutorContext exec_ctx(&catalog);
+    ASSERT_EQ(
+        InsertRows(
+            &exec_ctx,
+            table_info,
+            {
+                {type::Value::Int32(1), type::Value::VarChar("a")},
+            }),
+        1);
+
+    EXPECT_EQ(
+        InsertRows(
+            &exec_ctx,
+            table_info,
+            {
+                {type::Value::Int32(1), type::Value::VarChar("dup")},
+            }),
+        -1);
+
+    EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, table_info), (std::vector<int32_t>{1}));
+    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1}));
+}
+
+TEST_F(ExecutorFunctionalTest, UpdateRejectsIndexedKeyChangeAndKeepsDataUnchanged)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(64, &dm);
+    catalog::Catalog catalog(&bpm);
+
+    catalog::TableInfo* table_info = CreateStudentTable(&catalog, "student");
+    ASSERT_NE(table_info, nullptr);
+
+    auto index_exp = catalog.CreateIndex(table_info->Oid(), "idx_student_id");
+    ASSERT_TRUE(index_exp.has_value()) << index_exp.error();
+    storage::BPlusTree* index = index_exp.value();
+    ASSERT_NE(index, nullptr);
+
+    ExecutorContext exec_ctx(&catalog);
+    ASSERT_EQ(
+        InsertRows(
+            &exec_ctx,
+            table_info,
+            {
+                {type::Value::Int32(1), type::Value::VarChar("a")},
+            }),
+        1);
+
+    auto scan_child = std::make_unique<SeqScanExecutor>(&exec_ctx, table_info);
+    UpdateExecutor updater(
+        &exec_ctx,
+        table_info,
+        std::move(scan_child),
+        [](const ExecutorRow& row) {
+            auto out = row.values;
+            out[0] = type::Value::Int32(100);
+            return out;
+        });
+    updater.Init();
+
+    ExecutorRow update_result;
+    EXPECT_FALSE(updater.Next(&update_result));
+    EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, table_info), (std::vector<int32_t>{1}));
+    EXPECT_EQ(CollectKeysByIndexScan(&exec_ctx, index), (std::vector<int32_t>{1}));
+}
+
+TEST_F(ExecutorFunctionalTest, UpdateOnIndexedTableKeepsIndexLookupReadableAfterLargePayloadUpdate)
+{
+    storage::DiskManager dm(db_path_);
+    buffer::BufferPoolManager bpm(64, &dm);
+    catalog::Catalog catalog(&bpm);
+
+    auto schema_exp = catalog::Schema::Create({
+        catalog::Column("id", type::TypeId::INTEGER, false),
+        catalog::Column("name", type::TypeId::VARCHAR, 512, false),
+    });
+    ASSERT_TRUE(schema_exp.has_value()) << schema_exp.error();
+    auto table_exp = catalog.CreateTable("student_idx_big", schema_exp.value());
+    ASSERT_TRUE(table_exp.has_value()) << table_exp.error();
+    catalog::TableInfo* table_info = table_exp.value();
+    ASSERT_NE(table_info, nullptr);
+
+    auto index_exp = catalog.CreateIndex(table_info->Oid(), "idx_student_big_id");
+    ASSERT_TRUE(index_exp.has_value()) << index_exp.error();
+    storage::BPlusTree* index = index_exp.value();
+    ASSERT_NE(index, nullptr);
+
+    ExecutorContext exec_ctx(&catalog);
+    std::vector<std::vector<type::Value>> rows;
+    rows.reserve(200);
+    for (int i = 0; i < 200; ++i) {
+        rows.push_back({type::Value::Int32(i), type::Value::VarChar("s")});
+    }
+    ASSERT_EQ(InsertRows(&exec_ctx, table_info, std::move(rows)), 200);
+
+    auto scan_child = std::make_unique<SeqScanExecutor>(&exec_ctx, table_info);
+    auto filter = std::make_unique<FilterExecutor>(
+        &exec_ctx,
+        std::move(scan_child),
+        [](const ExecutorRow& row) {
+            const int32_t* id = row.values[0].TryAs<int32_t>();
+            return id != nullptr && *id == 7;
+        });
+    UpdateExecutor updater(
+        &exec_ctx,
+        table_info,
+        std::move(filter),
+        [](const ExecutorRow& row) {
+            auto out = row.values;
+            out[1] = type::Value::VarChar(std::string(500, 'x'));
+            return out;
+        });
+    updater.Init();
+
+    ExecutorRow update_result;
+    ASSERT_TRUE(updater.Next(&update_result));
+    EXPECT_EQ(update_result.values[0], type::Value::Int32(1));
+    EXPECT_FALSE(updater.Next(&update_result));
+
+    IndexScanExecutor index_scan(&exec_ctx, table_info, index, 7);
+    index_scan.Init();
+    ExecutorRow row;
+    ASSERT_TRUE(index_scan.Next(&row));
+    ASSERT_EQ(row.values.size(), 2u);
+    EXPECT_EQ(row.values[0], type::Value::Int32(7));
+    const std::string* name = row.values[1].TryAs<std::string>();
+    ASSERT_NE(name, nullptr);
+    EXPECT_EQ(name->size(), 500u);
+}
+
+TEST_F(ExecutorFunctionalTest, CatalogGetAllTablesCanDriveTopDownExecutorChecksAfterRestart)
+{
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(64, &dm);
+        catalog::Catalog catalog(&bpm);
+        ExecutorContext exec_ctx(&catalog);
+
+        auto* t0 = CreateStudentTable(&catalog, "t0");
+        auto* t1 = CreateStudentTable(&catalog, "t1");
+        auto* t2 = CreateStudentTable(&catalog, "t2");
+        ASSERT_NE(t0, nullptr);
+        ASSERT_NE(t1, nullptr);
+        ASSERT_NE(t2, nullptr);
+
+        ASSERT_EQ(
+            InsertRows(
+                &exec_ctx,
+                t0,
+                {
+                    {type::Value::Int32(1), type::Value::VarChar("a")},
+                    {type::Value::Int32(2), type::Value::VarChar("b")},
+                }),
+            2);
+        ASSERT_EQ(
+            InsertRows(
+                &exec_ctx,
+                t1,
+                {
+                    {type::Value::Int32(10), type::Value::VarChar("x")},
+                }),
+            1);
+        ASSERT_EQ(
+            InsertRows(
+                &exec_ctx,
+                t2,
+                {
+                    {type::Value::Int32(20), type::Value::VarChar("y")},
+                    {type::Value::Int32(21), type::Value::VarChar("z")},
+                    {type::Value::Int32(22), type::Value::VarChar("w")},
+                }),
+            3);
+
+        ASSERT_TRUE(bpm.FlushAllPages().has_value());
+    }
+
+    {
+        storage::DiskManager dm(db_path_);
+        buffer::BufferPoolManager bpm(64, &dm);
+        catalog::Catalog recovered_catalog(&bpm);
+        ExecutorContext exec_ctx(&recovered_catalog);
+
+        auto tables = recovered_catalog.GetAllTables();
+        ASSERT_EQ(tables.size(), 3u);
+        ASSERT_NE(tables[0], nullptr);
+        ASSERT_NE(tables[1], nullptr);
+        ASSERT_NE(tables[2], nullptr);
+        EXPECT_EQ(tables[0]->Name(), "t0");
+        EXPECT_EQ(tables[1]->Name(), "t1");
+        EXPECT_EQ(tables[2]->Name(), "t2");
+
+        EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, tables[0]), (std::vector<int32_t>{1, 2}));
+        EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, tables[1]), (std::vector<int32_t>{10}));
+        EXPECT_EQ(CollectIdsBySeqScan(&exec_ctx, tables[2]), (std::vector<int32_t>{20, 21, 22}));
+    }
 }
 
 } // namespace HaruhiDB::execution

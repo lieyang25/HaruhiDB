@@ -69,6 +69,7 @@
 #include "buffer/buffer_pool_manager/buffer_pool_manager.h"
 #include "catalog/table_info.h"
 #include "common/config.h"
+#include "storage/wal/wal_manager.h"
 
 #include <expected>
 #include <memory>
@@ -88,7 +89,8 @@ namespace catalog
     {
     public:
         /**
-         * @param bpm 底层缓冲池管理器
+         * @param bpm 底层缓冲池管理器，必须非空
+         * @throws std::invalid_argument 当 bpm 为空时抛出
          */
         explicit Catalog(buffer::BufferPoolManager* bpm);
 
@@ -237,6 +239,20 @@ namespace catalog
          */
         index_oid_t NextIndexOid() const noexcept;
 
+        /**
+         * 绑定 WAL 管理器到 Catalog 当前与后续管理的表对象。
+         *
+         * @param wal_manager WAL 管理器，可为 nullptr 表示解绑
+         */
+        void BindWalManager(storage::wal::WalManager* wal_manager) noexcept;
+
+        /**
+         * 仅测试用：让接下来若干次 catalog 元数据持久化直接失败。
+         *
+         * @param times 失败次数
+         */
+        void FailNextPersistsForTest(uint32_t times) noexcept { fail_next_persists_for_test_ = times; }
+
     private:
         struct TableMeta
         {
@@ -346,6 +362,14 @@ namespace catalog
         static std::expected<void, std::string>
         ValidateTableName(std::string_view table_name);
 
+        /**
+         * 校验索引名是否合法。
+         *
+         * @param index_name 索引名
+         */
+        static std::expected<void, std::string>
+        ValidateIndexName(std::string_view index_name);
+
     private:
         buffer::BufferPoolManager* bpm_{nullptr};
 
@@ -360,6 +384,12 @@ namespace catalog
 
         /// 保护目录层元数据
         mutable std::shared_mutex latch_;
+
+        /// 绑定到所有表堆的 WAL 管理器
+        storage::wal::WalManager* wal_manager_{nullptr};
+
+        /// 仅测试用：注入 catalog 持久化失败次数
+        uint32_t fail_next_persists_for_test_{0};
     };
 
 } // namespace catalog

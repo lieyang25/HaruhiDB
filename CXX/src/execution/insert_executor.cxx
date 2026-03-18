@@ -1,8 +1,10 @@
 #include "execution/insert_executor.h"
 
+#include "execution/index_maintenance.h"
 #include "storage/record/tuple_codec.h"
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 namespace HaruhiDB
@@ -45,10 +47,20 @@ bool InsertExecutor::Next(ExecutorRow* row)
 
     const auto& schema = table_info_->GetSchema();
     auto* table_heap = table_info_->GetTableHeap();
+    const auto indexes = detail::CollectTableIndexes(table_info_);
 
     int32_t inserted_count = 0;
     ExecutorRow input;
     while (child_->Next(&input)) {
+        std::optional<int32_t> key;
+        if (!indexes.empty()) {
+            auto key_exp = detail::ExtractPrimaryIndexKey(schema, input.values);
+            if (!key_exp.has_value()) {
+                return false;
+            }
+            key = key_exp.value();
+        }
+
         auto tuple_exp = record::TupleCodec::Encode(schema, input.values);
         if (!tuple_exp.has_value()) {
             return false;
@@ -56,6 +68,11 @@ bool InsertExecutor::Next(ExecutorRow* row)
 
         record::RID rid;
         if (!table_heap->InsertTuple(tuple_exp.value(), &rid)) {
+            return false;
+        }
+
+        if (key.has_value() && !detail::InsertIntoIndexesByKey(indexes, key.value(), rid)) {
+            (void)table_heap->DeleteTuple(rid);
             return false;
         }
 
