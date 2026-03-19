@@ -18,30 +18,52 @@
 - 刷盘
 - 重新打开数据库并验证恢复结果
 
-## db_dump
+## haruhidb_inspect
 
-文件：`db_dump.cxx`
+文件：`haruhidb_inspect.cxx`
 
-这个工具会把一个当前实现生成的 `.db` 文件按页完整打印出来，重点不是 raw hex，而是尽量做结构化解释：
+这个工具会把当前实现生成的 `.db` / `.wal` 文件做最小可用的结构化检查，重点是“看懂当前落盘内容”，而不是导出 JSON 或做一致性检查。
 
-- 先打印 `DBHeader`
-- 再打印 free list / catalog meta 链
-- 再基于 `Catalog` 重建表和索引的页归属
-- 最后逐页解释 `HEAP / LEAF / INTERNAL / HEADER`
+V1 当前支持两个子命令：
 
-它适合直接拿来观察：
+- `db`
+- `wal`
+
+默认行为：
+
+- `haruhidb_inspect db <file>` 等价于 `--summary`
+- `haruhidb_inspect wal <file>` 等价于 `--summary`
+
+其中 `db` 适合直接观察：
 
 - 当前数据库文件一共有多少页
-- 每一页属于哪张表或哪个索引
-- 表页里有哪些 slot / tuple
-- B+Tree 页里有哪些 key / child / RID
+- `DBHeader` / free list / catalog meta 链
+- 每张表和每个索引的 catalog 摘要
+- 指定 heap page 里的 slot / tuple 值
+- 指定索引 header/root 页的结构化信息
+
+`wal` 直接暴露当前真实物理日志格式：
+
+- entry 数量
+- `put / delete` 数量统计
+- 每条 entry 的 `type / lsn / page_id / payload_len`
+- after-image 页头摘要和 payload preview
+
+V1 暂不支持：
+
+- `--json`
+- `check`
+- `--tables` / `--indexes`
+- `--page-range`
+- `--tree`
+- `--type`
 
 ## 构建
 
 ```bash
 cmake -S CXX -B CXX/example/build -DTEST=OFF
 cmake --build CXX/example/build --target haruhidb_quickstart
-cmake --build CXX/example/build --target haruhidb_db_dump
+cmake --build CXX/example/build --target haruhidb_inspect
 ```
 
 ## 运行
@@ -60,11 +82,18 @@ cmake --build CXX/example/build --target haruhidb_db_dump
 ./CXX/example/build/example/haruhidb_quickstart /tmp/haruhi_demo.db
 ```
 
-## 使用 db_dump
+## 使用 haruhidb_inspect
 
 先准备一个 `.db` 文件，然后运行：
 
 ```bash
-./CXX/example/build/example/haruhidb_db_dump \
-  ./CXX/example/build/example/quickstart_demo.db
+./CXX/example/build/example/haruhidb_inspect db \
+  ./CXX/example/build/example/quickstart_demo.db --summary
+```
+
+查看 WAL：
+
+```bash
+./CXX/example/build/example/haruhidb_inspect wal \
+  ./CXX/example/build/example/quickstart_demo.wal --summary
 ```

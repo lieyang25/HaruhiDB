@@ -11,15 +11,15 @@ target_include_directories(haruhidb_quickstart PRIVATE
     "${CMAKE_SOURCE_DIR}/src/include"
 )
 
-add_executable(haruhidb_db_dump
-    db_dump.cxx
+add_executable(haruhidb_inspect
+    haruhidb_inspect.cxx
 )
 
-target_link_libraries(haruhidb_db_dump PRIVATE
+target_link_libraries(haruhidb_inspect PRIVATE
     compile_version_cxx23
     HaruhiDB
 )
 
-target_include_directories(haruhidb_db_dump PRIVATE
+target_include_directories(haruhidb_inspect PRIVATE
     "${CMAKE_SOURCE_DIR}/src/include"
 )
