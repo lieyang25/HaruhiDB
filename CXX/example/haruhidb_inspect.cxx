@@ -78,12 +78,14 @@ enum class DbMode {
     Table,
     Index,
     Page,
+    All,
 };
 
 enum class WalMode {
     Summary,
     Entry,
     Limit,
+    All,
 };
 
 struct DbCommandOptions
@@ -741,6 +743,43 @@ void PrintDbHeader(const storage::DBHeader& db_header)
     std::cout << "catalog_meta_page_id: " << FormatPageId(db_header.catalog_meta_page_id) << "\n";
 }
 
+void PrintPageIdChain(std::string_view label, const std::vector<page_id_t>& chain)
+{
+    std::cout << label << ": ";
+    if (chain.empty()) {
+        std::cout << "<empty>\n";
+        return;
+    }
+
+    for (size_t i = 0; i < chain.size(); ++i) {
+        if (i != 0) {
+            std::cout << " -> ";
+        }
+        std::cout << chain[i];
+    }
+    std::cout << "\n";
+}
+
+void PrintWarnings(const DumpState& state)
+{
+    if (state.warnings.empty()) {
+        return;
+    }
+
+    std::cout << "warnings:\n";
+    for (const auto& warning : state.warnings) {
+        std::cout << "  - " << warning << "\n";
+    }
+}
+
+void PrintDbFileOverview(const DbSession& session)
+{
+    std::cout << "database file: " << session.db_path << "\n";
+    std::cout << "file_size: " << session.file_size << " bytes\n";
+    std::cout << "page_size: " << PAGE_SIZE << "\n";
+    std::cout << "page_count: " << session.page_count << "\n";
+}
+
 void PrintCatalogSummary(const catalog::Catalog* catalog)
 {
     if (catalog == nullptr) {
@@ -1030,48 +1069,16 @@ void DumpGenericPage(page_id_t page_id, const page_data_t& raw, const DumpState&
 
 void PrintDbSummary(const DbSession& session)
 {
-    std::cout << "database file: " << session.db_path << "\n";
-    std::cout << "file_size: " << session.file_size << " bytes\n";
-    std::cout << "page_size: " << PAGE_SIZE << "\n";
-    std::cout << "page_count: " << session.page_count << "\n\n";
+    PrintDbFileOverview(session);
+    std::cout << "\n";
 
     std::cout << "== Database Summary ==\n";
     PrintDbHeader(session.db_header);
-
-    std::cout << "free_list_chain: ";
-    if (session.free_list_chain.empty()) {
-        std::cout << "<empty>\n";
-    } else {
-        for (size_t i = 0; i < session.free_list_chain.size(); ++i) {
-            if (i != 0) {
-                std::cout << " -> ";
-            }
-            std::cout << session.free_list_chain[i];
-        }
-        std::cout << "\n";
-    }
-
-    std::cout << "catalog_meta_chain: ";
-    if (session.catalog_meta_chain.empty()) {
-        std::cout << "<empty>\n";
-    } else {
-        for (size_t i = 0; i < session.catalog_meta_chain.size(); ++i) {
-            if (i != 0) {
-                std::cout << " -> ";
-            }
-            std::cout << session.catalog_meta_chain[i];
-        }
-        std::cout << "\n";
-    }
+    PrintPageIdChain("free_list_chain", session.free_list_chain);
+    PrintPageIdChain("catalog_meta_chain", session.catalog_meta_chain);
 
     PrintCatalogSummary(session.runtime == nullptr ? nullptr : session.runtime->GetCatalog());
-
-    if (!session.state.warnings.empty()) {
-        std::cout << "warnings:\n";
-        for (const auto& warning : session.state.warnings) {
-            std::cout << "  - " << warning << "\n";
-        }
-    }
+    PrintWarnings(session.state);
 }
 
 void PrintTableDetail(const DbSession& session, const catalog::TableInfo* table_info)
@@ -1208,6 +1215,22 @@ void PrintSinglePage(const DbSession& session, page_id_t page_id)
     DumpGenericPage(page_id, raw, session.state);
 }
 
+void PrintAllPages(const DbSession& session)
+{
+    PrintDbFileOverview(session);
+    std::cout << "\n== Database Layout ==\n";
+    PrintPageIdChain("free_list_chain", session.free_list_chain);
+    PrintPageIdChain("catalog_meta_chain", session.catalog_meta_chain);
+    if (session.runtime != nullptr && session.runtime->GetCatalog() != nullptr) {
+        PrintCatalogSummary(session.runtime->GetCatalog());
+    }
+    PrintWarnings(session.state);
+
+    for (page_id_t page_id = 0; page_id < session.page_count; ++page_id) {
+        PrintSinglePage(session, page_id);
+    }
+}
+
 std::optional<WalScanResult> LoadWalScanResult(const std::filesystem::path& wal_path, std::string* error)
 {
     if (!std::filesystem::exists(wal_path)) {
@@ -1338,6 +1361,20 @@ void PrintWalEntryBrief(const WalEntry& entry)
               << "\n";
 }
 
+void PrintWalEntryBanner(const WalEntry& entry)
+{
+    std::cout << "\n===== Entry " << entry.entry_no << " =====\n";
+}
+
+void PrintWalAllEntries(const WalScanResult& scan)
+{
+    PrintWalSummary(scan);
+    for (const auto& entry : scan.entries) {
+        PrintWalEntryBanner(entry);
+        PrintWalEntryDetail(entry);
+    }
+}
+
 void PrintTopHelp(std::ostream& out)
 {
     out << "Usage:\n"
@@ -1361,6 +1398,7 @@ void PrintDbHelp(std::ostream& out)
         << "  --table <name>         Show one table\n"
         << "  --index <name>         Show one index\n"
         << "  --page <id>            Show one page\n"
+        << "  --all                  Show all pages from front to back\n"
         << "  --help                 Show this message\n";
 }
 
@@ -1374,6 +1412,7 @@ void PrintWalHelp(std::ostream& out)
         << "  --summary              Show WAL summary\n"
         << "  --entry <n>            Show one entry\n"
         << "  --limit <n>            Show first n entries\n"
+        << "  --all                  Show all entries from front to back\n"
         << "  --help                 Show this message\n";
 }
 
@@ -1500,6 +1539,17 @@ bool ParseDbOptions(int argc, char** argv, DbCommandOptions* out, std::string* e
             mode_selected = true;
             continue;
         }
+        if (arg == "--all") {
+            if (mode_selected) {
+                if (error != nullptr) {
+                    *error = "db mode options are mutually exclusive";
+                }
+                return false;
+            }
+            out->mode = DbMode::All;
+            mode_selected = true;
+            continue;
+        }
 
         if (error != nullptr) {
             *error = "unknown db option: " + std::string(arg);
@@ -1610,6 +1660,17 @@ bool ParseWalOptions(int argc, char** argv, WalCommandOptions* out, std::string*
             mode_selected = true;
             continue;
         }
+        if (arg == "--all") {
+            if (mode_selected) {
+                if (error != nullptr) {
+                    *error = "wal mode options are mutually exclusive";
+                }
+                return false;
+            }
+            out->mode = WalMode::All;
+            mode_selected = true;
+            continue;
+        }
 
         if (error != nullptr) {
             *error = "unknown wal option: " + std::string(arg);
@@ -1633,8 +1694,8 @@ int RunDbCommand(const DbCommandOptions& options)
 {
     const CatalogLoadPolicy policy =
         options.mode == DbMode::Header ? CatalogLoadPolicy::Never
-        : options.mode == DbMode::Page ? CatalogLoadPolicy::BestEffort
-                                      : CatalogLoadPolicy::Required;
+        : (options.mode == DbMode::Page || options.mode == DbMode::All) ? CatalogLoadPolicy::BestEffort
+                                                                         : CatalogLoadPolicy::Required;
 
     std::string error;
     auto session_exp = LoadDbSession(options.db_path, policy, &error);
@@ -1690,6 +1751,9 @@ int RunDbCommand(const DbCommandOptions& options)
             case DbMode::Page:
                 PrintSinglePage(session, options.page_id);
                 return 0;
+            case DbMode::All:
+                PrintAllPages(session);
+                return 0;
         }
     } catch (const std::exception& e) {
         std::cerr << "haruhidb_inspect db: " << e.what() << '\n';
@@ -1736,6 +1800,9 @@ int RunWalCommand(const WalCommandOptions& options)
             }
             return 0;
         }
+        case WalMode::All:
+            PrintWalAllEntries(scan);
+            return 0;
     }
     return 1;
 }

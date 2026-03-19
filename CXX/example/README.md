@@ -41,6 +41,7 @@ V1 当前支持两个子命令：
 - 每张表和每个索引的 catalog 摘要
 - 指定 heap page 里的 slot / tuple 值
 - 指定索引 header/root 页的结构化信息
+- 用 `--all` 从 `page 0` 到最后一页顺序查看整个 `.db` 布局
 
 `wal` 直接暴露当前真实物理日志格式：
 
@@ -48,6 +49,7 @@ V1 当前支持两个子命令：
 - `put / delete` 数量统计
 - 每条 entry 的 `type / lsn / page_id / payload_len`
 - after-image 页头摘要和 payload preview
+- 用 `--all` 从 `entry 0` 到最后一条顺序查看整个 `.wal` 布局
 
 V1 暂不支持：
 
@@ -91,9 +93,23 @@ cmake --build CXX/example/build --target haruhidb_inspect
   ./CXX/example/build/example/quickstart_demo.db --summary
 ```
 
+查看整个 `.db` 页布局：
+
+```bash
+./CXX/example/build/example/haruhidb_inspect db \
+  ./CXX/example/build/example/quickstart_demo.db --all
+```
+
 查看 WAL：
 
 ```bash
 ./CXX/example/build/example/haruhidb_inspect wal \
   ./CXX/example/build/example/quickstart_demo.wal --summary
+```
+
+查看整个 `.wal` entry 布局：
+
+```bash
+./CXX/example/build/example/haruhidb_inspect wal \
+  ./CXX/example/build/example/quickstart_demo.wal --all
 ```
