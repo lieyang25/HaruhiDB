@@ -8,6 +8,7 @@ project(HaruhiDB
         )
 
 enable_testing()
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(compile_version_cxx23 INTERFACE)
 target_compile_features(compile_version_cxx23 INTERFACE cxx_std_23)
