@@ -312,6 +312,113 @@ TEST_F(CatalogTableInfoTest, CatalogCreateIndexRejectsNonIntegerFirstColumn)
     EXPECT_TRUE(table_info->IndexEntries().empty());
 }
 
+TEST_F(CatalogTableInfoTest, DropIndexRemovesIndexAndRecoveryDoesNotBringItBack)
+{
+    table_oid_t table_oid = 0;
+
+    {
+        Catalog catalog(buffer_pool_manager_.get());
+        auto created = catalog.CreateTable("student", MakeSimpleSchema());
+        ASSERT_TRUE(created.has_value());
+        ASSERT_NE(created.value(), nullptr);
+        table_oid = created.value()->Oid();
+
+        auto index_exp = catalog.CreateIndex("student", "idx_student_id");
+        ASSERT_TRUE(index_exp.has_value()) << index_exp.error();
+        ASSERT_EQ(created.value()->IndexEntries().size(), 1u);
+
+        auto dropped = catalog.DropIndex("student", "idx_student_id");
+        ASSERT_TRUE(dropped.has_value()) << dropped.error();
+        EXPECT_TRUE(created.value()->IndexEntries().empty());
+        EXPECT_TRUE(created.value()->IndexOids().empty());
+        EXPECT_EQ(catalog.GetIndex(table_oid, 0), nullptr);
+
+        ASSERT_TRUE(buffer_pool_manager_->FlushAllPages().has_value());
+    }
+
+    buffer_pool_manager_.reset();
+    disk_manager_.reset();
+    disk_manager_ = std::make_unique<storage::DiskManager>(db_path_);
+    buffer_pool_manager_ = std::make_unique<buffer::BufferPoolManager>(8, disk_manager_.get());
+
+    Catalog recovered_catalog(buffer_pool_manager_.get());
+    auto* recovered_table = recovered_catalog.GetTable("student");
+    ASSERT_NE(recovered_table, nullptr);
+    EXPECT_TRUE(recovered_table->IndexEntries().empty());
+}
+
+TEST_F(CatalogTableInfoTest, DropTableCascadesIndexesAndRecoveryDoesNotBringItBack)
+{
+    {
+        Catalog catalog(buffer_pool_manager_.get());
+        auto created = catalog.CreateTable("student", MakeSimpleSchema());
+        ASSERT_TRUE(created.has_value());
+        ASSERT_NE(created.value(), nullptr);
+
+        ASSERT_TRUE(catalog.CreateIndex("student", "idx_student_a").has_value());
+        ASSERT_TRUE(catalog.CreateIndex("student", "idx_student_b").has_value());
+        ASSERT_EQ(created.value()->IndexEntries().size(), 2u);
+
+        auto dropped = catalog.DropTable("student");
+        ASSERT_TRUE(dropped.has_value()) << dropped.error();
+        EXPECT_FALSE(catalog.HasTable("student"));
+        EXPECT_EQ(catalog.GetTable("student"), nullptr);
+    }
+
+    buffer_pool_manager_.reset();
+    disk_manager_.reset();
+    disk_manager_ = std::make_unique<storage::DiskManager>(db_path_);
+    buffer_pool_manager_ = std::make_unique<buffer::BufferPoolManager>(8, disk_manager_.get());
+
+    Catalog recovered_catalog(buffer_pool_manager_.get());
+    EXPECT_EQ(recovered_catalog.GetTable("student"), nullptr);
+}
+
+TEST_F(CatalogTableInfoTest, DropStrictlyRejectsMissingObjects)
+{
+    Catalog catalog(buffer_pool_manager_.get());
+    auto created = catalog.CreateTable("student", MakeSimpleSchema());
+    ASSERT_TRUE(created.has_value());
+    ASSERT_NE(created.value(), nullptr);
+
+    auto drop_missing_index = catalog.DropIndex("student", "idx_missing");
+    ASSERT_FALSE(drop_missing_index.has_value());
+    EXPECT_NE(drop_missing_index.error().find("index not found"), std::string::npos);
+
+    auto drop_missing_table = catalog.DropTable("student_missing");
+    ASSERT_FALSE(drop_missing_table.has_value());
+    EXPECT_NE(drop_missing_table.error().find("table not found"), std::string::npos);
+}
+
+TEST_F(CatalogTableInfoTest, DropIndexOnPinnedPageUsesPendingReclaimThenRetry)
+{
+    Catalog catalog(buffer_pool_manager_.get());
+    auto created = catalog.CreateTable("student", MakeSimpleSchema());
+    ASSERT_TRUE(created.has_value());
+    ASSERT_NE(created.value(), nullptr);
+
+    ASSERT_TRUE(catalog.CreateIndex("student", "idx_student_id").has_value());
+    auto header_page_id = created.value()->GetIndexHeaderPageId(0);
+    ASSERT_TRUE(header_page_id.has_value());
+    ASSERT_NE(header_page_id.value(), INVALID_PAGE_ID);
+
+    auto pinned_page = buffer_pool_manager_->FetchPage(header_page_id.value());
+    ASSERT_TRUE(pinned_page.has_value());
+
+    auto dropped = catalog.DropIndex("student", "idx_student_id");
+    ASSERT_TRUE(dropped.has_value()) << dropped.error();
+    EXPECT_TRUE(created.value()->IndexEntries().empty());
+
+    ASSERT_TRUE(buffer_pool_manager_->UnpinPage(header_page_id.value(), false));
+
+    auto retry_index = catalog.CreateIndex("student", "idx_student_retry");
+    ASSERT_TRUE(retry_index.has_value()) << retry_index.error();
+    ASSERT_EQ(created.value()->IndexEntries().size(), 1u);
+
+    // 触发重试后，已释放的索引 header 页应被优先复用于新页分配。
+    EXPECT_EQ(created.value()->IndexEntries()[0].header_page_id, header_page_id.value());
+}
+
 TEST_F(CatalogTableInfoTest, CatalogAutoDiscoversTableAndSchemaAfterRestart)
 {
     page_id_t first_page_id = INVALID_PAGE_ID;

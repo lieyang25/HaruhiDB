@@ -4,6 +4,7 @@
 #include "execution/executor.h"
 
 #include <memory>
+#include <string>
 
 namespace HaruhiDB
 {
@@ -21,11 +22,16 @@ public:
     void Init() override;
     bool Next(ExecutorRow* row) override;
 
+    bool Failed() const noexcept { return failed_; }
+    const std::string& LastError() const noexcept { return last_error_; }
+
 private:
     catalog::TableInfo* table_info_{nullptr};
     std::unique_ptr<AbstractExecutor> child_;
     bool initialized_{false};
     bool done_{false};
+    bool failed_{false};
+    std::string last_error_;
 };
 
 } // namespace execution

@@ -507,6 +507,22 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## C/Go API 门禁（单入口）
+
+Go 外壳默认链接 `CXX/build/src/capi/libharuhidb_capi.so`。为了避免“Go 链接旧 `.so`”的假失败，C/Go API 相关改动建议统一走单入口门禁脚本：
+
+```bash
+./scripts/api_gate.sh
+```
+
+这个脚本会固定执行顺序：
+
+1. 先配置并构建 C API 动态库 + `capi_test`
+2. 再执行 C API 相关 CTest（`CApiTest.*`）
+3. 最后执行 `go test ./...`
+
+若 C API 变更但 Go 包装未对齐，门禁会在最后一步直接失败并给出可定位输出。
+
 测试目前按模块拆分，重点覆盖：
 
 - `storage`：页、索引、WAL、磁盘

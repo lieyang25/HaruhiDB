@@ -17,6 +17,8 @@ void SeqScanExecutor::Init()
     initialized_ = true;
     table_heap_ = nullptr;
     schema_ = nullptr;
+    failed_ = false;
+    last_error_.clear();
 
     if (table_info_ == nullptr) {
         return;
@@ -38,7 +40,17 @@ bool SeqScanExecutor::Next(ExecutorRow* row)
         Init();
     }
 
-    if (row == nullptr || table_heap_ == nullptr || schema_ == nullptr) {
+    failed_ = false;
+    last_error_.clear();
+
+    if (row == nullptr) {
+        failed_ = true;
+        last_error_ = "SeqScanExecutor::Next: row is null";
+        return false;
+    }
+    if (table_heap_ == nullptr || schema_ == nullptr) {
+        failed_ = true;
+        last_error_ = "SeqScanExecutor::Next: executor is not bound to table heap or schema";
         return false;
     }
 
@@ -52,6 +64,8 @@ bool SeqScanExecutor::Next(ExecutorRow* row)
 
     auto decoded = record::TupleCodec::Decode(*schema_, tuple);
     if (!decoded.has_value()) {
+        failed_ = true;
+        last_error_ = "SeqScanExecutor::Next: decode tuple failed: " + decoded.error().msg;
         return false;
     }
 

@@ -26,6 +26,8 @@ void InsertExecutor::Init()
 {
     initialized_ = true;
     done_ = false;
+    failed_ = false;
+    last_error_.clear();
     if (child_ != nullptr) {
         child_->Init();
     }
@@ -37,11 +39,21 @@ bool InsertExecutor::Next(ExecutorRow* row)
         Init();
     }
 
-    if (row == nullptr || done_) {
+    failed_ = false;
+    last_error_.clear();
+
+    if (done_) {
+        return false;
+    }
+    if (row == nullptr) {
+        failed_ = true;
+        last_error_ = "InsertExecutor::Next: row is null";
         return false;
     }
 
     if (table_info_ == nullptr || table_info_->GetTableHeap() == nullptr || child_ == nullptr) {
+        failed_ = true;
+        last_error_ = "InsertExecutor::Next: executor is not bound to a valid table heap or child";
         return false;
     }
 
@@ -56,6 +68,8 @@ bool InsertExecutor::Next(ExecutorRow* row)
         if (!indexes.empty()) {
             auto key_exp = detail::ExtractPrimaryIndexKey(schema, input.values);
             if (!key_exp.has_value()) {
+                failed_ = true;
+                last_error_ = "InsertExecutor::Next: extract primary index key failed: " + key_exp.error();
                 return false;
             }
             key = key_exp.value();
@@ -63,16 +77,22 @@ bool InsertExecutor::Next(ExecutorRow* row)
 
         auto tuple_exp = record::TupleCodec::Encode(schema, input.values);
         if (!tuple_exp.has_value()) {
+            failed_ = true;
+            last_error_ = "InsertExecutor::Next: encode tuple failed: " + tuple_exp.error().msg;
             return false;
         }
 
         record::RID rid;
         if (!table_heap->InsertTuple(tuple_exp.value(), &rid)) {
+            failed_ = true;
+            last_error_ = "InsertExecutor::Next: insert tuple into table heap failed";
             return false;
         }
 
         if (key.has_value() && !detail::InsertIntoIndexesByKey(indexes, key.value(), rid)) {
             (void)table_heap->DeleteTuple(rid);
+            failed_ = true;
+            last_error_ = "InsertExecutor::Next: insert into indexes failed";
             return false;
         }
 

@@ -1,2 +1,4 @@
 build/
 .vscode
+Go/haruhidb/test_output/
+scripts
