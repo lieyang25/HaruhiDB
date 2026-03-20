@@ -19,6 +19,9 @@
 
 #include "catalog/catalog.h"
 
+#include "storage/page/b_plus_tree_internal_page.h"
+#include "storage/page/b_plus_tree_leaf_page.h"
+#include "storage/page/table_page.h"
 #include "storage/record/tuple_codec.h"
 #include "table/table_iterator.h"
 
@@ -29,9 +32,11 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -57,6 +62,15 @@ namespace catalog
         std::string NormalizeTableName(std::string_view table_name)
         {
             std::string normalized(table_name);
+            std::ranges::transform(normalized, normalized.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return normalized;
+        }
+
+        std::string NormalizeIndexName(std::string_view index_name)
+        {
+            std::string normalized(index_name);
             std::ranges::transform(normalized, normalized.begin(), [](unsigned char ch) {
                 return static_cast<char>(std::tolower(ch));
             });
@@ -445,6 +459,7 @@ namespace catalog
 
         // step 4: 加写锁后再次检查重名，防止并发竞争。
         std::unique_lock lock(latch_);
+        TryReclaimPendingPagesLocked();
         if (name_to_oid_.contains(normalized_name)) {
             BestEffortRecycleNewTableHeap(bpm_, table_heap);
             return std::unexpected("Catalog: table already exists: " + table_name);
@@ -480,6 +495,7 @@ namespace catalog
             return std::unexpected("Catalog::CreateTable: persist catalog meta failed: " + persisted.error());
         }
 
+        TryReclaimPendingPagesLocked();
         return table_info_ptr;
     }
 
@@ -589,6 +605,7 @@ namespace catalog
 
         // step 1: 定位目标表。
         std::unique_lock lock(latch_);
+        TryReclaimPendingPagesLocked();
         const auto it = tables_.find(table_oid);
         if (it == tables_.end() || it->second == nullptr) {
             return std::unexpected("Catalog::CreateIndex: table oid not found");
@@ -628,6 +645,7 @@ namespace catalog
             return std::unexpected("Catalog::CreateIndex: persist catalog meta failed: " + persisted.error());
         }
 
+        TryReclaimPendingPagesLocked();
         return created;
     }
 
@@ -651,6 +669,115 @@ namespace catalog
         return CreateIndex(table_oid, std::move(index_name));
     }
 
+    std::expected<void, std::string> Catalog::DropIndex(
+        std::string_view table_name, std::string_view index_name)
+    {
+        auto validated_index = ValidateIndexName(index_name);
+        if (!validated_index.has_value()) {
+            return std::unexpected(validated_index.error());
+        }
+
+        std::unique_lock lock(latch_);
+        TryReclaimPendingPagesLocked();
+
+        const auto name_it = name_to_oid_.find(NormalizeTableName(table_name));
+        if (name_it == name_to_oid_.end()) {
+            return std::unexpected("Catalog::DropIndex: table not found");
+        }
+
+        const auto table_it = tables_.find(name_it->second);
+        if (table_it == tables_.end() || table_it->second == nullptr) {
+            return std::unexpected("Catalog::DropIndex: table entry not found");
+        }
+
+        const std::string normalized_index_name = NormalizeIndexName(index_name);
+        std::optional<index_oid_t> target_index_oid;
+        for (const auto& entry : table_it->second->IndexEntries()) {
+            if (NormalizeIndexName(entry.index_name) == normalized_index_name) {
+                target_index_oid = entry.index_oid;
+                break;
+            }
+        }
+        if (!target_index_oid.has_value()) {
+            return std::unexpected("Catalog::DropIndex: index not found");
+        }
+
+        auto removed = table_it->second->RemoveIndex(target_index_oid.value());
+        if (!removed.has_value()) {
+            return std::unexpected("Catalog::DropIndex: remove index entry failed");
+        }
+
+        auto persisted = PersistCatalogMetaLocked();
+        if (!persisted.has_value()) {
+            auto restored = table_it->second->LoadIndex(
+                removed->index_oid,
+                removed->index_name,
+                removed->header_page_id,
+                bpm_);
+            if (!restored.has_value()) {
+                return std::unexpected(
+                    "Catalog::DropIndex: persist catalog meta failed: " + persisted.error() +
+                    "; restore removed index failed: " + restored.error());
+            }
+            return std::unexpected("Catalog::DropIndex: persist catalog meta failed: " + persisted.error());
+        }
+
+        const auto index_pages = CollectIndexPageIds(*removed);
+        EnqueuePendingReclaimPagesLocked(index_pages);
+        TryReclaimPendingPagesLocked();
+        return {};
+    }
+
+    std::expected<void, std::string> Catalog::DropTable(std::string_view table_name)
+    {
+        auto validated_table = ValidateTableName(table_name);
+        if (!validated_table.has_value()) {
+            return std::unexpected(validated_table.error());
+        }
+
+        std::unique_lock lock(latch_);
+        TryReclaimPendingPagesLocked();
+
+        const std::string normalized_name = NormalizeTableName(table_name);
+        const auto name_it = name_to_oid_.find(normalized_name);
+        if (name_it == name_to_oid_.end()) {
+            return std::unexpected("Catalog::DropTable: table not found");
+        }
+
+        const table_oid_t table_oid = name_it->second;
+        const auto table_it = tables_.find(table_oid);
+        if (table_it == tables_.end() || table_it->second == nullptr) {
+            return std::unexpected("Catalog::DropTable: table entry not found");
+        }
+
+        std::unique_ptr<TableInfo> removed_table = std::move(table_it->second);
+        tables_.erase(table_it);
+        name_to_oid_.erase(name_it);
+
+        auto persisted = PersistCatalogMetaLocked();
+        if (!persisted.has_value()) {
+            name_to_oid_[normalized_name] = table_oid;
+            tables_[table_oid] = std::move(removed_table);
+            return std::unexpected("Catalog::DropTable: persist catalog meta failed: " + persisted.error());
+        }
+
+        std::vector<page_id_t> pages_to_reclaim;
+        if (removed_table != nullptr && removed_table->GetTableHeap() != nullptr) {
+            auto table_pages = CollectTableHeapPageIds(removed_table->GetTableHeap()->FirstPageId());
+            pages_to_reclaim.insert(pages_to_reclaim.end(), table_pages.begin(), table_pages.end());
+        }
+        if (removed_table != nullptr) {
+            for (const auto& entry : removed_table->IndexEntries()) {
+                auto index_pages = CollectIndexPageIds(entry);
+                pages_to_reclaim.insert(pages_to_reclaim.end(), index_pages.begin(), index_pages.end());
+            }
+        }
+
+        EnqueuePendingReclaimPagesLocked(pages_to_reclaim);
+        TryReclaimPendingPagesLocked();
+        return {};
+    }
+
     /**
      * @param table_oid       表 oid
      * @param index_oid       索引 oid
@@ -670,6 +797,7 @@ namespace catalog
 
         // step 1: 定位目标表。
         std::unique_lock lock(latch_);
+        TryReclaimPendingPagesLocked();
         const auto it = tables_.find(table_oid);
         if (it == tables_.end() || it->second == nullptr) {
             return std::unexpected("Catalog::LoadIndex: table oid not found");
@@ -701,6 +829,7 @@ namespace catalog
             return std::unexpected("Catalog::LoadIndex: persist catalog meta failed: " + persisted.error());
         }
 
+        TryReclaimPendingPagesLocked();
         return loaded;
     }
 
@@ -1351,6 +1480,7 @@ namespace catalog
     {
         name_to_oid_.clear();
         tables_.clear();
+        pending_reclaim_page_ids_.clear();
         next_table_oid_ = 0;
         next_index_oid_ = 0;
 
@@ -1438,6 +1568,139 @@ namespace catalog
         next_index_oid_ = snapshot.next_index_oid;
 
         return {};
+    }
+
+    std::vector<page_id_t> Catalog::CollectTableHeapPageIds(page_id_t first_page_id) const
+    {
+        std::vector<page_id_t> pages;
+        if (bpm_ == nullptr || first_page_id == INVALID_PAGE_ID || first_page_id == 0) {
+            return pages;
+        }
+
+        std::unordered_set<page_id_t> visited;
+        page_id_t current_page_id = first_page_id;
+        while (current_page_id != INVALID_PAGE_ID && current_page_id != 0) {
+            if (!visited.insert(current_page_id).second) {
+                break;
+            }
+
+            auto page_exp = bpm_->FetchPage(current_page_id);
+            if (!page_exp.has_value()) {
+                break;
+            }
+
+            storage::Page* page = page_exp.value();
+            page_id_t next_page_id = INVALID_PAGE_ID;
+
+            page->RLock();
+            storage::TablePage table_page(page);
+            next_page_id = table_page.NextPageId();
+            page->RUnLock();
+            (void)bpm_->UnpinPage(current_page_id, false);
+
+            pages.push_back(current_page_id);
+            current_page_id = next_page_id;
+        }
+
+        return pages;
+    }
+
+    std::vector<page_id_t> Catalog::CollectIndexPageIds(const TableInfo::IndexEntry& entry) const
+    {
+        std::vector<page_id_t> pages;
+        if (bpm_ == nullptr) {
+            return pages;
+        }
+
+        std::unordered_set<page_id_t> visited;
+        std::queue<page_id_t> work;
+
+        auto enqueue = [&](page_id_t pid) {
+            if (pid == INVALID_PAGE_ID || pid == 0) {
+                return;
+            }
+            if (visited.insert(pid).second) {
+                work.push(pid);
+            }
+        };
+
+        if (entry.index != nullptr) {
+            enqueue(entry.index->RootPageId());
+        }
+
+        while (!work.empty()) {
+            const page_id_t page_id = work.front();
+            work.pop();
+            pages.push_back(page_id);
+
+            auto page_exp = bpm_->FetchPage(page_id);
+            if (!page_exp.has_value()) {
+                continue;
+            }
+
+            storage::Page* page = page_exp.value();
+            std::vector<page_id_t> children;
+
+            page->RLock();
+            const storage::PageType page_type = page->Header()->page_type;
+            if (page_type == storage::PageType::INTERNAL) {
+                storage::BPlusTreeInternalPage internal(page);
+                children.push_back(internal.GetLeftMostChild());
+                for (uint16_t i = 0; i < internal.GetSize(); ++i) {
+                    children.push_back(internal.ChildAt(i));
+                }
+            }
+            page->RUnLock();
+            (void)bpm_->UnpinPage(page_id, false);
+
+            for (page_id_t child_page_id : children) {
+                enqueue(child_page_id);
+            }
+        }
+
+        if (entry.header_page_id != INVALID_PAGE_ID && entry.header_page_id != 0 &&
+            !visited.contains(entry.header_page_id)) {
+            pages.push_back(entry.header_page_id);
+        }
+
+        return pages;
+    }
+
+    void Catalog::EnqueuePendingReclaimPagesLocked(std::span<const page_id_t> page_ids)
+    {
+        if (page_ids.empty()) {
+            return;
+        }
+
+        std::unordered_set<page_id_t> existing(
+            pending_reclaim_page_ids_.begin(),
+            pending_reclaim_page_ids_.end());
+        for (page_id_t pid : page_ids) {
+            if (pid == INVALID_PAGE_ID || pid == 0 || existing.contains(pid)) {
+                continue;
+            }
+            pending_reclaim_page_ids_.push_back(pid);
+            existing.insert(pid);
+        }
+    }
+
+    void Catalog::TryReclaimPendingPagesLocked() noexcept
+    {
+        if (bpm_ == nullptr || pending_reclaim_page_ids_.empty()) {
+            return;
+        }
+
+        std::vector<page_id_t> remaining;
+        remaining.reserve(pending_reclaim_page_ids_.size());
+        for (page_id_t pid : pending_reclaim_page_ids_) {
+            if (pid == INVALID_PAGE_ID || pid == 0) {
+                continue;
+            }
+            if (!bpm_->DeletePage(pid)) {
+                remaining.push_back(pid);
+            }
+        }
+        pending_reclaim_page_ids_ = std::move(remaining);
     }
 
     std::expected<std::unique_ptr<table::TableHeap>, std::string> Catalog::CreateTableHeap()

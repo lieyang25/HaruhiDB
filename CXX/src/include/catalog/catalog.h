@@ -187,6 +187,23 @@ namespace catalog
         CreateIndex(std::string_view table_name, std::string index_name);
 
         /**
+         * 删除指定表上的索引。
+         *
+         * @param table_name 表名
+         * @param index_name 索引名
+         */
+        std::expected<void, std::string>
+        DropIndex(std::string_view table_name, std::string_view index_name);
+
+        /**
+         * 删除指定表，并级联删除其索引。
+         *
+         * @param table_name 表名
+         */
+        std::expected<void, std::string>
+        DropTable(std::string_view table_name);
+
+        /**
          * 加载已有索引。
          *
          * @param table_oid       表 oid
@@ -345,6 +362,30 @@ namespace catalog
         CreateTableHeap();
 
         /**
+         * 收集一张表的 heap 页链。
+         *
+         * @param first_page_id 表首页页号
+         */
+        std::vector<page_id_t> CollectTableHeapPageIds(page_id_t first_page_id) const;
+
+        /**
+         * 收集一个索引占用的页面（含 header/root/子页）。
+         */
+        std::vector<page_id_t> CollectIndexPageIds(const TableInfo::IndexEntry& entry) const;
+
+        /**
+         * 将待回收页加入 pending 队列。
+         */
+        void EnqueuePendingReclaimPagesLocked(std::span<const page_id_t> page_ids);
+
+        /**
+         * 尝试回收 pending 队列中的页面。
+         *
+         * @note 调用方需已持有 latch_ 写锁
+         */
+        void TryReclaimPendingPagesLocked() noexcept;
+
+        /**
          * 分配新的 table oid。
          */
         table_oid_t AllocateTableOid() noexcept;
@@ -390,6 +431,9 @@ namespace catalog
 
         /// 仅测试用：注入 catalog 持久化失败次数
         uint32_t fail_next_persists_for_test_{0};
+
+        /// 元数据已删除但暂未成功回收的页。
+        std::vector<page_id_t> pending_reclaim_page_ids_;
     };
 
 } // namespace catalog
