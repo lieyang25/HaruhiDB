@@ -142,7 +142,7 @@ func TestTranslateNLSuccessWithRepair(t *testing.T) {
 	translator := &scriptedTranslator{
 		outputs: []nl.TranslateOutput{
 			{
-				Candidate: []byte(`{"version":"v1","request_id":"req-nl","mode":"read_only","action":"list_tables","args":[]}`),
+				Candidate: []byte(`{"version":"v1","request_id":"req-nl","mode":"read_only","action":"table_exists","args":{}}`),
 				Model:     "test-model",
 			},
 			{
@@ -181,6 +181,149 @@ func TestTranslateNLSuccessWithRepair(t *testing.T) {
 	}
 	if translator.inputs[1].RepairHint == "" {
 		t.Fatalf("expected second attempt to contain repair hint")
+	}
+}
+
+func TestTranslateNLAutoNormalizesCommonEnvelopeFields(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"action":"list_tables","args":[]}`),
+				Model:     "qwen2.5-coder:0.5b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     false,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-normalize",
+		Input:     "列出所有表",
+		Mode:      action.ModeReadOnly,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation, got %+v", result)
+	}
+	if len(translator.inputs) != 1 {
+		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
+	}
+	if got := result.CandidateEnvelope["request_id"]; got != "req-normalize" {
+		t.Fatalf("unexpected request_id in normalized candidate: %#v", got)
+	}
+	if got := result.CandidateEnvelope["mode"]; got != string(action.ModeReadOnly) {
+		t.Fatalf("unexpected mode in normalized candidate: %#v", got)
+	}
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV1 {
+		t.Fatalf("unexpected version in normalized candidate: %#v", got)
+	}
+	args, ok := result.CandidateEnvelope["args"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected normalized args object, got %#v", result.CandidateEnvelope["args"])
+	}
+	if len(args) != 0 {
+		t.Fatalf("expected empty args object, got %#v", args)
+	}
+}
+
+func TestTranslateNLDropsUnknownTopLevelFields(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-extra","mode":"read_only","action":"list_tables","args":{},"previous_output_error":"x"}`),
+				Model:     "qwen2.5-coder:0.5b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     false,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-extra",
+		Input:     "列出所有表",
+		Mode:      action.ModeReadOnly,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation after dropping unknown fields, got %+v", result)
+	}
+	if len(translator.inputs) != 1 {
+		t.Fatalf("expected no repair retry after dropping unknown fields, got %d calls", len(translator.inputs))
+	}
+	if _, exists := result.CandidateEnvelope["previous_output_error"]; exists {
+		t.Fatalf("unexpected unknown field left in candidate envelope: %#v", result.CandidateEnvelope)
+	}
+}
+
+func TestTranslateNLDropsUnknownArgsFieldsForListTables(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-args","mode":"read_only","action":"list_tables","args":{"catalog_snapshot_json":"...","x":1}}`),
+				Model:     "qwen2.5-coder:0.5b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     false,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-args",
+		Input:     "列出所有表",
+		Mode:      action.ModeReadOnly,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation after args cleanup, got %+v", result)
+	}
+	if len(translator.inputs) != 1 {
+		t.Fatalf("expected no repair retry after args cleanup, got %d calls", len(translator.inputs))
+	}
+	args, ok := result.CandidateEnvelope["args"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected args object, got %#v", result.CandidateEnvelope["args"])
+	}
+	if len(args) != 0 {
+		t.Fatalf("expected list_tables args to be empty object, got %#v", args)
 	}
 }
 

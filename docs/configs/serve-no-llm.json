@@ -1,0 +1,15 @@
+{
+  "common": {
+    "db_path": "/tmp/haruhidb-no-llm.db",
+    "allow_write": false,
+    "timeout": "15s"
+  },
+  "llm": {
+    "backend": "none"
+  },
+  "serve": {
+    "listen": ":8080",
+    "max_body_bytes": 1048576,
+    "rate_limit_per_minute": 0
+  }
+}

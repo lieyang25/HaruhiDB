@@ -17,6 +17,14 @@
 - [数据库文件与 WAL 布局](CXX/docs/file_layout.md)
 - [当前实现使用方法](CXX/docs/integration_guide.md)
 - [可运行示例](CXX/example/README.md)
+- [Go 阅读指南（从最简单路径开始）](GO_READING_GUIDE.md)
+- [Go 使用指南（本地 / 网络 / 模型组合）](docs/go-usage-guide.md)
+- [Go 启动配置示例](docs/configs/README.md)
+- [Ollama 一键启动脚本](scripts/serve_ollama_one_click.sh)
+- [Action 协议 v1](docs/action-protocol-v1.md)
+- [Action v1 功能演示](docs/action-v1-showcase-example.md)
+- [Action v1 请求模板（JSON）](docs/action-v1-request-template.json)
+- [Action v1 模型规范（JSON）](docs/action-v1-model-spec.json)
 
 ## 项目当前定位
 

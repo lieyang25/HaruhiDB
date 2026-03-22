@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,6 +93,140 @@ func TestShellJSONPath(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"ok": true`) {
 		t.Fatalf("unexpected shell output: %s", stdout.String())
+	}
+}
+
+func TestNormalizeLLMOptionsWithOllamaShortcut(t *testing.T) {
+	opts := commonOptions{
+		ollama: true,
+	}
+	if err := normalizeLLMOptions(&opts); err != nil {
+		t.Fatalf("normalizeLLMOptions returned error: %v", err)
+	}
+
+	if opts.openAIBaseURL != defaultOllamaBaseURL {
+		t.Fatalf("unexpected base url: %s", opts.openAIBaseURL)
+	}
+	if opts.openAIModel != defaultOllamaModel {
+		t.Fatalf("unexpected model: %s", opts.openAIModel)
+	}
+}
+
+func TestNormalizeLLMOptionsWithOllamaModel(t *testing.T) {
+	opts := commonOptions{
+		ollamaModel: "qwen2.5-coder:1.5b",
+	}
+	if err := normalizeLLMOptions(&opts); err != nil {
+		t.Fatalf("normalizeLLMOptions returned error: %v", err)
+	}
+
+	if opts.openAIBaseURL != defaultOllamaBaseURL {
+		t.Fatalf("unexpected base url: %s", opts.openAIBaseURL)
+	}
+	if opts.openAIModel != "qwen2.5-coder:1.5b" {
+		t.Fatalf("unexpected model: %s", opts.openAIModel)
+	}
+}
+
+func TestBuildTranslatorWithLocalBaseURLWithoutAPIKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	translator, err := buildTranslator(commonOptions{
+		openAIBaseURL: "http://127.0.0.1:11434",
+		openAIModel:   "qwen2.5-coder:0.5b",
+	})
+	if err != nil {
+		t.Fatalf("buildTranslator returned error: %v", err)
+	}
+	if translator == nil {
+		t.Fatal("expected translator to be configured")
+	}
+}
+
+func TestBuildTranslatorRequiresAPIKeyForDefaultOpenAIEndpoint(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	translator, err := buildTranslator(commonOptions{
+		openAIModel: "gpt-5-mini",
+	})
+	if err == nil {
+		t.Fatal("expected error when using default OpenAI endpoint without API key")
+	}
+	if translator != nil {
+		t.Fatal("expected nil translator on error")
+	}
+}
+
+func TestNormalizeLLMOptionsCLIOverrideBackendNoneWithOllama(t *testing.T) {
+	opts := commonOptions{
+		llmBackend: llmBackendNone,
+		ollama:     true,
+	}
+	if err := normalizeLLMOptions(&opts); err != nil {
+		t.Fatalf("normalizeLLMOptions returned error: %v", err)
+	}
+
+	if opts.llmBackend != llmBackendOllama {
+		t.Fatalf("expected backend to switch to ollama, got %q", opts.llmBackend)
+	}
+	if opts.openAIBaseURL != defaultOllamaBaseURL {
+		t.Fatalf("unexpected base url: %s", opts.openAIBaseURL)
+	}
+	if opts.openAIModel != defaultOllamaModel {
+		t.Fatalf("unexpected model: %s", opts.openAIModel)
+	}
+}
+
+func TestRunCommandWithConfigFile(t *testing.T) {
+	dbPath := prepareCLITestDB(t)
+	configPath := filepath.Join(t.TempDir(), "haruhidb.json")
+	configJSON := `{
+  "common": {
+    "db_path": "` + dbPath + `"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"run",
+		"--config", configPath,
+		"--json", `{"version":"v1","request_id":"req-cli-run-config","mode":"read_only","action":"list_tables","args":{}}`,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run command with config failed: %v; stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ok": true`) {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestCLIFlagsOverrideConfigFile(t *testing.T) {
+	dbPath := prepareCLITestDB(t)
+	configPath := filepath.Join(t.TempDir(), "haruhidb.json")
+	configJSON := `{
+  "common": {
+    "db_path": "/path/that/does/not/exist/db-file.db"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"run",
+		"--config", configPath,
+		"--db-path", dbPath,
+		"--json", `{"version":"v1","request_id":"req-cli-run-override","mode":"read_only","action":"list_tables","args":{}}`,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run command with overridden db path failed: %v; stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ok": true`) {
+		t.Fatalf("unexpected output: %s", stdout.String())
 	}
 }
 

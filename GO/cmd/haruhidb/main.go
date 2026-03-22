@@ -24,6 +24,11 @@ import (
 
 var translatorFactory = buildTranslator
 
+const (
+	defaultOllamaBaseURL = "http://127.0.0.1:11434"
+	defaultOllamaModel   = "qwen2.5-coder:0.5b"
+)
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "error:", err)
@@ -59,27 +64,57 @@ type commonOptions struct {
 	dbPath        string
 	allowWrite    bool
 	timeout       time.Duration
+	llmBackend    string
 	openAIAPIKey  string
 	openAIBaseURL string
 	openAIModel   string
+	ollama        bool
+	ollamaModel   string
 }
 
 func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
+	cfg, configPath, err := resolveConfig(args)
+	if err != nil {
+		return err
+	}
+
 	var opts commonOptions
+	if err := applyCommonConfig(&opts, cfg); err != nil {
+		return err
+	}
 	var listenAddr string
 	var maxBodyBytes int64
 	var authToken string
 	var rateLimitPerMinute int
 
+	listenAddr = ":8080"
+	maxBodyBytes = 1 << 20
+	if cfg.Serve.Listen != nil {
+		listenAddr = strings.TrimSpace(*cfg.Serve.Listen)
+	}
+	if cfg.Serve.MaxBodyBytes != nil {
+		maxBodyBytes = *cfg.Serve.MaxBodyBytes
+	}
+	if cfg.Serve.AuthToken != nil {
+		authToken = strings.TrimSpace(*cfg.Serve.AuthToken)
+	}
+	if cfg.Serve.RateLimitPerMinute != nil {
+		rateLimitPerMinute = *cfg.Serve.RateLimitPerMinute
+	}
+
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bindCommonFlags(fs, &opts)
 	bindLLMFlags(fs, &opts)
-	fs.StringVar(&listenAddr, "listen", ":8080", "listen address")
-	fs.Int64Var(&maxBodyBytes, "max-body-bytes", 1<<20, "max HTTP request body bytes")
-	fs.StringVar(&authToken, "auth-token", "", "optional bearer token for HTTP API")
-	fs.IntVar(&rateLimitPerMinute, "rate-limit-per-minute", 0, "optional per-client request limit per minute")
+	fs.StringVar(&configPath, "config", configPath, "path to JSON config file (or HARUHIDB_CONFIG env)")
+	fs.StringVar(&listenAddr, "listen", listenAddr, "listen address")
+	fs.Int64Var(&maxBodyBytes, "max-body-bytes", maxBodyBytes, "max HTTP request body bytes")
+	fs.StringVar(&authToken, "auth-token", authToken, "optional bearer token for HTTP API")
+	fs.IntVar(&rateLimitPerMinute, "rate-limit-per-minute", rateLimitPerMinute, "optional per-client request limit per minute")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := normalizeLLMOptions(&opts); err != nil {
 		return err
 	}
 
@@ -101,17 +136,31 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func runRun(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+	cfg, configPath, err := resolveConfig(args)
+	if err != nil {
+		return err
+	}
+
 	var opts commonOptions
+	if err := applyCommonConfig(&opts, cfg); err != nil {
+		return err
+	}
 	var inputPath string
 	var jsonInput string
 	var pretty bool
 
+	pretty = true
+	if cfg.Run.Pretty != nil {
+		pretty = *cfg.Run.Pretty
+	}
+
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bindCommonFlags(fs, &opts)
+	fs.StringVar(&configPath, "config", configPath, "path to JSON config file (or HARUHIDB_CONFIG env)")
 	fs.StringVar(&inputPath, "input", "", "input JSON file path, use - for stdin")
 	fs.StringVar(&jsonInput, "json", "", "inline JSON request payload")
-	fs.BoolVar(&pretty, "pretty", true, "pretty print output")
+	fs.BoolVar(&pretty, "pretty", pretty, "pretty print output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -135,23 +184,47 @@ func runRun(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) 
 }
 
 func runNL(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+	cfg, configPath, err := resolveConfig(args)
+	if err != nil {
+		return err
+	}
+
 	var opts commonOptions
+	if err := applyCommonConfig(&opts, cfg); err != nil {
+		return err
+	}
 	var inputText string
 	var inputPath string
 	var mode string
 	var execute bool
 	var pretty bool
 
+	mode = string(action.ModeReadOnly)
+	pretty = true
+	if cfg.NL.Mode != nil {
+		mode = strings.TrimSpace(*cfg.NL.Mode)
+	}
+	if cfg.NL.Execute != nil {
+		execute = *cfg.NL.Execute
+	}
+	if cfg.NL.Pretty != nil {
+		pretty = *cfg.NL.Pretty
+	}
+
 	fs := flag.NewFlagSet("nl", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bindCommonFlags(fs, &opts)
 	bindLLMFlags(fs, &opts)
+	fs.StringVar(&configPath, "config", configPath, "path to JSON config file (or HARUHIDB_CONFIG env)")
 	fs.StringVar(&inputText, "input", "", "natural language input text")
 	fs.StringVar(&inputPath, "input-file", "", "natural language input file path, use - for stdin")
-	fs.StringVar(&mode, "mode", string(action.ModeReadOnly), "request mode: read_only or read_write")
-	fs.BoolVar(&execute, "execute", false, "execute candidate JSON when translation is valid")
-	fs.BoolVar(&pretty, "pretty", true, "pretty print output")
+	fs.StringVar(&mode, "mode", mode, "request mode: read_only or read_write")
+	fs.BoolVar(&execute, "execute", execute, "execute candidate JSON when translation is valid")
+	fs.BoolVar(&pretty, "pretty", pretty, "pretty print output")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := normalizeLLMOptions(&opts); err != nil {
 		return err
 	}
 
@@ -199,15 +272,31 @@ func runNL(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) e
 }
 
 func runShell(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+	cfg, configPath, err := resolveConfig(args)
+	if err != nil {
+		return err
+	}
+
 	var opts commonOptions
+	if err := applyCommonConfig(&opts, cfg); err != nil {
+		return err
+	}
 	var mode string
+	mode = string(action.ModeReadOnly)
+	if cfg.Shell.Mode != nil {
+		mode = strings.TrimSpace(*cfg.Shell.Mode)
+	}
 
 	fs := flag.NewFlagSet("shell", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bindCommonFlags(fs, &opts)
 	bindLLMFlags(fs, &opts)
-	fs.StringVar(&mode, "mode", string(action.ModeReadOnly), "default mode for :nl translation")
+	fs.StringVar(&configPath, "config", configPath, "path to JSON config file (or HARUHIDB_CONFIG env)")
+	fs.StringVar(&mode, "mode", mode, "default mode for :nl translation")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := normalizeLLMOptions(&opts); err != nil {
 		return err
 	}
 
@@ -221,7 +310,8 @@ func runShell(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
 
 	_, _ = fmt.Fprintln(stdout, "HaruhiDB shell")
-	_, _ = fmt.Fprintln(stdout, "commands: :json <payload>, :jsonfile <path>, :nl <text>, :help, :quit")
+	_, _ = fmt.Fprintln(stdout, "commands: :json <payload>, :jsonfile <path>, :nl <text>, :status, :help, :quit")
+	printShellStatus(stdout, service, mode)
 
 	for {
 		_, _ = fmt.Fprint(stdout, "haruhidb> ")
@@ -239,8 +329,10 @@ func runShell(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer
 		switch {
 		case line == ":quit" || line == ":exit":
 			return nil
+		case line == ":status":
+			printShellStatus(stdout, service, mode)
 		case line == ":help":
-			_, _ = fmt.Fprintln(stdout, "commands: :json <payload>, :jsonfile <path>, :nl <text>, :help, :quit")
+			_, _ = fmt.Fprintln(stdout, "commands: :json <payload>, :jsonfile <path>, :nl <text>, :status, :help, :quit")
 		case strings.HasPrefix(line, ":json "):
 			payload := strings.TrimSpace(strings.TrimPrefix(line, ":json "))
 			if err := executeAndPrint(service, []byte(payload), stdout); err != nil {
@@ -307,15 +399,88 @@ func runShell(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer
 }
 
 func bindCommonFlags(fs *flag.FlagSet, opts *commonOptions) {
-	fs.StringVar(&opts.dbPath, "db-path", "", "database file path")
-	fs.BoolVar(&opts.allowWrite, "allow-write", false, "allow write actions")
-	fs.DurationVar(&opts.timeout, "timeout", 15*time.Second, "request timeout")
+	timeoutDefault := opts.timeout
+	if timeoutDefault <= 0 {
+		timeoutDefault = 15 * time.Second
+	}
+	fs.StringVar(&opts.dbPath, "db-path", opts.dbPath, "database file path")
+	fs.BoolVar(&opts.allowWrite, "allow-write", opts.allowWrite, "allow write actions")
+	fs.DurationVar(&opts.timeout, "timeout", timeoutDefault, "request timeout")
 }
 
 func bindLLMFlags(fs *flag.FlagSet, opts *commonOptions) {
-	fs.StringVar(&opts.openAIAPIKey, "openai-api-key", "", "openai api key (or OPENAI_API_KEY env)")
-	fs.StringVar(&opts.openAIBaseURL, "openai-base-url", "", "openai base url")
-	fs.StringVar(&opts.openAIModel, "openai-model", "", "openai model name")
+	fs.StringVar(&opts.llmBackend, "llm-backend", opts.llmBackend, "llm backend: none, openai, openai_compatible, ollama")
+	fs.StringVar(&opts.openAIAPIKey, "openai-api-key", opts.openAIAPIKey, "openai api key (or OPENAI_API_KEY env)")
+	fs.StringVar(&opts.openAIAPIKey, "api-key", opts.openAIAPIKey, "alias of --openai-api-key")
+	fs.StringVar(&opts.openAIBaseURL, "openai-base-url", opts.openAIBaseURL, "openai base url")
+	fs.StringVar(&opts.openAIBaseURL, "base-url", opts.openAIBaseURL, "alias of --openai-base-url")
+	fs.StringVar(&opts.openAIModel, "openai-model", opts.openAIModel, "openai model name")
+	fs.StringVar(&opts.openAIModel, "model", opts.openAIModel, "alias of --openai-model")
+	fs.BoolVar(&opts.ollama, "ollama", opts.ollama, "use local Ollama endpoint (http://127.0.0.1:11434)")
+	fs.StringVar(&opts.ollamaModel, "ollama-model", opts.ollamaModel, "model name used with --ollama (default qwen2.5-coder:0.5b)")
+}
+
+func normalizeLLMOptions(opts *commonOptions) error {
+	if opts == nil {
+		return nil
+	}
+	backend := strings.ToLower(strings.TrimSpace(opts.llmBackend))
+	opts.llmBackend = backend
+
+	switch backend {
+	case "":
+	case llmBackendNone:
+		hasLLMOverrides := opts.ollama ||
+			strings.TrimSpace(opts.ollamaModel) != "" ||
+			strings.TrimSpace(opts.openAIAPIKey) != "" ||
+			strings.TrimSpace(opts.openAIBaseURL) != "" ||
+			strings.TrimSpace(opts.openAIModel) != ""
+		if hasLLMOverrides {
+			backend = ""
+			opts.llmBackend = backend
+			if opts.ollama || strings.TrimSpace(opts.ollamaModel) != "" {
+				backend = llmBackendOllama
+				opts.llmBackend = backend
+			}
+			break
+		}
+		opts.openAIAPIKey = ""
+		opts.openAIBaseURL = ""
+		opts.openAIModel = ""
+		opts.ollama = false
+		opts.ollamaModel = ""
+		return nil
+	case llmBackendOpenAI, llmBackendOpenAICompatible:
+	case llmBackendOllama:
+		opts.ollama = true
+	default:
+		return fmt.Errorf("invalid llm backend %q: expected one of none/openai/openai_compatible/ollama", opts.llmBackend)
+	}
+
+	if !opts.ollama && strings.TrimSpace(opts.ollamaModel) == "" {
+		return nil
+	}
+	if strings.TrimSpace(opts.openAIBaseURL) == "" {
+		opts.openAIBaseURL = defaultOllamaBaseURL
+	}
+	if strings.TrimSpace(opts.openAIModel) == "" {
+		model := strings.TrimSpace(opts.ollamaModel)
+		if model == "" {
+			model = defaultOllamaModel
+		}
+		opts.openAIModel = model
+	}
+	return nil
+}
+
+func printShellStatus(stdout io.Writer, service *app.ActionService, mode string) {
+	nlEnabled := service != nil && service.HasTranslator()
+	if nlEnabled {
+		_, _ = fmt.Fprintf(stdout, "status: mode=%s, nl=enabled\n", mode)
+		return
+	}
+	_, _ = fmt.Fprintf(stdout, "status: mode=%s, nl=disabled\n", mode)
+	_, _ = fmt.Fprintln(stdout, "tip: add --ollama (or --openai-api-key) to enable :nl")
 }
 
 func buildService(opts commonOptions, requireTranslator bool) (*app.ActionService, func(), error) {
@@ -335,7 +500,7 @@ func buildService(opts commonOptions, requireTranslator bool) (*app.ActionServic
 	}
 	if requireTranslator && translator == nil {
 		_ = db.Close()
-		return nil, nil, errors.New("translator is required; provide --openai-api-key or OPENAI_API_KEY")
+		return nil, nil, errors.New("translator is required; provide OPENAI_API_KEY, --openai-api-key, or use --ollama")
 	}
 
 	service, err := app.NewActionService(app.Config{
@@ -355,19 +520,33 @@ func buildService(opts commonOptions, requireTranslator bool) (*app.ActionServic
 }
 
 func buildTranslator(opts commonOptions) (nl.Translator, error) {
+	if strings.EqualFold(strings.TrimSpace(opts.llmBackend), llmBackendNone) {
+		return nil, nil
+	}
+
 	apiKey := strings.TrimSpace(opts.openAIAPIKey)
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	}
-	if apiKey == "" {
+	baseURL := strings.TrimSpace(opts.openAIBaseURL)
+	model := strings.TrimSpace(opts.openAIModel)
+
+	if apiKey == "" && baseURL == "" && model == "" {
 		return nil, nil
 	}
 
-	return nl.NewOpenAITranslator(nl.OpenAIConfig{
+	translator, err := nl.NewOpenAITranslator(nl.OpenAIConfig{
 		APIKey:  apiKey,
-		BaseURL: opts.openAIBaseURL,
-		Model:   opts.openAIModel,
+		BaseURL: baseURL,
+		Model:   model,
+		HTTPClient: &http.Client{
+			Timeout: opts.timeout,
+		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	return translator, nil
 }
 
 func readJSONPayload(inputPath string, jsonInput string, stdin io.Reader) ([]byte, error) {
@@ -456,4 +635,5 @@ func printUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  run     execute action JSON")
 	_, _ = fmt.Fprintln(writer, "  nl      translate natural language to action JSON")
 	_, _ = fmt.Fprintln(writer, "  shell   interactive shell")
+	_, _ = fmt.Fprintln(writer, "tip: all subcommands support --config <file> (or HARUHIDB_CONFIG)")
 }

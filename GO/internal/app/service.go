@@ -70,6 +70,10 @@ func NewActionService(cfg Config) (*ActionService, error) {
 	}, nil
 }
 
+func (s *ActionService) HasTranslator() bool {
+	return s != nil && s.translator != nil
+}
+
 func (s *ActionService) ExecuteJSON(ctx context.Context, raw []byte) ([]byte, error) {
 	if s == nil {
 		return nil, errors.New("service is nil")
@@ -195,6 +199,11 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 
 		candidateMap, candidateRaw, validateErr := s.validateCandidateEnvelope(output.Candidate)
 		if validateErr != nil {
+			if normalized, ok := normalizeCandidateEnvelope(output.Candidate, result.RequestID, req.Mode); ok {
+				candidateMap, candidateRaw, validateErr = s.validateCandidateEnvelope(normalized)
+			}
+		}
+		if validateErr != nil {
 			lastErr = validateErr
 			hint = validateErr.Error()
 			continue
@@ -226,6 +235,164 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 	mergeMeta(result.Meta, meta)
 	s.logf("translate_nl request_id=%s valid=false error=%q", result.RequestID, result.Error.Message)
 	return result, nil
+}
+
+func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.Mode) ([]byte, bool) {
+	trimmed := strings.TrimSpace(string(candidate))
+	if trimmed == "" {
+		return nil, false
+	}
+
+	var envelope map[string]any
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&envelope); err != nil {
+		return nil, false
+	}
+
+	normalized := map[string]any{}
+	for _, key := range []string{"version", "request_id", "mode", "action", "args"} {
+		if value, ok := envelope[key]; ok {
+			normalized[key] = value
+		}
+	}
+
+	changed := len(normalized) != len(envelope)
+	if version, ok := normalized["version"].(string); !ok || strings.TrimSpace(version) == "" {
+		normalized["version"] = action.VersionV1
+		changed = true
+	}
+	if id, ok := normalized["request_id"].(string); !ok || strings.TrimSpace(id) == "" {
+		normalized["request_id"] = strings.TrimSpace(requestID)
+		changed = true
+	}
+	if m, ok := normalized["mode"].(string); !ok || strings.TrimSpace(m) == "" {
+		normalized["mode"] = string(mode)
+		changed = true
+	}
+	switch args := normalized["args"].(type) {
+	case nil:
+		normalized["args"] = map[string]any{}
+		changed = true
+	case []any:
+		// Some small models occasionally emit [] for no-arg actions.
+		// Protocol requires args to be a JSON object.
+		if len(args) == 0 {
+			normalized["args"] = map[string]any{}
+			changed = true
+		}
+	}
+	if actionName, ok := normalized["action"].(string); ok {
+		normalizedArgs, argsChanged := normalizeArgsForAction(strings.TrimSpace(actionName), normalized["args"])
+		if argsChanged {
+			normalized["args"] = normalizedArgs
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil, false
+	}
+	normalizedBytes, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, false
+	}
+	return normalizedBytes, true
+}
+
+func normalizeArgsForAction(actionName string, argsValue any) (any, bool) {
+	switch action.Action(actionName) {
+	case action.ActionListTables:
+		argsMap, ok := argsValue.(map[string]any)
+		if !ok || len(argsMap) > 0 {
+			return map[string]any{}, true
+		}
+		return argsMap, false
+	case action.ActionTableExists, action.ActionDescribeTable:
+		return filterArgsKeys(argsValue, []string{"table"})
+	case action.ActionGetByPrimaryInt:
+		return filterArgsKeys(argsValue, []string{"table", "key"})
+	case action.ActionScanAll:
+		return filterArgsKeys(argsValue, []string{"table", "limit"})
+	case action.ActionScanPrimaryIntRange:
+		return filterArgsKeys(argsValue, []string{"table", "start_key", "end_key", "limit"})
+	case action.ActionInsertRow:
+		return filterArgsKeys(argsValue, []string{"table", "values"})
+	case action.ActionUpdateByPrimaryInt:
+		return filterArgsKeys(argsValue, []string{"table", "key", "values"})
+	case action.ActionDeleteByPrimaryInt:
+		return filterArgsKeys(argsValue, []string{"table", "key"})
+	case action.ActionBatch:
+		return normalizeBatchArgs(argsValue)
+	default:
+		return argsValue, false
+	}
+}
+
+func filterArgsKeys(argsValue any, allowed []string) (any, bool) {
+	argsMap, ok := argsValue.(map[string]any)
+	if !ok {
+		return argsValue, false
+	}
+	filtered := map[string]any{}
+	for _, key := range allowed {
+		if value, exists := argsMap[key]; exists {
+			filtered[key] = value
+		}
+	}
+	if len(filtered) == len(argsMap) {
+		return argsValue, false
+	}
+	return filtered, true
+}
+
+func normalizeBatchArgs(argsValue any) (any, bool) {
+	filteredValue, changed := filterArgsKeys(argsValue, []string{"requests", "stop_on_error"})
+	filteredArgs, ok := filteredValue.(map[string]any)
+	if !ok {
+		return filteredValue, changed
+	}
+
+	rawRequests, ok := filteredArgs["requests"].([]any)
+	if !ok || len(rawRequests) == 0 {
+		return filteredArgs, changed
+	}
+
+	normalizedRequests := make([]any, 0, len(rawRequests))
+	requestsChanged := false
+	for _, item := range rawRequests {
+		reqMap, ok := item.(map[string]any)
+		if !ok {
+			normalizedRequests = append(normalizedRequests, item)
+			continue
+		}
+
+		filteredReqValue, reqChanged := filterArgsKeys(reqMap, []string{"action", "args"})
+		filteredReq, ok := filteredReqValue.(map[string]any)
+		if !ok {
+			normalizedRequests = append(normalizedRequests, filteredReqValue)
+			requestsChanged = requestsChanged || reqChanged
+			continue
+		}
+
+		actionName, hasAction := filteredReq["action"].(string)
+		if hasAction {
+			normalizedSubArgs, subChanged := normalizeArgsForAction(strings.TrimSpace(actionName), filteredReq["args"])
+			if subChanged {
+				filteredReq["args"] = normalizedSubArgs
+				reqChanged = true
+			}
+		}
+
+		normalizedRequests = append(normalizedRequests, filteredReq)
+		requestsChanged = requestsChanged || reqChanged
+	}
+
+	if requestsChanged {
+		filteredArgs["requests"] = normalizedRequests
+	}
+
+	return filteredArgs, changed || requestsChanged
 }
 
 func (s *ActionService) withRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

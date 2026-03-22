@@ -1,0 +1,16 @@
+{
+  "common": {
+    "db_path": "/tmp/haruhidb-openai.db",
+    "allow_write": false,
+    "timeout": "20s"
+  },
+  "llm": {
+    "backend": "openai",
+    "model": "gpt-5-mini"
+  },
+  "serve": {
+    "listen": ":8080",
+    "max_body_bytes": 1048576,
+    "rate_limit_per_minute": 120
+  }
+}

@@ -1,0 +1,296 @@
+{
+  "protocol": "HaruhiDB Action Protocol",
+  "version": "v1",
+  "envelope": {
+    "required_keys": [
+      "version",
+      "request_id",
+      "mode",
+      "action",
+      "args"
+    ],
+    "version": {
+      "const": "v1"
+    },
+    "request_id": {
+      "type": "string",
+      "min_length": 1
+    },
+    "mode": {
+      "enum": [
+        "read_only",
+        "read_write"
+      ]
+    },
+    "action": {
+      "type": "string"
+    },
+    "args": {
+      "type": "object"
+    }
+  },
+  "actions": [
+    {
+      "name": "list_tables",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [],
+        "optional": [],
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "table_exists",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table"
+        ],
+        "optional": [],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "describe_table",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table"
+        ],
+        "optional": [],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "get_by_primary_int",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table",
+          "key"
+        ],
+        "optional": [],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          },
+          "key": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "scan_all",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table"
+        ],
+        "optional": [
+          "limit"
+        ],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 100
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "scan_primary_int_range",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table",
+          "start_key",
+          "end_key"
+        ],
+        "optional": [
+          "limit"
+        ],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          },
+          "start_key": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "end_key": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 100
+          }
+        },
+        "constraints": [
+          "start_key <= end_key"
+        ],
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "insert_row",
+      "read_only_allowed": false,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table",
+          "values"
+        ],
+        "optional": [],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          },
+          "values": {
+            "type": "object",
+            "min_properties": 1
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "update_by_primary_int",
+      "read_only_allowed": false,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table",
+          "key",
+          "values"
+        ],
+        "optional": [],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          },
+          "key": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "values": {
+            "type": "object",
+            "min_properties": 1
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "delete_by_primary_int",
+      "read_only_allowed": false,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "table",
+          "key"
+        ],
+        "optional": [],
+        "properties": {
+          "table": {
+            "type": "string",
+            "min_length": 1
+          },
+          "key": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additional_properties": false
+      }
+    },
+    {
+      "name": "batch",
+      "read_only_allowed": true,
+      "read_write_allowed": true,
+      "args": {
+        "required": [
+          "requests"
+        ],
+        "optional": [
+          "stop_on_error"
+        ],
+        "properties": {
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "requests": {
+            "type": "array",
+            "min_items": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "action",
+                "args"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "args": {
+                  "type": "object"
+                }
+              },
+              "additional_properties": false
+            }
+          }
+        },
+        "constraints": [
+          "batch items cannot use action=batch",
+          "in read_only mode, batch items cannot be write actions"
+        ],
+        "additional_properties": false
+      }
+    }
+  ],
+  "global_constraints": [
+    "top-level args must be a JSON object",
+    "unknown fields are rejected (strict JSON decode)",
+    "read_only mode cannot call write actions: insert_row, update_by_primary_int, delete_by_primary_int",
+    "for primary-int actions, table first column must be INTEGER NOT NULL",
+    "for get_by_primary_int and scan_primary_int_range, target table must have primary-int index",
+    "scan_all.limit and scan_primary_int_range.limit default to 100",
+    "insert_row values must include exactly all table columns",
+    "update_by_primary_int values must not be empty",
+    "NULL values are unsupported in v1",
+    "DECIMAL values are unsupported in v1"
+  ]
+}

@@ -34,13 +34,17 @@ type OpenAITranslator struct {
 }
 
 func NewOpenAITranslator(cfg OpenAIConfig) (*OpenAITranslator, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, errors.New("openai api key must not be empty")
-	}
-
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
 		baseURL = defaultOpenAIBaseURL
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	// API key is mandatory for the default OpenAI endpoint, but optional
+	// for local OpenAI-compatible backends (for example Ollama).
+	if apiKey == "" && strings.EqualFold(baseURL, defaultOpenAIBaseURL) {
+		return nil, errors.New("openai api key must not be empty when using the default OpenAI endpoint")
 	}
 
 	model := strings.TrimSpace(cfg.Model)
@@ -54,8 +58,8 @@ func NewOpenAITranslator(cfg OpenAIConfig) (*OpenAITranslator, error) {
 	}
 
 	return &OpenAITranslator{
-		apiKey:  cfg.APIKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  apiKey,
+		baseURL: baseURL,
 		model:   model,
 		client:  client,
 	}, nil
@@ -103,7 +107,9 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	if err != nil {
 		return TranslateOutput{}, fmt.Errorf("create openai request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+t.apiKey)
+	if t.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+t.apiKey)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := t.client.Do(httpReq)

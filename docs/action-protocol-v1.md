@@ -2,6 +2,11 @@
 
 HaruhiDB 动作协议 v1 采用“统一请求信封 + 动作枚举 + 强结构参数”模型。
 
+面向模型训练/提示词注入可直接使用：
+
+- [请求模板 JSON](action-v1-request-template.json)
+- [动作与参数机器可读规范 JSON](action-v1-model-spec.json)
+
 ## 设计目标
 
 - 默认一次请求只做一个动作；`batch` 动作可顺序执行多个子动作

@@ -1,0 +1,292 @@
+# HaruhiDB Go 使用指南（本地 / 网络 / 模型组合）
+
+这份文档专门回答一个问题：
+
+- 怎么跑起来？
+- 哪些场景需要模型？
+- 本地与网络服务分别怎么用？
+
+## 先理解两条链路
+
+HaruhiDB Go 层有两条独立链路：
+
+1. Action 执行链路（不需要模型）
+- 输入：Action JSON（`version/mode/action/args`）
+- 入口：`run` 子命令、`/v1/action`、`shell` 的 `:json`
+- 用途：直接执行数据库动作
+
+2. NL 翻译链路（需要 translator，也就是模型后端）
+- 输入：自然语言
+- 入口：`nl` 子命令、`/v1/nl/translate`、`shell` 的 `:nl`
+- 用途：先把自然语言翻译成 Action JSON，再可选执行
+
+结论：
+- 你问到的 “`shell` 可启动，但 `:nl` 会失败”，并不表示本地不支持模型。
+- 真正含义是：当前没配置 translator（没提供 `--openai-api-key` 或 `OPENAI_API_KEY`）。
+
+## 运行前准备
+
+在 Go 模块目录执行命令：
+
+```bash
+cd /home/suzumiya/__code__/code/HaruhiDB/GO
+```
+
+查看总帮助：
+
+```bash
+go run ./cmd/haruhidb help
+```
+
+如果你只想一键跑起来（推荐）：
+
+```bash
+cd /home/suzumiya/__code__/code/HaruhiDB
+./scripts/serve_ollama_one_click.sh
+```
+
+可选环境变量（不改脚本直接调参数）：
+
+- `HARU_MODEL`：默认 `qwen2.5-coder:0.5b`
+- `HARU_DB_PATH`：默认 `/tmp/haruhidb-ollama.db`
+- `HARU_LISTEN`：默认 `:8080`
+- `HARU_TIMEOUT`：默认 `60s`
+
+示例：
+
+```bash
+HARU_MODEL=qwen2.5-coder:1.5b HARU_LISTEN=:9090 ./scripts/serve_ollama_one_click.sh
+```
+
+常用快捷参数（与原参数等价）：
+
+- `--api-key` = `--openai-api-key`
+- `--base-url` = `--openai-base-url`
+- `--model` = `--openai-model`
+- `--ollama`：一键使用本地 Ollama（默认 `http://127.0.0.1:11434` + `qwen2.5-coder:0.5b`）
+
+## 配置文件启动（推荐）
+
+现在支持通过 `--config`（或环境变量 `HARUHIDB_CONFIG`）读取 JSON 配置文件。
+
+优先级规则：
+
+1. 命令行参数（最高）
+2. 配置文件
+3. 程序默认值
+
+示例：
+
+```bash
+go run ./cmd/haruhidb serve --config ../docs/configs/serve-no-llm.json
+go run ./cmd/haruhidb serve --config ../docs/configs/serve-openai.json
+go run ./cmd/haruhidb serve --config ../docs/configs/serve-ollama.json
+```
+
+也可以用环境变量：
+
+```bash
+export HARUHIDB_CONFIG=../docs/configs/serve-ollama.json
+go run ./cmd/haruhidb serve
+```
+
+命令行覆盖配置示例：
+
+```bash
+go run ./cmd/haruhidb serve \
+  --config ../docs/configs/serve-ollama.json \
+  --listen :9090 \
+  --model qwen2.5-coder:1.5b
+```
+
+配置文件主要字段：
+
+- `common.db_path`：数据库路径
+- `common.allow_write`：是否允许写动作
+- `common.timeout`：请求超时，格式同 Go duration（如 `15s`、`1m`）
+- `llm.backend`：`none` / `openai` / `openai_compatible` / `ollama`
+- `llm.api_key`：模型服务 key（可选）
+- `llm.base_url`：模型服务地址
+- `llm.model`：模型名
+- `llm.ollama_model`：配合 ollama 的模型名快捷字段
+- `serve.listen`、`serve.max_body_bytes`、`serve.auth_token`、`serve.rate_limit_per_minute`
+- `nl.mode`、`nl.execute`、`nl.pretty`
+- `run.pretty`
+- `shell.mode`
+
+## 组合总表
+
+1. 本地 CLI，不用模型
+- 可用：`run`、`shell(:json)`
+- 不可用：`nl`、`shell(:nl)`
+
+2. 本地 CLI，用网络模型（OpenAI）
+- 可用：`nl`、`shell(:nl)`
+- 配置：`OPENAI_API_KEY` 或 `--openai-api-key`
+
+3. 本地 CLI，用本地模型（Ollama/OpenAI 兼容）
+- 可用：`nl`、`shell(:nl)`
+- 配置：推荐直接 `--ollama`（可选 `--ollama-model`）
+
+4. 网络服务（HTTP），不用模型
+- 可用：`GET /healthz`、`POST /v1/action`
+- `POST /v1/nl/translate` 会返回 translator 未配置
+
+5. 网络服务（HTTP），用网络模型（OpenAI）
+- 可用：`POST /v1/nl/translate`
+- 服务端会请求 OpenAI `chat/completions`
+
+6. 网络服务（HTTP），用本地模型（Ollama/OpenAI 兼容）
+- 可用：`POST /v1/nl/translate`
+- 服务端请求你的本地 OpenAI 兼容地址
+
+## 场景命令（可直接复制）
+
+### A. 本地 CLI，不用模型（推荐入门第一步）
+
+```bash
+go run ./cmd/haruhidb run \
+  --db-path /tmp/haru.db \
+  --json '{"version":"v1","request_id":"r1","mode":"read_only","action":"list_tables","args":{}}'
+```
+
+### B. 本地 CLI，用网络模型（OpenAI）
+
+```bash
+export OPENAI_API_KEY=your_key
+
+go run ./cmd/haruhidb nl \
+  --db-path /tmp/haru.db \
+  --input "列出所有表" \
+  --openai-model gpt-5-mini
+```
+
+### C. 本地 CLI，用本地模型（Ollama）
+
+先确保本地模型服务已启动并已拉取模型，例如：
+
+```bash
+ollama run qwen2.5-coder:0.5b
+```
+
+然后：
+
+```bash
+go run ./cmd/haruhidb nl \
+  --db-path /tmp/haru.db \
+  --input "列出所有表" \
+  --ollama
+```
+
+如果你想换模型：
+
+```bash
+go run ./cmd/haruhidb nl \
+  --db-path /tmp/haru.db \
+  --input "列出所有表" \
+  --ollama \
+  --ollama-model qwen2.5-coder:1.5b
+```
+
+说明：
+- `--ollama` 会自动设置 `--openai-base-url=http://127.0.0.1:11434`
+- 默认模型是 `qwen2.5-coder:0.5b`
+- 也可手工传 `--openai-base-url` 与 `--openai-model`
+- `--openai-base-url` 不要带 `/v1`，程序会自动拼接 `/v1/chat/completions`
+
+### D. 网络服务，不用模型
+
+启动服务：
+
+```bash
+go run ./cmd/haruhidb serve \
+  --db-path /tmp/haru.db \
+  --listen :8080
+```
+
+客户端调用 Action：
+
+```bash
+wget -qO- \
+  --method=POST \
+  --header='Content-Type: application/json' \
+  --body-data='{"version":"v1","request_id":"req-action-1","mode":"read_only","action":"list_tables","args":{}}' \
+  http://127.0.0.1:8080/v1/action
+```
+
+### E. 网络服务，用网络模型（OpenAI）
+
+```bash
+export OPENAI_API_KEY=your_key
+
+go run ./cmd/haruhidb serve \
+  --db-path /tmp/haru.db \
+  --listen :8080 \
+  --openai-model gpt-5-mini
+```
+
+客户端调用 NL 翻译：
+
+```bash
+wget -qO- \
+  --method=POST \
+  --header='Content-Type: application/json' \
+  --body-data='{"request_id":"req-nl-1","input":"列出所有表","mode":"read_only"}' \
+  http://127.0.0.1:8080/v1/nl/translate
+```
+
+### F. 网络服务，用本地模型（Ollama）
+
+```bash
+go run ./cmd/haruhidb serve \
+  --db-path /tmp/haru.db \
+  --listen :8080 \
+  --ollama
+```
+
+然后客户端继续调用 `/v1/nl/translate`。
+
+## shell 模式的真实行为
+
+启动：
+
+```bash
+go run ./cmd/haruhidb shell --db-path /tmp/haru.db --ollama
+```
+
+1. `:json <payload>`
+- 不需要模型
+- 永远走 Action 执行链路
+
+2. `:nl <text>`
+- 需要模型（translator）
+- 无 translator 时会返回：`translator is not configured`
+
+3. `:status`
+- 查看当前 shell 的默认 mode 和 NL 可用状态
+
+## 常见报错与定位
+
+1. `translator is not configured`
+- 原因：你走了 NL 链路，但没有配置 `--openai-api-key`/`OPENAI_API_KEY`
+- 处理：补上 key（OpenAI）或直接使用 `--ollama`
+
+2. `.../v1/chat/completions ... connection refused`
+- 原因：模型后端地址不通（服务未启动、端口错误）
+- 处理：检查 `--openai-base-url`、模型服务状态、端口
+
+3. `translator is required; provide OPENAI_API_KEY, --openai-api-key, or use --ollama`
+- 原因：使用 `nl` 子命令时强制要求 translator
+- 处理：加 key 或环境变量
+
+4. 写请求被拒绝
+- 现象：提示 write actions disabled
+- 原因：服务/命令未加 `--allow-write`
+- 处理：明确需要写操作时增加 `--allow-write`
+
+## 推荐学习路径（从易到难）
+
+1. 先用 `run --json` 跑通 `list_tables`（确认数据库与 Action 协议）
+2. 再用 `serve` + `/v1/action`（确认网络服务链路）
+3. 最后接 `nl` 或 `/v1/nl/translate`（确认模型翻译链路）
+4. 全部稳定后，再启用 `--allow-write` 做写操作联调
