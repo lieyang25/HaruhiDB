@@ -39,6 +39,8 @@ type commonConfig struct {
 
 type llmConfig struct {
 	Backend     *string `json:"backend"`
+	Ollama      *bool   `json:"ollama"`
+	Stream      *bool   `json:"stream"`
 	APIKey      *string `json:"api_key"`
 	BaseURL     *string `json:"base_url"`
 	Model       *string `json:"model"`
@@ -56,13 +58,17 @@ type serveConfig struct {
 }
 
 type runConfig struct {
-	Pretty *bool `json:"pretty"`
+	Input  *string `json:"input"`
+	JSON   *string `json:"json"`
+	Pretty *bool   `json:"pretty"`
 }
 
 type nlConfig struct {
-	Mode    *string `json:"mode"`
-	Execute *bool   `json:"execute"`
-	Pretty  *bool   `json:"pretty"`
+	Input     *string `json:"input"`
+	InputFile *string `json:"input_file"`
+	Mode      *string `json:"mode"`
+	Execute   *bool   `json:"execute"`
+	Pretty    *bool   `json:"pretty"`
 }
 
 type shellConfig struct {
@@ -148,6 +154,12 @@ func applyCommonConfig(opts *commonOptions, cfg runtimeConfig) error {
 
 	if cfg.LLM.Backend != nil {
 		opts.llmBackend = strings.TrimSpace(*cfg.LLM.Backend)
+	}
+	if cfg.LLM.Ollama != nil {
+		opts.ollama = *cfg.LLM.Ollama
+	}
+	if cfg.LLM.Stream != nil {
+		opts.stream = *cfg.LLM.Stream
 	}
 	if cfg.LLM.APIKey != nil {
 		opts.openAIAPIKey = strings.TrimSpace(*cfg.LLM.APIKey)

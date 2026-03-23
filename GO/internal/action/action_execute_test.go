@@ -536,6 +536,96 @@ func TestExecuteBatchAction(t *testing.T) {
 	})
 }
 
+func TestExecuteBatchActionShowcaseAllFeatures(t *testing.T) {
+	db := openExecuteTestDB(t)
+	defer closeExecuteTestDB(t, db)
+
+	createUsersTable(t, db, true)
+	insertUserRows(t, db,
+		[]haruhidb.Value{haruhidb.Int32Value(1), haruhidb.StringValue("alice")},
+		[]haruhidb.Value{haruhidb.Int32Value(2), haruhidb.StringValue("bob")},
+		[]haruhidb.Value{haruhidb.Int32Value(3), haruhidb.StringValue("cindy")},
+	)
+
+	resp := mustExecuteRequest(t, context.Background(), db, `{
+		"version":"v1",
+		"request_id":"req-batch-showcase",
+		"mode":"read_write",
+		"action":"batch",
+		"args":{
+			"stop_on_error":false,
+			"requests":[
+				{"action":"list_tables","args":{}},
+				{"action":"table_exists","args":{"table":"users"}},
+				{"action":"describe_table","args":{"table":"users"}},
+				{"action":"scan_all","args":{"table":"users","limit":2}},
+				{"action":"scan_primary_int_range","args":{"table":"users","start_key":1,"end_key":3,"limit":10}},
+				{"action":"insert_row","args":{"table":"users","values":{"id":100,"name":"new-user"}}},
+				{"action":"get_by_primary_int","args":{"table":"users","key":100}},
+				{"action":"update_by_primary_int","args":{"table":"users","key":100,"values":{"name":"new-user-updated"}}},
+				{"action":"delete_by_primary_int","args":{"table":"users","key":100}},
+				{"action":"get_by_primary_int","args":{"table":"users","key":100}}
+			]
+		}
+	}`)
+
+	data := mustSuccessData(t, resp)
+	if got, ok := data["total"].(int); !ok || got != 10 {
+		t.Fatalf("unexpected total: %#v", data["total"])
+	}
+	if got, ok := data["succeeded"].(int); !ok || got != 10 {
+		t.Fatalf("unexpected succeeded: %#v", data["succeeded"])
+	}
+	if got, ok := data["failed"].(int); !ok || got != 0 {
+		t.Fatalf("unexpected failed: %#v", data["failed"])
+	}
+	if got, ok := data["stopped"].(bool); !ok || got {
+		t.Fatalf("unexpected stopped: %#v", data["stopped"])
+	}
+
+	results, ok := data["results"].([]map[string]any)
+	if !ok {
+		t.Fatalf("unexpected results payload type %T", data["results"])
+	}
+	if len(results) != 10 {
+		t.Fatalf("unexpected results length: %d", len(results))
+	}
+
+	item1Data, ok := results[1]["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected table_exists data type %T", results[1]["data"])
+	}
+	if exists, ok := item1Data["exists"].(bool); !ok || !exists {
+		t.Fatalf("unexpected table_exists payload: %#v", item1Data)
+	}
+
+	item6Data, ok := results[6]["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected get_by_primary_int data type %T", results[6]["data"])
+	}
+	if found, ok := item6Data["found"].(bool); !ok || !found {
+		t.Fatalf("unexpected found payload for inserted row: %#v", item6Data)
+	}
+	row, ok := item6Data["row"].(RowMap)
+	if !ok {
+		t.Fatalf("unexpected row type: %T", item6Data["row"])
+	}
+	if row["id"] != int64(100) || row["name"] != "new-user" {
+		t.Fatalf("unexpected inserted row: %#v", row)
+	}
+
+	item9Data, ok := results[9]["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected final get data type %T", results[9]["data"])
+	}
+	if found, ok := item9Data["found"].(bool); !ok || found {
+		t.Fatalf("expected final get to miss, got %#v", item9Data)
+	}
+	if item9Data["row"] != nil {
+		t.Fatalf("expected final row nil, got %#v", item9Data["row"])
+	}
+}
+
 func TestExecuteReturnsContextCanceledBeforeCall(t *testing.T) {
 	db := openExecuteTestDB(t)
 	defer closeExecuteTestDB(t, db)

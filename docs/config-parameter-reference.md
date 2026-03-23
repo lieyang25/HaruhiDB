@@ -21,6 +21,8 @@
 | 配置键 | 类型 | 说明 | CLI 参数 |
 | --- | --- | --- | --- |
 | `llm.backend` | string | `none/openai/openai_compatible/ollama` | `--llm-backend` |
+| `llm.ollama` | bool | 是否启用 Ollama 快捷模式 | `--ollama` |
+| `llm.stream` | bool | 是否启用流式翻译响应 | `--stream` |
 | `llm.api_key` | string | OpenAI API Key（也可用环境变量） | `--openai-api-key` / `--api-key` |
 | `llm.base_url` | string | OpenAI 兼容服务地址 | `--openai-base-url` / `--base-url` |
 | `llm.model` | string | 模型名 | `--openai-model` / `--model` |
@@ -42,12 +44,16 @@
 
 | 配置键 | 类型 | 说明 | CLI 参数 |
 | --- | --- | --- | --- |
+| `run.input` | string | JSON 请求文件路径（`-` 表示 stdin） | `--input` |
+| `run.json` | string | 内联 JSON 请求 | `--json` |
 | `run.pretty` | bool | 是否美化输出 | `--pretty` |
 
 ## `nl`
 
 | 配置键 | 类型 | 说明 | CLI 参数 |
 | --- | --- | --- | --- |
+| `nl.input` | string | 自然语言输入文本 | `--input` |
+| `nl.input_file` | string | 自然语言输入文件（`-` 表示 stdin） | `--input-file` |
 | `nl.mode` | string | `read_only/read_write` | `--mode` |
 | `nl.execute` | bool | 翻译成功后是否直接执行 | `--execute` |
 | `nl.pretty` | bool | 是否美化输出 | `--pretty` |

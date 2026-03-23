@@ -70,6 +70,7 @@ type commonOptions struct {
 	openAIModel     string
 	reasoningEffort string
 	examplesPath    string
+	stream          bool
 	ollama          bool
 	ollamaModel     string
 }
@@ -158,6 +159,12 @@ func runRun(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) 
 	var pretty bool
 
 	pretty = true
+	if cfg.Run.Input != nil {
+		inputPath = strings.TrimSpace(*cfg.Run.Input)
+	}
+	if cfg.Run.JSON != nil {
+		jsonInput = strings.TrimSpace(*cfg.Run.JSON)
+	}
 	if cfg.Run.Pretty != nil {
 		pretty = *cfg.Run.Pretty
 	}
@@ -166,8 +173,8 @@ func runRun(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) 
 	fs.SetOutput(stderr)
 	bindCommonFlags(fs, &opts)
 	fs.StringVar(&configPath, "config", configPath, "path to JSON config file (or HARUHIDB_CONFIG env)")
-	fs.StringVar(&inputPath, "input", "", "input JSON file path, use - for stdin")
-	fs.StringVar(&jsonInput, "json", "", "inline JSON request payload")
+	fs.StringVar(&inputPath, "input", inputPath, "input JSON file path, use - for stdin")
+	fs.StringVar(&jsonInput, "json", jsonInput, "inline JSON request payload")
 	fs.BoolVar(&pretty, "pretty", pretty, "pretty print output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -209,6 +216,12 @@ func runNL(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) e
 
 	mode = string(action.ModeReadOnly)
 	pretty = true
+	if cfg.NL.Input != nil {
+		inputText = strings.TrimSpace(*cfg.NL.Input)
+	}
+	if cfg.NL.InputFile != nil {
+		inputPath = strings.TrimSpace(*cfg.NL.InputFile)
+	}
 	if cfg.NL.Mode != nil {
 		mode = strings.TrimSpace(*cfg.NL.Mode)
 	}
@@ -224,8 +237,8 @@ func runNL(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) e
 	bindCommonFlags(fs, &opts)
 	bindLLMFlags(fs, &opts)
 	fs.StringVar(&configPath, "config", configPath, "path to JSON config file (or HARUHIDB_CONFIG env)")
-	fs.StringVar(&inputText, "input", "", "natural language input text")
-	fs.StringVar(&inputPath, "input-file", "", "natural language input file path, use - for stdin")
+	fs.StringVar(&inputText, "input", inputText, "natural language input text")
+	fs.StringVar(&inputPath, "input-file", inputPath, "natural language input file path, use - for stdin")
 	fs.StringVar(&mode, "mode", mode, "request mode: read_only or read_write")
 	fs.BoolVar(&execute, "execute", execute, "execute candidate JSON when translation is valid")
 	fs.BoolVar(&pretty, "pretty", pretty, "pretty print output")
@@ -426,6 +439,7 @@ func bindLLMFlags(fs *flag.FlagSet, opts *commonOptions) {
 	fs.StringVar(&opts.openAIModel, "model", opts.openAIModel, "alias of --openai-model")
 	fs.StringVar(&opts.reasoningEffort, "reasoning-effort", opts.reasoningEffort, "reasoning effort for capable models: off, low, medium, high")
 	fs.StringVar(&opts.examplesPath, "examples-path", opts.examplesPath, "path to action examples document injected into NL translation prompt")
+	fs.BoolVar(&opts.stream, "stream", opts.stream, "enable streaming responses for translation backends that support it")
 	fs.BoolVar(&opts.ollama, "ollama", opts.ollama, "use local Ollama endpoint (http://127.0.0.1:11434)")
 	fs.StringVar(&opts.ollamaModel, "ollama-model", opts.ollamaModel, "model name used with --ollama (default qwen2.5-coder:0.5b)")
 }
@@ -459,6 +473,7 @@ func normalizeLLMOptions(opts *commonOptions) error {
 		opts.openAIModel = ""
 		opts.reasoningEffort = ""
 		opts.examplesPath = ""
+		opts.stream = false
 		opts.ollama = false
 		opts.ollamaModel = ""
 		return nil
@@ -563,6 +578,7 @@ func buildTranslator(opts commonOptions) (nl.Translator, error) {
 		Model:           model,
 		ReasoningEffort: strings.TrimSpace(opts.reasoningEffort),
 		PromptExamples:  promptExamples,
+		Stream:          opts.stream,
 		HTTPClient: &http.Client{
 			Timeout: opts.timeout,
 		},

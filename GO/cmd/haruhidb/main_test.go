@@ -266,6 +266,160 @@ func TestCLIFlagsOverrideConfigFile(t *testing.T) {
 	}
 }
 
+func TestRunCommandUsesConfigRunJSON(t *testing.T) {
+	dbPath := prepareCLITestDB(t)
+	configPath := filepath.Join(t.TempDir(), "haruhidb.json")
+	configJSON := `{
+  "common": {
+    "db_path": "` + dbPath + `"
+  },
+  "run": {
+    "json": "{\"version\":\"v1\",\"request_id\":\"req-cli-run-config-json\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"run",
+		"--config", configPath,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run command with config run.json failed: %v; stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ok": true`) {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestRunCommandUsesConfigRunInputFile(t *testing.T) {
+	dbPath := prepareCLITestDB(t)
+	inputPath := filepath.Join(t.TempDir(), "request.json")
+	if err := os.WriteFile(inputPath, []byte(`{"version":"v1","request_id":"req-cli-run-config-input","mode":"read_only","action":"list_tables","args":{}}`), 0o644); err != nil {
+		t.Fatalf("write input file failed: %v", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "haruhidb.json")
+	configJSON := `{
+  "common": {
+    "db_path": "` + dbPath + `"
+  },
+  "run": {
+    "input": "` + inputPath + `"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"run",
+		"--config", configPath,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run command with config run.input failed: %v; stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ok": true`) {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestNLCommandUsesConfigNLInput(t *testing.T) {
+	dbPath := prepareCLITestDB(t)
+	configPath := filepath.Join(t.TempDir(), "haruhidb.json")
+	configJSON := `{
+  "common": {
+    "db_path": "` + dbPath + `"
+  },
+  "nl": {
+    "input": "列出所有表",
+    "mode": "read_only"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	originalFactory := translatorFactory
+	translatorFactory = func(commonOptions) (nl.Translator, error) {
+		return &fixedTranslator{
+			output: nl.TranslateOutput{
+				Candidate: []byte(`{"version":"v1","request_id":"req-cli-nl-config-input","mode":"read_only","action":"list_tables","args":{}}`),
+				Model:     "test-model",
+			},
+		}, nil
+	}
+	defer func() {
+		translatorFactory = originalFactory
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"nl",
+		"--config", configPath,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("nl command with config nl.input failed: %v; stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"valid": true`) {
+		t.Fatalf("unexpected nl output: %s", stdout.String())
+	}
+}
+
+func TestNLCommandUsesConfigNLInputFile(t *testing.T) {
+	dbPath := prepareCLITestDB(t)
+	inputPath := filepath.Join(t.TempDir(), "nl-input.txt")
+	if err := os.WriteFile(inputPath, []byte("列出所有表"), 0o644); err != nil {
+		t.Fatalf("write nl input file failed: %v", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "haruhidb.json")
+	configJSON := `{
+  "common": {
+    "db_path": "` + dbPath + `"
+  },
+  "nl": {
+    "input_file": "` + inputPath + `",
+    "mode": "read_only"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	originalFactory := translatorFactory
+	translatorFactory = func(commonOptions) (nl.Translator, error) {
+		return &fixedTranslator{
+			output: nl.TranslateOutput{
+				Candidate: []byte(`{"version":"v1","request_id":"req-cli-nl-config-input-file","mode":"read_only","action":"list_tables","args":{}}`),
+				Model:     "test-model",
+			},
+		}, nil
+	}
+	defer func() {
+		translatorFactory = originalFactory
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"nl",
+		"--config", configPath,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("nl command with config nl.input_file failed: %v; stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"valid": true`) {
+		t.Fatalf("unexpected nl output: %s", stdout.String())
+	}
+}
+
 func prepareCLITestDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "cli_test.db")

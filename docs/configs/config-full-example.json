@@ -6,6 +6,8 @@
   },
   "llm": {
     "backend": "openai",
+    "ollama": false,
+    "stream": false,
     "api_key": "",
     "base_url": "https://api.openai.com",
     "model": "gpt-5-mini",
@@ -21,9 +23,13 @@
     "trust_proxy_headers": false
   },
   "run": {
+    "input": "",
+    "json": "{\"version\":\"v1\",\"request_id\":\"cfg-run-1\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}",
     "pretty": true
   },
   "nl": {
+    "input": "列出所有表",
+    "input_file": "",
     "mode": "read_only",
     "execute": false,
     "pretty": true

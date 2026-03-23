@@ -1,0 +1,21 @@
+{
+  "common": {
+    "db_path": "/tmp/haruhidb-nl-quicktest.db",
+    "allow_write": true,
+    "timeout": "45s"
+  },
+  "llm": {
+    "backend": "openai",
+    "api_key": "",
+    "base_url": "https://api.openai.com",
+    "model": "gpt-5-mini",
+    "reasoning_effort": "off",
+    "examples_path": "../docs/action-v1-showcase-example.md"
+  },
+  "nl": {
+    "input": "请在 student 表按顺序执行：插入 id=303, name='openai'；查询主键 303；删除主键 303；再次查询主键 303 确认不存在。",
+    "mode": "read_write",
+    "execute": true,
+    "pretty": true
+  }
+}

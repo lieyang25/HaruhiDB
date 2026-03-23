@@ -24,6 +24,18 @@ HaruhiDB Go 层有两条独立链路：
 - 你问到的 “`shell` 可启动，但 `:nl` 会失败”，并不表示本地不支持模型。
 - 真正含义是：当前没配置 translator（没提供 `--openai-api-key` 或 `OPENAI_API_KEY`）。
 
+## 是否必须先启动项目服务器
+
+不一定，取决于你走哪条链路：
+
+1. 走 CLI 子命令（`run` / `nl` / `shell`）
+- 不需要先启动 `serve`
+- `go run ./cmd/haruhidb nl ...` 会在当前进程内直接执行翻译和动作
+
+2. 走 HTTP 接口（`/v1/action` / `/v1/nl/translate`）
+- 必须先启动 `serve`
+- 其他组件通过 HTTP 调用时，才需要这个模式
+
 ## 运行前准备
 
 在 Go 模块目录执行命令：
@@ -107,6 +119,8 @@ go run ./cmd/haruhidb serve \
 - `common.allow_write`：是否允许写动作
 - `common.timeout`：请求超时，格式同 Go duration（如 `15s`、`1m`）
 - `llm.backend`：`none` / `openai` / `openai_compatible` / `ollama`
+- `llm.ollama`：是否启用 Ollama 快捷模式（等价 `--ollama`）
+- `llm.stream`：是否启用流式翻译（对长思考模型更稳）
 - `llm.api_key`：模型服务 key（可选）
 - `llm.base_url`：模型服务地址
 - `llm.model`：模型名
@@ -307,6 +321,63 @@ go run ./cmd/haruhidb serve \
 ```
 
 然后客户端继续调用 `/v1/nl/translate`。
+
+## 模型直连快速试跑（插入 / 查询 / 删除）
+
+目标：只用自然语言输入，让模型翻译并直接执行（不手写 JSON）。
+
+先准备一个已有表的数据文件（示例里用 `student` 表）：
+
+```bash
+cd /home/suzumiya/__code__/code/HaruhiDB
+cp GO/haruhidb/test_output/quickstart_demo.db /tmp/haruhidb-nl-quicktest.db
+cp GO/haruhidb/test_output/quickstart_demo.wal /tmp/haruhidb-nl-quicktest.wal || true
+```
+
+然后进入 Go 目录，用预置配置直接跑：
+
+```bash
+cd /home/suzumiya/__code__/code/HaruhiDB/GO
+
+# OpenAI
+export OPENAI_API_KEY=your_key
+go run ./cmd/haruhidb nl \
+  --config ../docs/configs/nl-quicktest-openai.json
+
+# Ollama
+# 先确认本地 Ollama 服务可用，且模型已拉取 qwen3:1.7b
+ollama pull qwen3:1.7b
+
+# 携带思考参数（reasoning_effort=medium）
+go run ./cmd/haruhidb nl \
+  --config ../docs/configs/nl-quicktest-ollama.json
+
+# 不携带思考参数（reasoning_effort=off）
+go run ./cmd/haruhidb nl \
+  --config ../docs/configs/nl-quicktest-ollama-no-thinking.json
+
+# 需要时可临时覆盖配置里的 nl.input
+go run ./cmd/haruhidb nl \
+  --config ../docs/configs/nl-quicktest-ollama.json \
+  --input "查询 student 表主键 id=1 的记录"
+```
+
+说明：
+
+- 这两份 `nl-quicktest-*.json` 已包含 `llm.examples_path`，会先注入动作范例再翻译。
+- 这两份配置也已开启 `common.allow_write=true` + `nl.execute=true`，翻译通过会直接执行。
+- 当前 Action 协议不含“建表动作”，所以快速测试依赖已有表（示例用 `student`）。
+- `nl-quicktest-ollama.json` 使用 `qwen3:1.7b` 且 `reasoning_effort=medium`。
+- `nl-quicktest-ollama-no-thinking.json` 使用 `qwen3:1.7b` 且 `reasoning_effort=off`。
+- 这两份 qwen3 配置默认开启 `llm.stream=true`，用于缓解非流式长时间不回包。
+- 现在 `nl.input` / `nl.input_file`、`run.input` / `run.json` 都已支持配置化。
+- 你也可以直接给一段组合话术（让模型一次生成 `batch`），例如：
+
+```bash
+go run ./cmd/haruhidb nl \
+  --config ../docs/configs/nl-quicktest-openai.json \
+  --input "请在 student 表按顺序执行：插入 id=103, name='sora'；查询主键 103；删除主键 103；再次查询主键 103 确认不存在。"
+```
 
 ## shell 模式的真实行为
 

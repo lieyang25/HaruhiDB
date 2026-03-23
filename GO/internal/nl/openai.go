@@ -1,6 +1,7 @@
 package nl
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,6 +27,7 @@ type OpenAIConfig struct {
 	Model           string
 	ReasoningEffort string
 	PromptExamples  string
+	Stream          bool
 	HTTPClient      *http.Client
 }
 
@@ -35,6 +37,7 @@ type OpenAITranslator struct {
 	model           string
 	reasoningEffort string
 	promptExamples  string
+	stream          bool
 	client          *http.Client
 }
 
@@ -74,6 +77,7 @@ func NewOpenAITranslator(cfg OpenAIConfig) (*OpenAITranslator, error) {
 		model:           model,
 		reasoningEffort: reasoningEffort,
 		promptExamples:  promptExamples,
+		stream:          cfg.Stream,
 		client:          client,
 	}, nil
 }
@@ -105,6 +109,9 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 			"type": "json_object",
 		},
 	}
+	if t.stream {
+		reqBody["stream"] = true
+	}
 	if t.reasoningEffort != "" && t.reasoningEffort != "off" {
 		reqBody["reasoning_effort"] = t.reasoningEffort
 	}
@@ -134,48 +141,80 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	}
 	defer httpResp.Body.Close()
 
-	respBytes, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return TranslateOutput{}, fmt.Errorf("read openai response: %w", err)
+	var (
+		candidate []byte
+		model     string
+		meta      = map[string]any{
+			"provider": "openai",
+		}
+	)
+
+	if t.stream {
+		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+			respBytes, readErr := io.ReadAll(httpResp.Body)
+			if readErr != nil {
+				return TranslateOutput{}, fmt.Errorf("read openai response: %w", readErr)
+			}
+			return TranslateOutput{}, fmt.Errorf("openai api returned status %d: %s", httpResp.StatusCode, string(respBytes))
+		}
+
+		responseID, responseModel, usage, streamCandidate, streamErr := parseOpenAIStream(httpResp.Body)
+		if streamErr != nil {
+			return TranslateOutput{}, streamErr
+		}
+		candidate = streamCandidate
+		if strings.TrimSpace(responseModel) != "" {
+			model = responseModel
+		}
+		if responseID != "" {
+			meta["response_id"] = responseID
+		}
+		if len(usage) > 0 {
+			meta["usage"] = usage
+		}
+	} else {
+		respBytes, err := io.ReadAll(httpResp.Body)
+		if err != nil {
+			return TranslateOutput{}, fmt.Errorf("read openai response: %w", err)
+		}
+
+		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+			return TranslateOutput{}, fmt.Errorf("openai api returned status %d: %s", httpResp.StatusCode, string(respBytes))
+		}
+
+		var parsed struct {
+			ID      string `json:"id"`
+			Model   string `json:"model"`
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+			Usage map[string]any `json:"usage"`
+		}
+		if err := json.Unmarshal(respBytes, &parsed); err != nil {
+			return TranslateOutput{}, fmt.Errorf("decode openai response: %w", err)
+		}
+		if len(parsed.Choices) == 0 {
+			return TranslateOutput{}, errors.New("openai response has no choices")
+		}
+
+		candidate, err = extractJSONPayload(parsed.Choices[0].Message.Content)
+		if err != nil {
+			return TranslateOutput{}, err
+		}
+
+		if parsed.ID != "" {
+			meta["response_id"] = parsed.ID
+		}
+		if len(parsed.Usage) > 0 {
+			meta["usage"] = parsed.Usage
+		}
+		if strings.TrimSpace(parsed.Model) != "" {
+			model = parsed.Model
+		}
 	}
 
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return TranslateOutput{}, fmt.Errorf("openai api returned status %d: %s", httpResp.StatusCode, string(respBytes))
-	}
-
-	var parsed struct {
-		ID      string `json:"id"`
-		Model   string `json:"model"`
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage map[string]any `json:"usage"`
-	}
-	if err := json.Unmarshal(respBytes, &parsed); err != nil {
-		return TranslateOutput{}, fmt.Errorf("decode openai response: %w", err)
-	}
-	if len(parsed.Choices) == 0 {
-		return TranslateOutput{}, errors.New("openai response has no choices")
-	}
-
-	candidate, err := extractJSONPayload(parsed.Choices[0].Message.Content)
-	if err != nil {
-		return TranslateOutput{}, err
-	}
-
-	meta := map[string]any{
-		"provider": "openai",
-	}
-	if parsed.ID != "" {
-		meta["response_id"] = parsed.ID
-	}
-	if len(parsed.Usage) > 0 {
-		meta["usage"] = parsed.Usage
-	}
-
-	model := parsed.Model
 	if strings.TrimSpace(model) == "" {
 		model = t.model
 	}
@@ -185,6 +224,100 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 		Model:     model,
 		Meta:      meta,
 	}, nil
+}
+
+func parseOpenAIStream(reader io.Reader) (responseID string, responseModel string, usage map[string]any, candidate []byte, err error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	var contentBuilder strings.Builder
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" {
+			continue
+		}
+		if line == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			ID    string `json:"id"`
+			Model string `json:"model"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					Reasoning string `json:"reasoning"`
+				} `json:"delta"`
+				Message struct {
+					Content   string `json:"content"`
+					Reasoning string `json:"reasoning"`
+				} `json:"message"`
+			} `json:"choices"`
+			Usage map[string]any `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
+			return "", "", nil, nil, fmt.Errorf("openai stream returned error: %s", chunk.Error.Message)
+		}
+		if responseID == "" {
+			responseID = chunk.ID
+		}
+		if responseModel == "" {
+			responseModel = chunk.Model
+		}
+		if len(chunk.Usage) > 0 {
+			usage = chunk.Usage
+		}
+
+		for _, choice := range chunk.Choices {
+			piece := choice.Delta.Content
+			if piece == "" {
+				piece = choice.Message.Content
+			}
+			if piece == "" {
+				piece = choice.Delta.Reasoning
+			}
+			if piece == "" {
+				piece = choice.Message.Reasoning
+			}
+			if piece == "" {
+				continue
+			}
+			contentBuilder.WriteString(piece)
+			if candidate, extractErr := extractJSONPayload(contentBuilder.String()); extractErr == nil {
+				return responseID, responseModel, usage, candidate, nil
+			}
+		}
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		return "", "", nil, nil, fmt.Errorf("read openai stream: %w", scanErr)
+	}
+
+	content := strings.TrimSpace(contentBuilder.String())
+	if content == "" {
+		return "", "", nil, nil, errors.New("openai stream has no content")
+	}
+	candidate, err = extractJSONPayload(content)
+	if err != nil {
+		return "", "", nil, nil, err
+	}
+	return responseID, responseModel, usage, candidate, nil
 }
 
 func normalizeReasoningEffort(raw string) (string, error) {

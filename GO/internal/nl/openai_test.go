@@ -211,6 +211,56 @@ func TestTranslateInjectsPromptExamplesWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestTranslateStreamingModeParsesSSEChunks(t *testing.T) {
+	var gotStream bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request failed: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("decode request failed: %v", err)
+		}
+		if value, ok := payload["stream"].(bool); ok {
+			gotStream = value
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen3:1.7b\",\"choices\":[{\"delta\":{\"reasoning\":\"thinking\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen3:1.7b\",\"choices\":[{\"delta\":{\"content\":\"{\\\"version\\\":\\\"v1\\\",\\\"request_id\\\":\\\"req-stream\\\"\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen3:1.7b\",\"choices\":[{\"delta\":{\"content\":\",\\\"mode\\\":\\\"read_only\\\",\\\"action\\\":\\\"list_tables\\\",\\\"args\\\":{}}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	translator, err := NewOpenAITranslator(OpenAIConfig{
+		BaseURL: server.URL,
+		Model:   "qwen3:1.7b",
+		Stream:  true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected translator init error: %v", err)
+	}
+
+	output, err := translator.Translate(context.Background(), TranslateInput{
+		RequestID:      "req-stream",
+		NaturalRequest: "list tables",
+	})
+	if err != nil {
+		t.Fatalf("translate failed: %v", err)
+	}
+	if !gotStream {
+		t.Fatal("expected stream=true in request payload")
+	}
+
+	want := `{"version":"v1","request_id":"req-stream","mode":"read_only","action":"list_tables","args":{}}`
+	if string(output.Candidate) != want {
+		t.Fatalf("unexpected candidate: got %s, want %s", string(output.Candidate), want)
+	}
+}
+
 func TestExtractJSONPayload(t *testing.T) {
 	valid := `{"version":"v1","request_id":"req-1","mode":"read_only","action":"list_tables","args":{}}`
 	tests := []struct {
