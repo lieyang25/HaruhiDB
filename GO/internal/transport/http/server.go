@@ -35,7 +35,60 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 	}
 	limiter := newRateLimiter(cfg.RateLimitPerMinute, cfg.TrustProxyHeaders)
 
+	uiFileServer, uiErr := buildUIFileServer()
+	if uiErr != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("ui assets init failed: %v", uiErr)
+		}
+		uiFileServer = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeSystemError(w, uiErr)
+		})
+	}
+	uiAssetsHandler := http.StripPrefix("/ui/", uiFileServer)
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			logRequest(cfg.Logger, r, "", http.StatusNotFound, start)
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			logRequest(cfg.Logger, r, "", http.StatusMethodNotAllowed, start)
+			return
+		}
+		http.Redirect(w, r, "/ui", http.StatusFound)
+		logRequest(cfg.Logger, r, "", http.StatusFound, start)
+	})
+
+	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		if r.URL.Path != "/ui" {
+			http.NotFound(w, r)
+			return
+		}
+		indexHTML, err := uiAssets.ReadFile("ui/index.html")
+		if err != nil {
+			writeSystemError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(indexHTML)
+	})
+
+	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		uiAssetsHandler.ServeHTTP(w, r)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		if r.Method != http.MethodGet {

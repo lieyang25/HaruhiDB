@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,86 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestRootRedirectToUI(t *testing.T) {
+	db := openHTTPTestDB(t)
+	defer closeHTTPTestDB(t, db)
+
+	service, err := app.NewActionService(app.Config{
+		DB:             db,
+		RequestTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	handler := NewHandler(service, Config{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("Location"); got != "/ui" {
+		t.Fatalf("expected Location=/ui, got %q", got)
+	}
+}
+
+func TestUIRouteServesHTML(t *testing.T) {
+	db := openHTTPTestDB(t)
+	defer closeHTTPTestDB(t, db)
+
+	service, err := app.NewActionService(app.Config{
+		DB:             db,
+		RequestTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	handler := NewHandler(service, Config{})
+	req := httptest.NewRequest(http.MethodGet, "/ui", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "text/html") {
+		t.Fatalf("expected text/html content type, got %q", got)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "HaruhiDB Web Console") {
+		t.Fatalf("expected UI HTML content, got %q", body)
+	}
+}
+
+func TestUIAssetsRouteServesJS(t *testing.T) {
+	db := openHTTPTestDB(t)
+	defer closeHTTPTestDB(t, db)
+
+	service, err := app.NewActionService(app.Config{
+		DB:             db,
+		RequestTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	handler := NewHandler(service, Config{})
+	req := httptest.NewRequest(http.MethodGet, "/ui/app.js", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "javascript") {
+		t.Fatalf("expected javascript content type, got %q", got)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "postJSON(\"/v1/nl/translate\"") {
+		t.Fatalf("expected UI JS content, got %q", body)
+	}
+}
 func TestActionEndpoint(t *testing.T) {
 	db := openHTTPTestDB(t)
 	defer closeHTTPTestDB(t, db)

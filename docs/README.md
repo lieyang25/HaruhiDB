@@ -7,6 +7,7 @@
 | 你要做什么 | 先看哪里 | 说明 |
 | --- | --- | --- |
 | 最快跑起来（本地/服务/模型） | [Go 使用指南](go-usage-guide.md) | 启动、切模型、CLI/HTTP 示例、常见报错 |
+| 使用网页 UI | [网页快速上手](web-quickstart.md) | 一键脚本启动、UI 访问、常见问题 |
 | 用配置文件启动 | [配置示例](configs/README.md) | `--config`、`HARUHIDB_CONFIG`、现成 JSON 配置（含模型直连快速测试） |
 | 查所有支持参数 | [配置参数总表](config-parameter-reference.md) | 配置键、类型、CLI 参数一一对应 |
 | 看 Action 协议字段和约束 | [Action 协议 v1](action-protocol-v1.md) | 请求/响应格式、字段约束、错误码 |
@@ -20,10 +21,11 @@
 
 ### 路线 A：使用者（先跑通）
 
-1. [Go 使用指南](go-usage-guide.md)
-2. [配置示例](configs/README.md)
-3. [配置参数总表](config-parameter-reference.md)
-4. [Action 协议 v1](action-protocol-v1.md)
+1. [网页快速上手](web-quickstart.md)
+2. [Go 使用指南](go-usage-guide.md)
+3. [配置示例](configs/README.md)
+4. [配置参数总表](config-parameter-reference.md)
+5. [Action 协议 v1](action-protocol-v1.md)
 
 ### 路线 B：提示词/Agent 集成者
 

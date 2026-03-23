@@ -5,9 +5,12 @@
 - `serve-no-llm.json`：无模型模式（仅 action）
 - `serve-openai.json`：OpenAI 网络模型模式
 - `serve-ollama.json`：本地 Ollama 模式
+- `serve-web-ollama-3b.json`：网页 UI 推荐服务配置（Ollama `qwen2.5-coder:3b`）
 - `nl-quicktest-openai.json`：模型直连快速测试（OpenAI，自动执行）
 - `nl-quicktest-ollama.json`：模型直连快速测试（Ollama `qwen3:1.7b`，携带思考参数）
 - `nl-quicktest-ollama-no-thinking.json`：模型直连快速测试（Ollama `qwen3:1.7b`，不携带思考参数）
+- `nl-quicktest-ollama-qwen2.5-coder-3b.json`：模型直连快速测试（Ollama `qwen2.5-coder:3b`，自动执行）
+- `nl-quicktest-ollama-qwen2.5-coder-3b-strict.json`：严格四步示例（先翻译预览，默认不执行）
 
 其中 `serve-openai.json` 演示了：
 
@@ -31,6 +34,7 @@ cd /home/suzumiya/__code__/code/HaruhiDB/GO
 go run ./cmd/haruhidb serve --config ../docs/configs/serve-no-llm.json
 go run ./cmd/haruhidb serve --config ../docs/configs/serve-openai.json
 go run ./cmd/haruhidb serve --config ../docs/configs/serve-ollama.json
+go run ./cmd/haruhidb serve --config ../docs/configs/serve-web-ollama-3b.json
 ```
 
 模型直连快速测试（插入/查询/删除）：

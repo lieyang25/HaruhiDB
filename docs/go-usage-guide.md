@@ -321,6 +321,34 @@ go run ./cmd/haruhidb serve \
 ```
 
 然后客户端继续调用 `/v1/nl/translate`。
+### G. 网页 UI（内置服务）
+
+Go `serve` 进程现在会直接提供网页：
+
+- `GET /`：重定向到 `/ui`
+- `GET /ui`：网页入口
+- `GET /ui/*`：静态资源
+
+推荐直接用一键脚本：
+
+```bash
+# Linux
+cd /home/suzumiya/__code__/code/HaruhiDB
+./scripts/start_web_one_click.sh
+```
+
+```powershell
+# Windows
+cd E:\__code__\HaruhiDB
+./scripts/start_web_one_click.ps1
+```
+
+网页端执行流程是两段式：
+
+1. 先调 `/v1/nl/translate` 预览候选 Action
+2. 若 `valid=true`，再调 `/v1/action` 执行
+
+默认建议先“仅翻译”，确认后再执行。
 
 ## 模型直连快速试跑（插入 / 查询 / 删除）
 

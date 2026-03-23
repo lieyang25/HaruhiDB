@@ -17,8 +17,11 @@
 ### 1) 快速上手与运行
 
 - [Go 使用指南（本地 / 网络 / 模型组合）](docs/go-usage-guide.md)：启动、切模型、CLI/HTTP 示例、报错排查
+- [网页快速上手](docs/web-quickstart.md)：一键脚本启动 + 浏览器 UI
 - [Go 启动配置示例](docs/configs/README.md)：`--config` 与现成配置文件
 - [Go 配置参数总表](docs/config-parameter-reference.md)：所有配置键与 CLI 参数映射
+- [Linux 一键网页启动脚本](scripts/start_web_one_click.sh)：自动启动服务并打开网页
+- [Windows 一键网页启动脚本](scripts/start_web_one_click.ps1)：自动启动服务并打开网页
 - [Ollama 一键启动脚本](scripts/serve_ollama_one_click.sh)：本地模型一键拉起
 
 ### 2) 协议与模型集成

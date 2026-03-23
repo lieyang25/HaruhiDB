@@ -1,0 +1,21 @@
+{
+  "common": {
+    "db_path": "/tmp/haruhidb-web.db",
+    "allow_write": true,
+    "timeout": "60s"
+  },
+  "llm": {
+    "backend": "ollama",
+    "ollama": true,
+    "stream": true,
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen2.5-coder:3b",
+    "reasoning_effort": "off",
+    "examples_path": "../docs/action-v1-model-spec.json"
+  },
+  "serve": {
+    "listen": ":8080",
+    "max_body_bytes": 2097152,
+    "rate_limit_per_minute": 240
+  }
+}
