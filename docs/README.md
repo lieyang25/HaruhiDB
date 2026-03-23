@@ -18,6 +18,7 @@
 | 给模型喂“动作集合” | [动作机器可读规范](action-v1-model-spec.json) | 动作、参数、限制的机器可读清单 |
 | 快速拿一个请求模板 | [请求模板](action-v1-request-template.json) | 最小可用信封模板 |
 | 看协议实例（成功/失败） | [功能演示](action-v1-showcase-example.md) | 一组可直接参考的示例 |
+| 看 v2 动作集示意 | [Action v2 功能演示](action-v2-showcase-example.md) | 包含 create/drop table/index 的 batch 示例 |
 | 理解 Go 层代码结构 | [Go 阅读指南](../GO_READING_GUIDE.md) | 从入口到执行链路的阅读顺序 |
 | 理解 C++ 内核架构 | [CXX 文档索引](../CXX/docs/README.md) | 架构、执行链路、WAL、文件布局 |
 
@@ -41,6 +42,7 @@
 3. [动作机器可读规范](action-v1-model-spec.json)
 4. [请求模板](action-v1-request-template.json)
 5. [功能演示](action-v1-showcase-example.md)
+6. [Action v2 功能演示](action-v2-showcase-example.md)
 
 ### 路线 C：代码开发者
 
@@ -48,4 +50,5 @@
 2. [Go 使用指南](go-usage-guide.md)
 3. [Go API 与动作覆盖矩阵](go-api-action-capability-matrix.md)
 4. [CXX 文档索引](../CXX/docs/README.md)
+
 

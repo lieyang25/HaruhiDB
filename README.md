@@ -31,6 +31,7 @@
 - [Action 协议 v1](docs/action-protocol-v1.md)：字段约束、动作列表、batch 规则
 - [Go API 与动作覆盖矩阵](docs/go-api-action-capability-matrix.md)：完整 Go 能力 vs v1 暴露范围
 - [Action v1 功能演示](docs/action-v1-showcase-example.md)：请求/响应示例集合
+- [Action v2 功能演示](docs/action-v2-showcase-example.md)：含 create/drop table/index 的 v2 动作集示意
 - [Action v1 请求模板（JSON）](docs/action-v1-request-template.json)：最小请求模板
 - [Action v1 模型规范（JSON）](docs/action-v1-model-spec.json)：动作与参数的机器可读规范
 
@@ -567,4 +568,5 @@ Go 外壳默认链接 `CXX/build/src/capi/libharuhidb_capi.so`。为了避免“
 3. 这一层向上层暴露的稳定入口是什么？
 
 只要这个骨架始终不丢，后面无论继续补 SQL、事务还是优化器，项目都还能沿着同一条主线演进，而不是再次散成一堆局部修补。
+
 
