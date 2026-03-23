@@ -20,7 +20,7 @@ if(EXAMPLE)
         add_subdirectory(example)
 endif()
 
-option(TEST "Begin test" ON)
+option(TEST "Begin test" OFF)
 if(TEST)
         add_subdirectory(test)
 endif()

@@ -1,4 +1,4 @@
-# HaruhiDB 文档总入口
+﻿# HaruhiDB 文档总入口
 
 这份索引用于解决“文档很多，不知道先看哪篇”的问题。
 
@@ -9,6 +9,7 @@
 | 最快跑起来（本地/服务/模型） | [Go 使用指南](go-usage-guide.md) | 启动、切模型、CLI/HTTP 示例、常见报错 |
 | 使用网页 UI | [网页快速上手](web-quickstart.md) | 一键脚本启动、UI 访问、常见问题 |
 | 理解网页原理与信息流 | [Web 原理与信息流](web-principle-and-dataflow.md) | 页面架构、信息流、输出结构、可改造点 |
+| 做静态库/远程联动/本地运行排障 | [静态库与远程联动指南](static-link-web-cli-and-remote-exec-guide.md) | Win/Linux 静态库方案、Web/CLI/serve 用法、PC-VM-树莓派联动 |
 | 排查联调报错 | [错误经验汇总](error-experience-playbook.md) | 真实踩坑与修复命令（Windows/模型/UI） |
 | 用配置文件启动 | [配置示例](configs/README.md) | `--config`、`HARUHIDB_CONFIG`、现成 JSON 配置（含模型直连快速测试） |
 | 查所有支持参数 | [配置参数总表](config-parameter-reference.md) | 配置键、类型、CLI 参数一一对应 |
@@ -26,11 +27,12 @@
 
 1. [网页快速上手](web-quickstart.md)
 2. [Web 原理与信息流](web-principle-and-dataflow.md)
-3. [错误经验汇总](error-experience-playbook.md)
-4. [Go 使用指南](go-usage-guide.md)
-5. [配置示例](configs/README.md)
-6. [配置参数总表](config-parameter-reference.md)
-7. [Action 协议 v1](action-protocol-v1.md)
+3. [静态库与远程联动指南](static-link-web-cli-and-remote-exec-guide.md)
+4. [错误经验汇总](error-experience-playbook.md)
+5. [Go 使用指南](go-usage-guide.md)
+6. [配置示例](configs/README.md)
+7. [配置参数总表](config-parameter-reference.md)
+8. [Action 协议 v1](action-protocol-v1.md)
 
 ### 路线 B：提示词/Agent 集成者
 
@@ -46,3 +48,4 @@
 2. [Go 使用指南](go-usage-guide.md)
 3. [Go API 与动作覆盖矩阵](go-api-action-capability-matrix.md)
 4. [CXX 文档索引](../CXX/docs/README.md)
+
