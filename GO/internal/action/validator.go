@@ -25,6 +25,13 @@ func validateTableName(name string) error {
 	return nil
 }
 
+func validateIndexName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errorf(CodeInvalidRequest, "index must not be empty")
+	}
+	return nil
+}
+
 func validateLimit(limit *int) (int, error) {
 	if limit == nil {
 		return DefaultLimit, nil
@@ -65,6 +72,20 @@ func requireKnownTable(catalog CatalogReader, table string) ([]haruhidb.ColumnIn
 	}
 
 	return columns, indexes, nil
+}
+
+func requireMissingTable(catalog CatalogReader, table string) error {
+	if err := requireCatalog(catalog); err != nil {
+		return err
+	}
+	exists, err := catalog.TableExists(table)
+	if err != nil {
+		return mapCatalogError(err)
+	}
+	if exists {
+		return errorf(CodeAlreadyExists, "table %q already exists", table)
+	}
+	return nil
 }
 
 func requirePrimaryIntColumns(table string, columns []haruhidb.ColumnInfo) error {
@@ -226,6 +247,126 @@ func validateDeleteByPrimaryIntArgs(raw rawDeleteByPrimaryIntArgs, columns []har
 		Table: raw.Table,
 		Key:   *raw.Key,
 	}, nil
+}
+
+func validateCreateTableArgs(raw rawCreateTableArgs, catalog CatalogReader) (CreateTableArgs, error) {
+	if err := validateTableName(raw.Table); err != nil {
+		return CreateTableArgs{}, err
+	}
+	if len(raw.Columns) == 0 {
+		return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns must contain at least one column")
+	}
+	if err := requireMissingTable(catalog, raw.Table); err != nil {
+		return CreateTableArgs{}, err
+	}
+
+	seenColumns := make(map[string]struct{}, len(raw.Columns))
+	columnSpecs := make([]CreateTableColumnSpec, 0, len(raw.Columns))
+	columnDefs := make([]haruhidb.ColumnDef, 0, len(raw.Columns))
+
+	for i, rawColumn := range raw.Columns {
+		name := strings.TrimSpace(rawColumn.Name)
+		if name == "" {
+			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].name must not be empty", i)
+		}
+		if _, exists := seenColumns[name]; exists {
+			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].name %q is duplicated", i, name)
+		}
+		seenColumns[name] = struct{}{}
+
+		typeName := TypeName(strings.ToUpper(strings.TrimSpace(rawColumn.Type)))
+		if strings.TrimSpace(string(typeName)) == "" {
+			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].type must not be empty", i)
+		}
+
+		columnType, err := HaruhiTypeFromProtocol(typeName)
+		if err != nil {
+			var typed *Error
+			if asError(err, &typed) {
+				return CreateTableArgs{}, errorf(typed.Code, "columns[%d].type: %s", i, typed.Message)
+			}
+			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].type: %s", i, err.Error())
+		}
+		if columnType == haruhidb.TypeInvalid {
+			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].type %q is not supported", i, typeName)
+		}
+
+		length := uint32(0)
+		if columnType == haruhidb.TypeVarchar {
+			if rawColumn.Length == nil || *rawColumn.Length == 0 {
+				return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].length must be greater than 0 for VARCHAR", i)
+			}
+			length = *rawColumn.Length
+		} else if rawColumn.Length != nil {
+			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].length is only allowed for VARCHAR columns", i)
+		}
+
+		columnSpecs = append(columnSpecs, CreateTableColumnSpec{
+			Name:     name,
+			Type:     typeName,
+			Length:   length,
+			Nullable: rawColumn.Nullable,
+		})
+		columnDefs = append(columnDefs, haruhidb.ColumnDef{
+			Name:     name,
+			Type:     columnType,
+			Length:   length,
+			Nullable: rawColumn.Nullable,
+		})
+	}
+
+	return CreateTableArgs{
+		Table:      raw.Table,
+		Columns:    columnSpecs,
+		columnDefs: columnDefs,
+	}, nil
+}
+
+func validateDropTableArgs(raw rawTableArgs, catalog CatalogReader) (DropTableArgs, error) {
+	if err := validateTableName(raw.Table); err != nil {
+		return DropTableArgs{}, err
+	}
+	if _, _, err := requireKnownTable(catalog, raw.Table); err != nil {
+		return DropTableArgs{}, err
+	}
+	return DropTableArgs{Table: raw.Table}, nil
+}
+
+func validateCreatePrimaryIntIndexArgs(raw rawIndexArgs, catalog CatalogReader) (CreatePrimaryIntIndexArgs, error) {
+	if err := validateTableName(raw.Table); err != nil {
+		return CreatePrimaryIntIndexArgs{}, err
+	}
+	if err := validateIndexName(raw.Index); err != nil {
+		return CreatePrimaryIntIndexArgs{}, err
+	}
+	columns, indexes, err := requireKnownTable(catalog, raw.Table)
+	if err != nil {
+		return CreatePrimaryIntIndexArgs{}, err
+	}
+	if err := requirePrimaryIntColumns(raw.Table, columns); err != nil {
+		return CreatePrimaryIntIndexArgs{}, err
+	}
+	if containsString(indexes, raw.Index) {
+		return CreatePrimaryIntIndexArgs{}, errorf(CodeAlreadyExists, "index %q already exists on table %q", raw.Index, raw.Table)
+	}
+	return CreatePrimaryIntIndexArgs{Table: raw.Table, Index: raw.Index}, nil
+}
+
+func validateDropIndexArgs(raw rawIndexArgs, catalog CatalogReader) (DropIndexArgs, error) {
+	if err := validateTableName(raw.Table); err != nil {
+		return DropIndexArgs{}, err
+	}
+	if err := validateIndexName(raw.Index); err != nil {
+		return DropIndexArgs{}, err
+	}
+	_, indexes, err := requireKnownTable(catalog, raw.Table)
+	if err != nil {
+		return DropIndexArgs{}, err
+	}
+	if !containsString(indexes, raw.Index) {
+		return DropIndexArgs{}, errorf(CodeNotFound, "index %q not found on table %q", raw.Index, raw.Table)
+	}
+	return DropIndexArgs{Table: raw.Table, Index: raw.Index}, nil
 }
 
 func validateInsertValues(columns []haruhidb.ColumnInfo, values map[string]any) (ValueMap, map[string]haruhidb.Value, error) {
@@ -417,4 +558,13 @@ func withColumnError(name string, err error) error {
 		return wrapError(typed.Code, fmt.Sprintf("column %q: %s", name, typed.Message), err)
 	}
 	return wrapError(CodeConstraint, fmt.Sprintf("column %q: %s", name, err.Error()), err)
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }

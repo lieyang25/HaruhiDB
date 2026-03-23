@@ -258,8 +258,10 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 	}
 
 	changed := len(normalized) != len(envelope)
+	versionMissing := false
 	if version, ok := normalized["version"].(string); !ok || strings.TrimSpace(version) == "" {
 		normalized["version"] = action.VersionV1
+		versionMissing = true
 		changed = true
 	}
 	if id, ok := normalized["request_id"].(string); !ok || strings.TrimSpace(id) == "" {
@@ -288,6 +290,18 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 			normalized["action"] = canonical
 			changed = true
 		}
+
+		if versionMissing {
+			candidateAction := action.Action(canonical)
+			if action.ActionSupportedInVersion(action.VersionV2, candidateAction) && !action.ActionSupportedInVersion(action.VersionV1, candidateAction) {
+				normalized["version"] = action.VersionV2
+				changed = true
+			} else if candidateAction == action.ActionBatch && batchContainsV2OnlyAction(normalized["args"]) {
+				normalized["version"] = action.VersionV2
+				changed = true
+			}
+		}
+
 		normalizedArgs, argsChanged := normalizeArgsForAction(canonical, normalized["args"])
 		if argsChanged {
 			normalized["args"] = normalizedArgs
@@ -316,6 +330,14 @@ func canonicalActionName(raw string) string {
 		return string(action.ActionDeleteByPrimaryInt)
 	case "desc_table", "describe":
 		return string(action.ActionDescribeTable)
+	case "create_table_if_missing", "table_create":
+		return string(action.ActionCreateTable)
+	case "table_drop", "delete_table":
+		return string(action.ActionDropTable)
+	case "create_index", "create_primary_index", "create_primary_int_idx":
+		return string(action.ActionCreatePrimaryIndex)
+	case "drop_primary_index", "drop_primary_int_idx", "remove_index":
+		return string(action.ActionDropIndex)
 	default:
 		return actionName
 	}
@@ -343,6 +365,12 @@ func normalizeArgsForAction(actionName string, argsValue any) (any, bool) {
 		return filterArgsKeys(argsValue, []string{"table", "key", "values"})
 	case action.ActionDeleteByPrimaryInt:
 		return filterArgsKeys(argsValue, []string{"table", "key"})
+	case action.ActionCreateTable:
+		return filterArgsKeys(argsValue, []string{"table", "columns"})
+	case action.ActionDropTable:
+		return filterArgsKeys(argsValue, []string{"table"})
+	case action.ActionCreatePrimaryIndex, action.ActionDropIndex:
+		return filterArgsKeys(argsValue, []string{"table", "index"})
 	case action.ActionBatch:
 		return normalizeBatchArgs(argsValue)
 	default:
@@ -431,6 +459,34 @@ func normalizeBatchArgs(argsValue any) (any, bool) {
 	}
 
 	return filteredArgs, changed || requestsChanged
+}
+
+func batchContainsV2OnlyAction(argsValue any) bool {
+	argsMap, ok := argsValue.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	requests, ok := argsMap["requests"].([]any)
+	if !ok {
+		return false
+	}
+
+	for _, item := range requests {
+		reqMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		actionName, ok := reqMap["action"].(string)
+		if !ok {
+			continue
+		}
+		candidateAction := action.Action(canonicalActionName(actionName))
+		if action.ActionSupportedInVersion(action.VersionV2, candidateAction) && !action.ActionSupportedInVersion(action.VersionV1, candidateAction) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ActionService) withRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

@@ -25,11 +25,16 @@ const (
 	ActionInsertRow           Action = "insert_row"
 	ActionUpdateByPrimaryInt  Action = "update_by_primary_int"
 	ActionDeleteByPrimaryInt  Action = "delete_by_primary_int"
+	ActionCreateTable         Action = "create_table"
+	ActionDropTable           Action = "drop_table"
+	ActionCreatePrimaryIndex  Action = "create_primary_int_index"
+	ActionDropIndex           Action = "drop_index"
 	ActionBatch               Action = "batch"
 )
 
 const (
 	VersionV1    = "v1"
+	VersionV2    = "v2"
 	DefaultLimit = 100
 )
 
@@ -121,22 +126,54 @@ type DeleteByPrimaryIntArgs struct {
 	Key   int32  `json:"key"`
 }
 
+type CreateTableColumnSpec struct {
+	Name     string   `json:"name"`
+	Type     TypeName `json:"type"`
+	Length   uint32   `json:"length,omitempty"`
+	Nullable bool     `json:"nullable"`
+}
+
+type CreateTableArgs struct {
+	Table   string                  `json:"table"`
+	Columns []CreateTableColumnSpec `json:"columns"`
+
+	columnDefs []haruhidb.ColumnDef
+}
+
+type DropTableArgs struct {
+	Table string `json:"table"`
+}
+
+type CreatePrimaryIntIndexArgs struct {
+	Table string `json:"table"`
+	Index string `json:"index"`
+}
+
+type DropIndexArgs struct {
+	Table string `json:"table"`
+	Index string `json:"index"`
+}
+
 type BatchArgs struct {
 	StopOnError bool `json:"stop_on_error,omitempty"`
 
 	requests []*Request
 }
 
-func (ListTablesArgs) requestArgs()          {}
-func (TableExistsArgs) requestArgs()         {}
-func (DescribeTableArgs) requestArgs()       {}
-func (GetByPrimaryIntArgs) requestArgs()     {}
-func (ScanAllArgs) requestArgs()             {}
-func (ScanPrimaryIntRangeArgs) requestArgs() {}
-func (InsertRowArgs) requestArgs()           {}
-func (UpdateByPrimaryIntArgs) requestArgs()  {}
-func (DeleteByPrimaryIntArgs) requestArgs()  {}
-func (BatchArgs) requestArgs()               {}
+func (ListTablesArgs) requestArgs()            {}
+func (TableExistsArgs) requestArgs()           {}
+func (DescribeTableArgs) requestArgs()         {}
+func (GetByPrimaryIntArgs) requestArgs()       {}
+func (ScanAllArgs) requestArgs()               {}
+func (ScanPrimaryIntRangeArgs) requestArgs()   {}
+func (InsertRowArgs) requestArgs()             {}
+func (UpdateByPrimaryIntArgs) requestArgs()    {}
+func (DeleteByPrimaryIntArgs) requestArgs()    {}
+func (CreateTableArgs) requestArgs()           {}
+func (DropTableArgs) requestArgs()             {}
+func (CreatePrimaryIntIndexArgs) requestArgs() {}
+func (DropIndexArgs) requestArgs()             {}
+func (BatchArgs) requestArgs()                 {}
 
 type ResponseEnvelope[T any] struct {
 	Ok        bool           `json:"ok"`
@@ -213,6 +250,28 @@ type DeleteByPrimaryIntData struct {
 	Deleted int    `json:"deleted"`
 }
 
+type CreateTableData struct {
+	Table   string `json:"table"`
+	Created int    `json:"created"`
+}
+
+type DropTableData struct {
+	Table   string `json:"table"`
+	Dropped int    `json:"dropped"`
+}
+
+type CreatePrimaryIntIndexData struct {
+	Table   string `json:"table"`
+	Index   string `json:"index"`
+	Created int    `json:"created"`
+}
+
+type DropIndexData struct {
+	Table   string `json:"table"`
+	Index   string `json:"index"`
+	Dropped int    `json:"dropped"`
+}
+
 type BatchResultItem struct {
 	Index  int            `json:"index"`
 	Action Action         `json:"action"`
@@ -257,6 +316,10 @@ func (a Action) Valid() bool {
 		ActionInsertRow,
 		ActionUpdateByPrimaryInt,
 		ActionDeleteByPrimaryInt,
+		ActionCreateTable,
+		ActionDropTable,
+		ActionCreatePrimaryIndex,
+		ActionDropIndex,
 		ActionBatch:
 		return true
 	default:
@@ -266,7 +329,41 @@ func (a Action) Valid() bool {
 
 func (a Action) IsWrite() bool {
 	switch a {
-	case ActionInsertRow, ActionUpdateByPrimaryInt, ActionDeleteByPrimaryInt:
+	case ActionInsertRow,
+		ActionUpdateByPrimaryInt,
+		ActionDeleteByPrimaryInt,
+		ActionCreateTable,
+		ActionDropTable,
+		ActionCreatePrimaryIndex,
+		ActionDropIndex:
+		return true
+	default:
+		return false
+	}
+}
+
+func SupportedVersion(version string) bool {
+	switch version {
+	case VersionV1, VersionV2:
+		return true
+	default:
+		return false
+	}
+}
+
+func ActionSupportedInVersion(version string, action Action) bool {
+	if !action.Valid() {
+		return false
+	}
+	switch version {
+	case VersionV1:
+		switch action {
+		case ActionCreateTable, ActionDropTable, ActionCreatePrimaryIndex, ActionDropIndex:
+			return false
+		default:
+			return true
+		}
+	case VersionV2:
 		return true
 	default:
 		return false
@@ -297,5 +394,32 @@ func ProtocolTypeName(t haruhidb.Type) (TypeName, error) {
 		return TypeNameVarchar, nil
 	default:
 		return "", errorf(CodeInternal, "unknown HaruhiDB type: %d", t)
+	}
+}
+
+func HaruhiTypeFromProtocol(name TypeName) (haruhidb.Type, error) {
+	switch name {
+	case TypeNameBoolean:
+		return haruhidb.TypeBoolean, nil
+	case TypeNameTinyInt:
+		return haruhidb.TypeTinyInt, nil
+	case TypeNameSmallInt:
+		return haruhidb.TypeSmallInt, nil
+	case TypeNameInteger:
+		return haruhidb.TypeInteger, nil
+	case TypeNameBigInt:
+		return haruhidb.TypeBigInt, nil
+	case TypeNameFloat:
+		return haruhidb.TypeFloat, nil
+	case TypeNameDouble:
+		return haruhidb.TypeDouble, nil
+	case TypeNameDecimal:
+		return haruhidb.TypeDecimal, nil
+	case TypeNameVarchar:
+		return haruhidb.TypeVarchar, nil
+	case TypeNameInvalid:
+		return haruhidb.TypeInvalid, errorf(CodeInvalidRequest, "column type %q is not supported", name)
+	default:
+		return haruhidb.TypeInvalid, errorf(CodeInvalidRequest, "unknown column type %q", name)
 	}
 }

@@ -73,6 +73,14 @@ func executeAction(ctx context.Context, db *haruhidb.DB, req *Request) (map[stri
 		return executeDeleteByPrimaryInt(db, args)
 	case UpdateByPrimaryIntArgs:
 		return executeUpdateByPrimaryInt(ctx, db, req, args)
+	case CreateTableArgs:
+		return executeCreateTable(db, args)
+	case DropTableArgs:
+		return executeDropTable(db, args)
+	case CreatePrimaryIntIndexArgs:
+		return executeCreatePrimaryIntIndex(db, args)
+	case DropIndexArgs:
+		return executeDropIndex(db, args)
 	case BatchArgs:
 		return executeBatch(ctx, db, args)
 	default:
@@ -236,6 +244,51 @@ func executeDeleteByPrimaryInt(db *haruhidb.DB, args DeleteByPrimaryIntArgs) (ma
 	}, nil
 }
 
+func executeCreateTable(db *haruhidb.DB, args CreateTableArgs) (map[string]any, error) {
+	columnDefs, err := ensureCreateTableColumnDefs(args)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.CreateTable(args.Table, columnDefs); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"table":   args.Table,
+		"created": 1,
+	}, nil
+}
+
+func executeDropTable(db *haruhidb.DB, args DropTableArgs) (map[string]any, error) {
+	if err := db.DropTable(args.Table); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"table":   args.Table,
+		"dropped": 1,
+	}, nil
+}
+
+func executeCreatePrimaryIntIndex(db *haruhidb.DB, args CreatePrimaryIntIndexArgs) (map[string]any, error) {
+	if err := db.CreatePrimaryIntIndex(args.Table, args.Index); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"table":   args.Table,
+		"index":   args.Index,
+		"created": 1,
+	}, nil
+}
+
+func executeDropIndex(db *haruhidb.DB, args DropIndexArgs) (map[string]any, error) {
+	if err := db.DropIndex(args.Table, args.Index); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"table":   args.Table,
+		"index":   args.Index,
+		"dropped": 1,
+	}, nil
+}
 func executeUpdateByPrimaryInt(
 	ctx context.Context,
 	db *haruhidb.DB,
@@ -399,6 +452,33 @@ func ensureTableMetadata(
 	return columns, indexes, nil
 }
 
+func ensureCreateTableColumnDefs(args CreateTableArgs) ([]haruhidb.ColumnDef, error) {
+	if len(args.columnDefs) > 0 {
+		return append([]haruhidb.ColumnDef(nil), args.columnDefs...), nil
+	}
+	if len(args.Columns) == 0 {
+		return nil, errorf(CodeInvalidRequest, "columns must contain at least one column")
+	}
+
+	defs := make([]haruhidb.ColumnDef, 0, len(args.Columns))
+	for i, column := range args.Columns {
+		columnType, err := HaruhiTypeFromProtocol(column.Type)
+		if err != nil {
+			var typed *Error
+			if asError(err, &typed) {
+				return nil, errorf(typed.Code, "columns[%d].type: %s", i, typed.Message)
+			}
+			return nil, errorf(CodeInvalidRequest, "columns[%d].type: %s", i, err.Error())
+		}
+		defs = append(defs, haruhidb.ColumnDef{
+			Name:     column.Name,
+			Type:     columnType,
+			Length:   column.Length,
+			Nullable: column.Nullable,
+		})
+	}
+	return defs, nil
+}
 func ensureInsertTypedValues(
 	args InsertRowArgs,
 	columns []haruhidb.ColumnInfo,

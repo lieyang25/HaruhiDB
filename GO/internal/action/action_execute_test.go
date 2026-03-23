@@ -388,12 +388,105 @@ func TestExecuteWriteActions(t *testing.T) {
 	})
 }
 
+func TestExecuteV2DDLActions(t *testing.T) {
+	db := openExecuteTestDB(t)
+	defer closeExecuteTestDB(t, db)
+
+	t.Run("create_table create_index insert query drop", func(t *testing.T) {
+		resp := mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-create-table",
+			"mode":"read_write",
+			"action":"create_table",
+			"args":{
+				"table":"ddl_users",
+				"columns":[
+					{"name":"id","type":"INTEGER","nullable":false},
+					{"name":"name","type":"VARCHAR","length":32,"nullable":false}
+				]
+			}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["created"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected created count: %#v", mustSuccessData(t, resp)["created"])
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-create-index",
+			"mode":"read_write",
+			"action":"create_primary_int_index",
+			"args":{"table":"ddl_users","index":"idx_ddl_users_id"}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["created"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected index created count: %#v", mustSuccessData(t, resp)["created"])
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-insert",
+			"mode":"read_write",
+			"action":"insert_row",
+			"args":{"table":"ddl_users","values":{"id":11,"name":"alice"}}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["inserted"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected inserted count: %#v", mustSuccessData(t, resp)["inserted"])
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-get",
+			"mode":"read_only",
+			"action":"get_by_primary_int",
+			"args":{"table":"ddl_users","key":11}
+		}`)
+		row, ok := mustSuccessData(t, resp)["row"].(RowMap)
+		if !ok {
+			t.Fatalf("unexpected row type: %T", mustSuccessData(t, resp)["row"])
+		}
+		if row["id"] != int64(11) || row["name"] != "alice" {
+			t.Fatalf("unexpected row payload: %#v", row)
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-drop-index",
+			"mode":"read_write",
+			"action":"drop_index",
+			"args":{"table":"ddl_users","index":"idx_ddl_users_id"}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["dropped"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected index dropped count: %#v", mustSuccessData(t, resp)["dropped"])
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-drop-table",
+			"mode":"read_write",
+			"action":"drop_table",
+			"args":{"table":"ddl_users"}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["dropped"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected table dropped count: %#v", mustSuccessData(t, resp)["dropped"])
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v2",
+			"request_id":"req-v2-table-exists",
+			"mode":"read_only",
+			"action":"table_exists",
+			"args":{"table":"ddl_users"}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["exists"].(bool); !ok || got {
+			t.Fatalf("unexpected exists after drop: %#v", mustSuccessData(t, resp)["exists"])
+		}
+	})
+}
 func TestExecuteEnvelopeValidationFailureReturnsProtocolResponse(t *testing.T) {
 	db := openExecuteTestDB(t)
 	defer closeExecuteTestDB(t, db)
 
 	env := RequestEnvelope{
-		Version:   "v2",
+		Version:   "v3",
 		RequestID: "req-invalid-version",
 		Mode:      ModeReadOnly,
 		Action:    ActionListTables,

@@ -239,6 +239,108 @@ func TestTranslateNLAutoNormalizesCommonEnvelopeFields(t *testing.T) {
 	}
 }
 
+func TestTranslateNLAutoPromotesVersionForV2OnlyAction(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"action":"table_create","args":{"table":"books","columns":[{"name":"id","type":"INTEGER","nullable":false}]}}`),
+				Model:     "qwen2.5-coder:3b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     true,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-v2-normalize-single",
+		Input:     "创建 books 表",
+		Mode:      action.ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation, got %+v", result)
+	}
+	if len(translator.inputs) != 1 {
+		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
+	}
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
+		t.Fatalf("expected version %q, got %#v", action.VersionV2, got)
+	}
+	if got := result.CandidateEnvelope["action"]; got != string(action.ActionCreateTable) {
+		t.Fatalf("unexpected canonical action: %#v", got)
+	}
+}
+
+func TestTranslateNLAutoPromotesVersionForBatchContainingV2OnlyAction(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"action":"batch","args":{"requests":[{"action":"table_create","args":{"table":"books","columns":[{"name":"id","type":"INTEGER","nullable":false}],"extra":1}}],"extra":"x"}}`),
+				Model:     "qwen2.5-coder:3b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     true,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-v2-normalize-batch",
+		Input:     "批量创建 books 表",
+		Mode:      action.ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation, got %+v", result)
+	}
+	if len(translator.inputs) != 1 {
+		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
+	}
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
+		t.Fatalf("expected version %q for batch with v2-only sub action, got %#v", action.VersionV2, got)
+	}
+
+	args, ok := result.CandidateEnvelope["args"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected args object, got %#v", result.CandidateEnvelope["args"])
+	}
+	requests, ok := args["requests"].([]any)
+	if !ok || len(requests) != 1 {
+		t.Fatalf("unexpected batch requests payload: %#v", args["requests"])
+	}
+	first, ok := requests[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected batch item type: %T", requests[0])
+	}
+	if got := first["action"]; got != string(action.ActionCreateTable) {
+		t.Fatalf("unexpected normalized batch sub action: %#v", got)
+	}
+}
 func TestTranslateNLDropsUnknownTopLevelFields(t *testing.T) {
 	db := openServiceTestDB(t)
 	defer closeServiceTestDB(t, db)

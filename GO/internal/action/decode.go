@@ -45,6 +45,23 @@ type rawDeleteByPrimaryIntArgs struct {
 	Key   *int32 `json:"key"`
 }
 
+type rawCreateTableColumn struct {
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+	Length   *uint32 `json:"length"`
+	Nullable bool    `json:"nullable"`
+}
+
+type rawCreateTableArgs struct {
+	Table   string                 `json:"table"`
+	Columns []rawCreateTableColumn `json:"columns"`
+}
+
+type rawIndexArgs struct {
+	Table string `json:"table"`
+	Index string `json:"index"`
+}
+
 type rawBatchItem struct {
 	Action Action          `json:"action"`
 	Args   json.RawMessage `json:"args"`
@@ -72,8 +89,8 @@ func Decode(data []byte) (RequestEnvelope, error) {
 }
 
 func ValidateEnvelope(envelope RequestEnvelope, catalog CatalogReader) (*Request, error) {
-	if envelope.Version != VersionV1 {
-		return nil, errorf(CodeInvalidRequest, "version must be %q", VersionV1)
+	if !SupportedVersion(envelope.Version) {
+		return nil, errorf(CodeInvalidRequest, "version must be one of %q or %q", VersionV1, VersionV2)
 	}
 	if strings.TrimSpace(envelope.RequestID) == "" {
 		return nil, errorf(CodeInvalidRequest, "request_id must not be empty")
@@ -83,6 +100,9 @@ func ValidateEnvelope(envelope RequestEnvelope, catalog CatalogReader) (*Request
 	}
 	if !envelope.Action.Valid() {
 		return nil, errorf(CodeInvalidRequest, "unsupported action %q", envelope.Action)
+	}
+	if !ActionSupportedInVersion(envelope.Version, envelope.Action) {
+		return nil, errorf(CodeInvalidRequest, "action %q is not supported in version %q", envelope.Action, envelope.Version)
 	}
 	if envelope.Mode == ModeReadOnly && envelope.Action.IsWrite() {
 		return nil, errorf(CodeInvalidRequest, "action %q requires mode %q", envelope.Action, ModeReadWrite)
@@ -225,6 +245,46 @@ func ValidateEnvelope(envelope RequestEnvelope, catalog CatalogReader) (*Request
 		req.Args = args
 		req.columns = columns
 		req.indexes = indexes
+	case ActionCreateTable:
+		var raw rawCreateTableArgs
+		if err := decodeStrictJSON(envelope.Args, &raw); err != nil {
+			return nil, errorf(CodeInvalidRequest, "decode %q args: %v", envelope.Action, err)
+		}
+		args, err := validateCreateTableArgs(raw, catalog)
+		if err != nil {
+			return nil, err
+		}
+		req.Args = args
+	case ActionDropTable:
+		var raw rawTableArgs
+		if err := decodeStrictJSON(envelope.Args, &raw); err != nil {
+			return nil, errorf(CodeInvalidRequest, "decode %q args: %v", envelope.Action, err)
+		}
+		args, err := validateDropTableArgs(raw, catalog)
+		if err != nil {
+			return nil, err
+		}
+		req.Args = args
+	case ActionCreatePrimaryIndex:
+		var raw rawIndexArgs
+		if err := decodeStrictJSON(envelope.Args, &raw); err != nil {
+			return nil, errorf(CodeInvalidRequest, "decode %q args: %v", envelope.Action, err)
+		}
+		args, err := validateCreatePrimaryIntIndexArgs(raw, catalog)
+		if err != nil {
+			return nil, err
+		}
+		req.Args = args
+	case ActionDropIndex:
+		var raw rawIndexArgs
+		if err := decodeStrictJSON(envelope.Args, &raw); err != nil {
+			return nil, errorf(CodeInvalidRequest, "decode %q args: %v", envelope.Action, err)
+		}
+		args, err := validateDropIndexArgs(raw, catalog)
+		if err != nil {
+			return nil, err
+		}
+		req.Args = args
 	case ActionBatch:
 		var raw rawBatchArgs
 		if err := decodeStrictJSON(envelope.Args, &raw); err != nil {
@@ -255,6 +315,9 @@ func validateBatchArgs(
 	for i, item := range raw.Requests {
 		if !item.Action.Valid() {
 			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action unsupported action %q", i, item.Action)
+		}
+		if !ActionSupportedInVersion(envelope.Version, item.Action) {
+			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action %q is not supported in version %q", i, item.Action, envelope.Version)
 		}
 		if item.Action == ActionBatch {
 			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action %q is not supported", i, item.Action)
