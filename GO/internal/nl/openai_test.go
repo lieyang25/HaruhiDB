@@ -75,3 +75,62 @@ func TestTranslateWithoutAPIKeySkipsAuthorizationHeader(t *testing.T) {
 		t.Fatalf("expected no Authorization header, got %q", gotAuth)
 	}
 }
+
+func TestExtractJSONPayload(t *testing.T) {
+	valid := `{"version":"v1","request_id":"req-1","mode":"read_only","action":"list_tables","args":{}}`
+	tests := []struct {
+		name    string
+		content string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "plain object",
+			content: valid,
+			want:    valid,
+		},
+		{
+			name:    "fenced json object",
+			content: "```json\n" + valid + "\n```",
+			want:    valid,
+		},
+		{
+			name:    "fenced json with surrounding text",
+			content: "I converted your request:\n```json\n" + valid + "\n```\nDone.",
+			want:    valid,
+		},
+		{
+			name:    "inline text and json object",
+			content: "Output: " + valid + " Thanks.",
+			want:    valid,
+		},
+		{
+			name:    "top-level array is invalid",
+			content: `["not","object"]`,
+			wantErr: true,
+		},
+		{
+			name:    "non-json text",
+			content: "hello world",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := extractJSONPayload(tc.content)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("unexpected payload: got %s, want %s", string(got), tc.want)
+			}
+		})
+	}
+}

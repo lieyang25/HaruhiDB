@@ -216,22 +216,108 @@ func extractJSONPayload(content string) ([]byte, error) {
 		return nil, errors.New("openai content is empty")
 	}
 
-	if strings.HasPrefix(trimmed, "```") {
-		trimmed = strings.TrimPrefix(trimmed, "```json")
-		trimmed = strings.TrimPrefix(trimmed, "```")
-		trimmed = strings.TrimSuffix(trimmed, "```")
-		trimmed = strings.TrimSpace(trimmed)
+	if candidate, ok := decodeJSONObjectStrict(trimmed); ok {
+		return candidate, nil
 	}
 
-	if !strings.HasPrefix(trimmed, "{") {
-		return nil, errors.New("openai content is not a JSON object")
+	if candidate, ok := extractJSONObjectFromCodeFences(trimmed); ok {
+		return candidate, nil
 	}
 
-	var decoded any
-	dec := json.NewDecoder(strings.NewReader(trimmed))
+	if candidate, ok := extractFirstJSONObject(trimmed); ok {
+		return candidate, nil
+	}
+
+	return nil, errors.New("openai content does not contain a valid JSON object")
+}
+
+func decodeJSONObjectStrict(raw string) ([]byte, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+
+	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
+
+	var decoded map[string]any
 	if err := dec.Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("openai content invalid json: %w", err)
+		return nil, false
 	}
-	return []byte(trimmed), nil
+
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+
+	return []byte(raw), true
+}
+
+func extractJSONObjectFromCodeFences(content string) ([]byte, bool) {
+	remaining := content
+	for {
+		start := strings.Index(remaining, "```")
+		if start < 0 {
+			return nil, false
+		}
+
+		afterStart := remaining[start+3:]
+		end := strings.Index(afterStart, "```")
+		if end < 0 {
+			return nil, false
+		}
+
+		block := strings.TrimSpace(afterStart[:end])
+		block = trimCodeFenceLanguage(block)
+		if candidate, ok := decodeJSONObjectStrict(block); ok {
+			return candidate, true
+		}
+
+		remaining = afterStart[end+3:]
+	}
+}
+
+func trimCodeFenceLanguage(block string) string {
+	block = strings.TrimLeft(block, "\r\n")
+	firstLine, rest, found := strings.Cut(block, "\n")
+	if !found {
+		return block
+	}
+
+	lang := strings.ToLower(strings.TrimSpace(firstLine))
+	switch lang {
+	case "json", "jsonc", "javascript", "js":
+		return strings.TrimSpace(rest)
+	default:
+		return block
+	}
+}
+
+func extractFirstJSONObject(content string) ([]byte, bool) {
+	for i := 0; i < len(content); i++ {
+		if content[i] != '{' {
+			continue
+		}
+
+		segment := content[i:]
+		dec := json.NewDecoder(strings.NewReader(segment))
+		dec.UseNumber()
+
+		var decoded map[string]any
+		if err := dec.Decode(&decoded); err != nil {
+			continue
+		}
+
+		offset := dec.InputOffset()
+		if offset <= 0 {
+			continue
+		}
+
+		candidate := strings.TrimSpace(segment[:offset])
+		if strict, ok := decodeJSONObjectStrict(candidate); ok {
+			return strict, true
+		}
+	}
+
+	return nil, false
 }
