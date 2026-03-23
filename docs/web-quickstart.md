@@ -8,6 +8,7 @@ HaruhiDB 的网页 UI 由 Go `serve` 进程内置提供，和 API 同端口同�
 - API 健康：`GET /healthz`
 - Action 执行：`POST /v1/action`
 - NL 翻译：`POST /v1/nl/translate`
+- 报错排查：[错误经验汇总](error-experience-playbook.md)
 
 ## 一键启动（推荐）
 
@@ -71,3 +72,6 @@ $env:HARU_OPEN_BROWSER='false'
 
 3. Windows 启动时报找不到 `libharuhidb_capi.dll.a`
 - 直接用 `scripts/start_web_one_click.ps1`，脚本会自动构建并复制到 `CXX/build/src/capi`。
+
+
+更多排查案例见：[错误经验汇总](error-experience-playbook.md)。
