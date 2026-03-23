@@ -283,7 +283,12 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 		}
 	}
 	if actionName, ok := normalized["action"].(string); ok {
-		normalizedArgs, argsChanged := normalizeArgsForAction(strings.TrimSpace(actionName), normalized["args"])
+		canonical := canonicalActionName(actionName)
+		if canonical != strings.TrimSpace(actionName) {
+			normalized["action"] = canonical
+			changed = true
+		}
+		normalizedArgs, argsChanged := normalizeArgsForAction(canonical, normalized["args"])
 		if argsChanged {
 			normalized["args"] = normalizedArgs
 			changed = true
@@ -298,6 +303,22 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 		return nil, false
 	}
 	return normalizedBytes, true
+}
+
+func canonicalActionName(raw string) string {
+	actionName := strings.TrimSpace(raw)
+	switch strings.ToLower(actionName) {
+	case "query_primary_int", "query_by_primary_int", "select_by_primary_int", "point_get_primary_int":
+		return string(action.ActionGetByPrimaryInt)
+	case "list_table", "show_tables", "list_table_names":
+		return string(action.ActionListTables)
+	case "delete_primary_int", "remove_by_primary_int":
+		return string(action.ActionDeleteByPrimaryInt)
+	case "desc_table", "describe":
+		return string(action.ActionDescribeTable)
+	default:
+		return actionName
+	}
 }
 
 func normalizeArgsForAction(actionName string, argsValue any) (any, bool) {
@@ -347,7 +368,19 @@ func filterArgsKeys(argsValue any, allowed []string) (any, bool) {
 }
 
 func normalizeBatchArgs(argsValue any) (any, bool) {
-	filteredValue, changed := filterArgsKeys(argsValue, []string{"requests", "stop_on_error"})
+	changed := false
+
+	switch typed := argsValue.(type) {
+	case []any:
+		argsValue = map[string]any{"requests": typed}
+		changed = true
+	case map[string]any:
+	default:
+		return argsValue, false
+	}
+
+	filteredValue, filteredChanged := filterArgsKeys(argsValue, []string{"requests", "stop_on_error"})
+	changed = changed || filteredChanged
 	filteredArgs, ok := filteredValue.(map[string]any)
 	if !ok {
 		return filteredValue, changed
@@ -377,7 +410,12 @@ func normalizeBatchArgs(argsValue any) (any, bool) {
 
 		actionName, hasAction := filteredReq["action"].(string)
 		if hasAction {
-			normalizedSubArgs, subChanged := normalizeArgsForAction(strings.TrimSpace(actionName), filteredReq["args"])
+			canonical := canonicalActionName(actionName)
+			if canonical != strings.TrimSpace(actionName) {
+				filteredReq["action"] = canonical
+				reqChanged = true
+			}
+			normalizedSubArgs, subChanged := normalizeArgsForAction(canonical, filteredReq["args"])
 			if subChanged {
 				filteredReq["args"] = normalizedSubArgs
 				reqChanged = true

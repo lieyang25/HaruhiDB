@@ -1,0 +1,22 @@
+{
+  "common": {
+    "db_path": "C:/Users/15961/AppData/Local/Temp/haruhidb-nl-quicktest-instruct.db",
+    "allow_write": true,
+    "timeout": "30s"
+  },
+  "llm": {
+    "backend": "ollama",
+    "ollama": true,
+    "stream": true,
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen2.5-coder:3b",
+    "reasoning_effort": "off",
+    "examples_path": "../docs/action-v1-model-spec.json"
+  },
+  "nl": {
+    "input": "请在 student 表按顺序执行：插入 id=303, name='instruct_test'；查询主键 303；删除主键 303；再次查询主键 303 确认不存在。",
+    "mode": "read_write",
+    "execute": true,
+    "pretty": true
+  }
+}

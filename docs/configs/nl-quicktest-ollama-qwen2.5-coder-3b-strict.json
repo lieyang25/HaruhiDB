@@ -1,0 +1,22 @@
+{
+  "common": {
+    "db_path": "C:/Users/15961/AppData/Local/Temp/haruhidb-nl-quicktest-instruct.db",
+    "allow_write": true,
+    "timeout": "30s"
+  },
+  "llm": {
+    "backend": "ollama",
+    "ollama": true,
+    "stream": true,
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen2.5-coder:3b",
+    "reasoning_effort": "off",
+    "examples_path": "../docs/action-v1-model-spec.json"
+  },
+  "nl": {
+    "input": "严格只输出与目标直接相关的动作，不允许任何额外动作。请按顺序仅执行 4 步：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。禁止 list_tables/table_exists/describe_table/scan_all/scan_primary_int_range/update_by_primary_int。",
+    "mode": "read_write",
+    "execute": false,
+    "pretty": true
+  }
+}

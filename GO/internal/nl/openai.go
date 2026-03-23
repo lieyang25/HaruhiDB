@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -143,6 +144,7 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 
 	var (
 		candidate []byte
+		rawOutput string
 		model     string
 		meta      = map[string]any{
 			"provider": "openai",
@@ -158,11 +160,12 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 			return TranslateOutput{}, fmt.Errorf("openai api returned status %d: %s", httpResp.StatusCode, string(respBytes))
 		}
 
-		responseID, responseModel, usage, streamCandidate, streamErr := parseOpenAIStream(httpResp.Body)
+		responseID, responseModel, usage, streamCandidate, streamRawOutput, streamErr := parseOpenAIStream(httpResp.Body)
 		if streamErr != nil {
 			return TranslateOutput{}, streamErr
 		}
 		candidate = streamCandidate
+		rawOutput = streamRawOutput
 		if strings.TrimSpace(responseModel) != "" {
 			model = responseModel
 		}
@@ -199,7 +202,8 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 			return TranslateOutput{}, errors.New("openai response has no choices")
 		}
 
-		candidate, err = extractJSONPayload(parsed.Choices[0].Message.Content)
+		rawOutput = parsed.Choices[0].Message.Content
+		candidate, err = extractJSONPayload(rawOutput)
 		if err != nil {
 			return TranslateOutput{}, err
 		}
@@ -218,6 +222,9 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	if strings.TrimSpace(model) == "" {
 		model = t.model
 	}
+	if shouldExposeRawModelOutput() && strings.TrimSpace(rawOutput) != "" {
+		meta["raw_output"] = rawOutput
+	}
 
 	return TranslateOutput{
 		Candidate: candidate,
@@ -226,7 +233,7 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	}, nil
 }
 
-func parseOpenAIStream(reader io.Reader) (responseID string, responseModel string, usage map[string]any, candidate []byte, err error) {
+func parseOpenAIStream(reader io.Reader) (responseID string, responseModel string, usage map[string]any, candidate []byte, rawOutput string, err error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
@@ -272,7 +279,7 @@ func parseOpenAIStream(reader io.Reader) (responseID string, responseModel strin
 			continue
 		}
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
-			return "", "", nil, nil, fmt.Errorf("openai stream returned error: %s", chunk.Error.Message)
+			return "", "", nil, nil, "", fmt.Errorf("openai stream returned error: %s", chunk.Error.Message)
 		}
 		if responseID == "" {
 			responseID = chunk.ID
@@ -299,25 +306,22 @@ func parseOpenAIStream(reader io.Reader) (responseID string, responseModel strin
 				continue
 			}
 			contentBuilder.WriteString(piece)
-			if candidate, extractErr := extractJSONPayload(contentBuilder.String()); extractErr == nil {
-				return responseID, responseModel, usage, candidate, nil
-			}
 		}
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
-		return "", "", nil, nil, fmt.Errorf("read openai stream: %w", scanErr)
+		return "", "", nil, nil, "", fmt.Errorf("read openai stream: %w", scanErr)
 	}
 
 	content := strings.TrimSpace(contentBuilder.String())
 	if content == "" {
-		return "", "", nil, nil, errors.New("openai stream has no content")
+		return "", "", nil, nil, "", errors.New("openai stream has no content")
 	}
 	candidate, err = extractJSONPayload(content)
 	if err != nil {
-		return "", "", nil, nil, err
+		return "", "", nil, nil, content, err
 	}
-	return responseID, responseModel, usage, candidate, nil
+	return responseID, responseModel, usage, candidate, content, nil
 }
 
 func normalizeReasoningEffort(raw string) (string, error) {
@@ -627,4 +631,13 @@ func scoreJSONCandidate(raw []byte) int {
 	}
 
 	return score
+}
+
+func shouldExposeRawModelOutput() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("HARUHIDB_NL_DEBUG_RAW"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
