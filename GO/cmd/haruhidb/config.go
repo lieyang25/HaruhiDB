@@ -15,20 +15,10 @@ const (
 	defaultConfigEnvKey = "HARUHIDB_CONFIG"
 )
 
-const (
-	llmBackendNone             = "none"
-	llmBackendOpenAI           = "openai"
-	llmBackendOpenAICompatible = "openai_compatible"
-	llmBackendOllama           = "ollama"
-)
-
 type runtimeConfig struct {
 	Common commonConfig `json:"common"`
-	LLM    llmConfig    `json:"llm"`
+	Ollama ollamaConfig `json:"ollama"`
 	Serve  serveConfig  `json:"serve"`
-	Run    runConfig    `json:"run"`
-	NL     nlConfig     `json:"nl"`
-	Shell  shellConfig  `json:"shell"`
 }
 
 type commonConfig struct {
@@ -37,42 +27,14 @@ type commonConfig struct {
 	Timeout    *string `json:"timeout"`
 }
 
-type llmConfig struct {
-	Backend     *string `json:"backend"`
-	Ollama      *bool   `json:"ollama"`
-	Stream      *bool   `json:"stream"`
-	APIKey      *string `json:"api_key"`
-	BaseURL     *string `json:"base_url"`
-	Model       *string `json:"model"`
-	OllamaModel *string `json:"ollama_model"`
-	Reasoning   *string `json:"reasoning_effort"`
-	Examples    *string `json:"examples_path"`
+type ollamaConfig struct {
+	BaseURL *string `json:"base_url"`
+	Model   *string `json:"model"`
+	Stream  *bool   `json:"stream"`
 }
 
 type serveConfig struct {
-	Listen             *string `json:"listen"`
-	MaxBodyBytes       *int64  `json:"max_body_bytes"`
-	AuthToken          *string `json:"auth_token"`
-	RateLimitPerMinute *int    `json:"rate_limit_per_minute"`
-	TrustProxyHeaders  *bool   `json:"trust_proxy_headers"`
-}
-
-type runConfig struct {
-	Input  *string `json:"input"`
-	JSON   *string `json:"json"`
-	Pretty *bool   `json:"pretty"`
-}
-
-type nlConfig struct {
-	Input     *string `json:"input"`
-	InputFile *string `json:"input_file"`
-	Mode      *string `json:"mode"`
-	Execute   *bool   `json:"execute"`
-	Pretty    *bool   `json:"pretty"`
-}
-
-type shellConfig struct {
-	Mode *string `json:"mode"`
+	Listen *string `json:"listen"`
 }
 
 func resolveConfig(args []string) (runtimeConfig, string, error) {
@@ -133,7 +95,7 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	return cfg, nil
 }
 
-func applyCommonConfig(opts *commonOptions, cfg runtimeConfig) error {
+func applyServeConfig(opts *serveOptions, cfg runtimeConfig) error {
 	if opts == nil {
 		return nil
 	}
@@ -152,32 +114,18 @@ func applyCommonConfig(opts *commonOptions, cfg runtimeConfig) error {
 		opts.timeout = duration
 	}
 
-	if cfg.LLM.Backend != nil {
-		opts.llmBackend = strings.TrimSpace(*cfg.LLM.Backend)
+	if cfg.Ollama.BaseURL != nil {
+		opts.ollamaBaseURL = strings.TrimSpace(*cfg.Ollama.BaseURL)
 	}
-	if cfg.LLM.Ollama != nil {
-		opts.ollama = *cfg.LLM.Ollama
+	if cfg.Ollama.Model != nil {
+		opts.ollamaModel = strings.TrimSpace(*cfg.Ollama.Model)
 	}
-	if cfg.LLM.Stream != nil {
-		opts.stream = *cfg.LLM.Stream
+	if cfg.Ollama.Stream != nil {
+		opts.streamResponse = *cfg.Ollama.Stream
 	}
-	if cfg.LLM.APIKey != nil {
-		opts.openAIAPIKey = strings.TrimSpace(*cfg.LLM.APIKey)
-	}
-	if cfg.LLM.BaseURL != nil {
-		opts.openAIBaseURL = strings.TrimSpace(*cfg.LLM.BaseURL)
-	}
-	if cfg.LLM.Model != nil {
-		opts.openAIModel = strings.TrimSpace(*cfg.LLM.Model)
-	}
-	if cfg.LLM.OllamaModel != nil {
-		opts.ollamaModel = strings.TrimSpace(*cfg.LLM.OllamaModel)
-	}
-	if cfg.LLM.Reasoning != nil {
-		opts.reasoningEffort = strings.TrimSpace(*cfg.LLM.Reasoning)
-	}
-	if cfg.LLM.Examples != nil {
-		opts.examplesPath = strings.TrimSpace(*cfg.LLM.Examples)
+
+	if cfg.Serve.Listen != nil {
+		opts.listenAddr = strings.TrimSpace(*cfg.Serve.Listen)
 	}
 
 	return nil

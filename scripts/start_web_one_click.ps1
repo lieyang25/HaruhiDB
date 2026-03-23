@@ -4,12 +4,15 @@ $RootDir = Split-Path -Parent $PSScriptRoot
 $GoDir = Join-Path $RootDir 'GO'
 $CxxDir = Join-Path $RootDir 'CXX'
 $CxxBuildDir = if ($env:CXX_BUILD_DIR) { $env:CXX_BUILD_DIR } else { Join-Path $RootDir 'CXX\build' }
-$ConfigPath = Join-Path $RootDir 'docs\configs\serve-web-ollama-3b.json'
+$ConfigPath = Join-Path $RootDir 'docs\configs\serve-web-ollama.json'
 
 $Model = if ($env:HARU_MODEL) { $env:HARU_MODEL } else { 'qwen2.5-coder:3b' }
+$BaseUrl = if ($env:HARU_BASE_URL) { $env:HARU_BASE_URL } else { 'http://127.0.0.1:11434' }
 $DbPath = if ($env:HARU_DB_PATH) { $env:HARU_DB_PATH } else { Join-Path $env:TEMP 'haruhidb-web.db' }
 $Listen = if ($env:HARU_LISTEN) { $env:HARU_LISTEN } else { ':8080' }
 $Timeout = if ($env:HARU_TIMEOUT) { $env:HARU_TIMEOUT } else { '60s' }
+$Stream = if ($env:HARU_STREAM) { $env:HARU_STREAM } else { 'true' }
+$AllowWrite = if ($env:HARU_ALLOW_WRITE) { $env:HARU_ALLOW_WRITE } else { 'true' }
 $OpenBrowser = if ($env:HARU_OPEN_BROWSER) { $env:HARU_OPEN_BROWSER } else { 'true' }
 
 function Require-Command([string]$Name) {
@@ -35,7 +38,7 @@ function Resolve-UiUrl([string]$ListenValue) {
 
 function Ensure-OllamaService {
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null
+    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/api/tags" -TimeoutSec 2 | Out-Null
     Write-Host '[1/5] Ollama service is running'
   }
   catch {
@@ -98,10 +101,13 @@ Write-Host "        db_path=$DbPath"
 Write-Host "        listen=$Listen"
 Write-Host "        timeout=$Timeout"
 Write-Host "        model=$Model"
+Write-Host "        base_url=$BaseUrl"
+Write-Host "        stream=$Stream"
+Write-Host "        allow_write=$AllowWrite"
 
 if (Is-Enabled $OpenBrowser) {
   Start-Process $uiUrl | Out-Null
 }
 
 Set-Location $GoDir
-& go run ./cmd/haruhidb serve --config $ConfigPath --model $Model --db-path $DbPath --listen $Listen --timeout $Timeout
+& go run ./cmd/haruhidb serve --config $ConfigPath --db-path $DbPath --listen $Listen --timeout $Timeout --model $Model --base-url $BaseUrl --stream=$Stream --allow-write=$AllowWrite

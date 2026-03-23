@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -17,78 +16,55 @@ import (
 )
 
 const (
-	defaultOpenAIBaseURL  = "https://api.openai.com"
-	defaultOpenAIModel    = "gpt-4.1-mini"
-	maxExamplePromptRunes = 6000
+	defaultOllamaBaseURL = "http://127.0.0.1:11434"
+	defaultOllamaModel   = "qwen2.5-coder:3b"
 )
 
-type OpenAIConfig struct {
-	APIKey          string
-	BaseURL         string
-	Model           string
-	ReasoningEffort string
-	PromptExamples  string
-	Stream          bool
-	HTTPClient      *http.Client
+type OllamaConfig struct {
+	BaseURL    string
+	Model      string
+	Stream     bool
+	HTTPClient *http.Client
 }
 
-type OpenAITranslator struct {
-	apiKey          string
-	baseURL         string
-	model           string
-	reasoningEffort string
-	promptExamples  string
-	stream          bool
-	client          *http.Client
+type OllamaTranslator struct {
+	baseURL string
+	model   string
+	stream  bool
+	client  *http.Client
 }
 
-func NewOpenAITranslator(cfg OpenAIConfig) (*OpenAITranslator, error) {
+func NewOllamaTranslator(cfg OllamaConfig) (*OllamaTranslator, error) {
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
-		baseURL = defaultOpenAIBaseURL
+		baseURL = defaultOllamaBaseURL
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	apiKey := strings.TrimSpace(cfg.APIKey)
-	// API key is mandatory for the default OpenAI endpoint, but optional
-	// for local OpenAI-compatible backends (for example Ollama).
-	if apiKey == "" && strings.EqualFold(baseURL, defaultOpenAIBaseURL) {
-		return nil, errors.New("openai api key must not be empty when using the default OpenAI endpoint")
-	}
-
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
-		model = defaultOpenAIModel
+		model = defaultOllamaModel
 	}
-
-	reasoningEffort, err := normalizeReasoningEffort(cfg.ReasoningEffort)
-	if err != nil {
-		return nil, err
-	}
-	promptExamples := normalizePromptExamples(cfg.PromptExamples)
 
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: 60 * time.Second}
 	}
 
-	return &OpenAITranslator{
-		apiKey:          apiKey,
-		baseURL:         baseURL,
-		model:           model,
-		reasoningEffort: reasoningEffort,
-		promptExamples:  promptExamples,
-		stream:          cfg.Stream,
-		client:          client,
+	return &OllamaTranslator{
+		baseURL: baseURL,
+		model:   model,
+		stream:  cfg.Stream,
+		client:  client,
 	}, nil
 }
 
-func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (TranslateOutput, error) {
+func (t *OllamaTranslator) Translate(ctx context.Context, in TranslateInput) (TranslateOutput, error) {
 	if t == nil {
 		return TranslateOutput{}, errors.New("translator is nil")
 	}
 
-	userPrompt, err := buildOpenAIUserPrompt(in, t.promptExamples)
+	userPrompt, err := buildOllamaUserPrompt(in)
 	if err != nil {
 		return TranslateOutput{}, err
 	}
@@ -99,7 +75,7 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": openAISystemPrompt(),
+				"content": ollamaSystemPrompt(),
 			},
 			{
 				"role":    "user",
@@ -113,13 +89,10 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	if t.stream {
 		reqBody["stream"] = true
 	}
-	if t.reasoningEffort != "" && t.reasoningEffort != "off" {
-		reqBody["reasoning_effort"] = t.reasoningEffort
-	}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return TranslateOutput{}, fmt.Errorf("marshal openai request: %w", err)
+		return TranslateOutput{}, fmt.Errorf("marshal ollama request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(
@@ -129,25 +102,21 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 		bytes.NewReader(bodyBytes),
 	)
 	if err != nil {
-		return TranslateOutput{}, fmt.Errorf("create openai request: %w", err)
-	}
-	if t.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+t.apiKey)
+		return TranslateOutput{}, fmt.Errorf("create ollama request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := t.client.Do(httpReq)
 	if err != nil {
-		return TranslateOutput{}, fmt.Errorf("openai request failed: %w", err)
+		return TranslateOutput{}, fmt.Errorf("ollama request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	var (
 		candidate []byte
-		rawOutput string
 		model     string
 		meta      = map[string]any{
-			"provider": "openai",
+			"provider": "ollama",
 		}
 	)
 
@@ -155,17 +124,16 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 			respBytes, readErr := io.ReadAll(httpResp.Body)
 			if readErr != nil {
-				return TranslateOutput{}, fmt.Errorf("read openai response: %w", readErr)
+				return TranslateOutput{}, fmt.Errorf("read ollama response: %w", readErr)
 			}
-			return TranslateOutput{}, fmt.Errorf("openai api returned status %d: %s", httpResp.StatusCode, string(respBytes))
+			return TranslateOutput{}, fmt.Errorf("ollama api returned status %d: %s", httpResp.StatusCode, string(respBytes))
 		}
 
-		responseID, responseModel, usage, streamCandidate, streamRawOutput, streamErr := parseOpenAIStream(httpResp.Body)
+		responseID, responseModel, usage, streamCandidate, streamErr := parseOllamaStream(httpResp.Body)
 		if streamErr != nil {
 			return TranslateOutput{}, streamErr
 		}
 		candidate = streamCandidate
-		rawOutput = streamRawOutput
 		if strings.TrimSpace(responseModel) != "" {
 			model = responseModel
 		}
@@ -178,11 +146,11 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	} else {
 		respBytes, err := io.ReadAll(httpResp.Body)
 		if err != nil {
-			return TranslateOutput{}, fmt.Errorf("read openai response: %w", err)
+			return TranslateOutput{}, fmt.Errorf("read ollama response: %w", err)
 		}
 
 		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-			return TranslateOutput{}, fmt.Errorf("openai api returned status %d: %s", httpResp.StatusCode, string(respBytes))
+			return TranslateOutput{}, fmt.Errorf("ollama api returned status %d: %s", httpResp.StatusCode, string(respBytes))
 		}
 
 		var parsed struct {
@@ -196,14 +164,13 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 			Usage map[string]any `json:"usage"`
 		}
 		if err := json.Unmarshal(respBytes, &parsed); err != nil {
-			return TranslateOutput{}, fmt.Errorf("decode openai response: %w", err)
+			return TranslateOutput{}, fmt.Errorf("decode ollama response: %w", err)
 		}
 		if len(parsed.Choices) == 0 {
-			return TranslateOutput{}, errors.New("openai response has no choices")
+			return TranslateOutput{}, errors.New("ollama response has no choices")
 		}
 
-		rawOutput = parsed.Choices[0].Message.Content
-		candidate, err = extractJSONPayload(rawOutput)
+		candidate, err = extractJSONPayload(parsed.Choices[0].Message.Content)
 		if err != nil {
 			return TranslateOutput{}, err
 		}
@@ -222,9 +189,6 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	if strings.TrimSpace(model) == "" {
 		model = t.model
 	}
-	if shouldExposeRawModelOutput() && strings.TrimSpace(rawOutput) != "" {
-		meta["raw_output"] = rawOutput
-	}
 
 	return TranslateOutput{
 		Candidate: candidate,
@@ -233,7 +197,7 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	}, nil
 }
 
-func parseOpenAIStream(reader io.Reader) (responseID string, responseModel string, usage map[string]any, candidate []byte, rawOutput string, err error) {
+func parseOllamaStream(reader io.Reader) (responseID string, responseModel string, usage map[string]any, candidate []byte, err error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
@@ -279,7 +243,7 @@ func parseOpenAIStream(reader io.Reader) (responseID string, responseModel strin
 			continue
 		}
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
-			return "", "", nil, nil, "", fmt.Errorf("openai stream returned error: %s", chunk.Error.Message)
+			return "", "", nil, nil, fmt.Errorf("ollama stream returned error: %s", chunk.Error.Message)
 		}
 		if responseID == "" {
 			responseID = chunk.ID
@@ -310,46 +274,21 @@ func parseOpenAIStream(reader io.Reader) (responseID string, responseModel strin
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
-		return "", "", nil, nil, "", fmt.Errorf("read openai stream: %w", scanErr)
+		return "", "", nil, nil, fmt.Errorf("read ollama stream: %w", scanErr)
 	}
 
 	content := strings.TrimSpace(contentBuilder.String())
 	if content == "" {
-		return "", "", nil, nil, "", errors.New("openai stream has no content")
+		return "", "", nil, nil, errors.New("ollama stream has no content")
 	}
 	candidate, err = extractJSONPayload(content)
 	if err != nil {
-		return "", "", nil, nil, content, err
+		return "", "", nil, nil, err
 	}
-	return responseID, responseModel, usage, candidate, content, nil
+	return responseID, responseModel, usage, candidate, nil
 }
 
-func normalizeReasoningEffort(raw string) (string, error) {
-	effort := strings.ToLower(strings.TrimSpace(raw))
-	switch effort {
-	case "", "off", "none", "low", "medium", "high":
-		if effort == "none" {
-			return "off", nil
-		}
-		return effort, nil
-	default:
-		return "", fmt.Errorf("invalid reasoning effort %q: expected one of off/low/medium/high", raw)
-	}
-}
-
-func normalizePromptExamples(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return ""
-	}
-	runes := []rune(trimmed)
-	if len(runes) <= maxExamplePromptRunes {
-		return trimmed
-	}
-	return string(runes[:maxExamplePromptRunes])
-}
-
-func openAISystemPrompt() string {
+func ollamaSystemPrompt() string {
 	return strings.TrimSpace(`
 You are HaruhiDB action protocol translator.
 Convert user natural-language requests into exactly one JSON object that matches HaruhiDB Action Protocol v1 request envelope.
@@ -362,7 +301,7 @@ If request implies multiple steps, use action "batch" with "requests" list.
 `)
 }
 
-func buildOpenAIUserPrompt(in TranslateInput, promptExamples string) (string, error) {
+func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 	catalogJSON, err := json.Marshal(in.Catalog)
 	if err != nil {
 		return "", fmt.Errorf("marshal catalog snapshot: %w", err)
@@ -384,9 +323,6 @@ func buildOpenAIUserPrompt(in TranslateInput, promptExamples string) (string, er
 		parts = append(parts, fmt.Sprintf("previous_output_error: %s", in.RepairHint))
 		parts = append(parts, "Regenerate and strictly fix the error above.")
 	}
-	if strings.TrimSpace(promptExamples) != "" {
-		parts = append(parts, fmt.Sprintf("action_examples_reference: %s", promptExamples))
-	}
 
 	return strings.Join(parts, "\n"), nil
 }
@@ -394,17 +330,17 @@ func buildOpenAIUserPrompt(in TranslateInput, promptExamples string) (string, er
 func extractJSONPayload(content string) ([]byte, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
-		return nil, errors.New("openai content is empty")
+		return nil, errors.New("model content is empty")
 	}
 
 	candidates := collectJSONCandidates(trimmed)
 	if len(candidates) == 0 {
-		return nil, errors.New("openai content does not contain a valid JSON object")
+		return nil, errors.New("model content does not contain a valid JSON object")
 	}
 
 	best, ok := selectBestJSONCandidate(candidates)
 	if !ok {
-		return nil, errors.New("openai content does not contain a valid JSON object")
+		return nil, errors.New("model content does not contain a valid JSON object")
 	}
 	return best, nil
 }
@@ -631,13 +567,4 @@ func scoreJSONCandidate(raw []byte) int {
 	}
 
 	return score
-}
-
-func shouldExposeRawModelOutput() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("HARUHIDB_NL_DEBUG_RAW"))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
 }

@@ -38,9 +38,12 @@ cd /path/to/HaruhiDB
 ## 环境变量
 
 - `HARU_MODEL`：默认 `qwen2.5-coder:3b`
+- `HARU_BASE_URL`：默认 `http://127.0.0.1:11434`
 - `HARU_DB_PATH`：数据库路径
 - `HARU_LISTEN`：默认 `:8080`
 - `HARU_TIMEOUT`：默认 `60s`
+- `HARU_STREAM`：默认 `true`
+- `HARU_ALLOW_WRITE`：默认 `true`
 - `HARU_OPEN_BROWSER`：是否自动打开浏览器（默认 `true`）
 - `HARU_UI_URL`：覆盖自动打开的网址
 
@@ -69,10 +72,9 @@ $env:HARU_OPEN_BROWSER='false'
 
 2. 翻译结果动作跑偏
 - 在输入框使用“严格四步模板”语气。
-- 优先使用 `qwen2.5-coder:3b`，并保留 `examples_path=../docs/action-v1-model-spec.json`。
+- 优先使用 `qwen2.5-coder:3b`。
 
 3. Windows 启动时报找不到 `libharuhidb_capi.dll.a`
 - 直接用 `scripts/start_web_one_click.ps1`，脚本会自动构建并复制到 `CXX/build/src/capi`。
-
 
 更多排查案例见：[错误经验汇总](error-experience-playbook.md)。

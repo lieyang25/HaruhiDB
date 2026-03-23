@@ -1,4 +1,4 @@
-﻿# HaruhiDB 架构总览
+# HaruhiDB 架构总览
 
 这份 README 不再把项目写成一份平铺的 API 名录，而是把当前系统重新组织成一条自上而下的主线：
 
@@ -16,7 +16,7 @@
 
 ### 1) 快速上手与运行
 
-- [Go 使用指南（本地 / 网络 / 模型组合）](docs/go-usage-guide.md)：启动、切模型、CLI/HTTP 示例、报错排查
+- [Go 使用指南（Web + 网络 + Ollama）](docs/go-usage-guide.md)：单入口 serve、网页/API 路径、配置与启动
 - [网页快速上手](docs/web-quickstart.md)：一键脚本启动 + 浏览器 UI
 - [Web 原理与信息流](docs/web-principle-and-dataflow.md)：网页架构、信息流、输出语义
 - [静态库与远程联动指南](docs/static-link-web-cli-and-remote-exec-guide.md)：Win/Linux 静态库方案 + Web/CLI/serve 使用 + PC/VM/树莓派联动
@@ -24,7 +24,6 @@
 - [Go 配置参数总表](docs/config-parameter-reference.md)：所有配置键与 CLI 参数映射
 - [Linux 一键网页启动脚本](scripts/start_web_one_click.sh)：自动启动服务并打开网页
 - [Windows 一键网页启动脚本](scripts/start_web_one_click.ps1)：自动启动服务并打开网页
-- [Ollama 一键启动脚本](scripts/serve_ollama_one_click.sh)：本地模型一键拉起
 
 ### 2) 协议与模型集成
 

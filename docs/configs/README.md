@@ -1,85 +1,45 @@
-# HaruhiDB 启动配置示例
+# HaruhiDB 启动配置（Web + Ollama）
 
-这些示例用于 `--config` / `HARUHIDB_CONFIG` 启动方式。
+当前 `docs/configs` 只保留两类配置文件：
 
-- `serve-no-llm.json`：无模型模式（仅 action）
-- `serve-openai.json`：OpenAI 网络模型模式
-- `serve-ollama.json`：本地 Ollama 模式
-- `serve-web-ollama-3b.json`：网页 UI 推荐服务配置（Ollama `qwen2.5-coder:3b`）
-- `nl-quicktest-openai.json`：模型直连快速测试（OpenAI，自动执行）
-- `nl-quicktest-ollama.json`：模型直连快速测试（Ollama `qwen3:1.7b`，携带思考参数）
-- `nl-quicktest-ollama-no-thinking.json`：模型直连快速测试（Ollama `qwen3:1.7b`，不携带思考参数）
-- `nl-quicktest-ollama-qwen2.5-coder-3b.json`：模型直连快速测试（Ollama `qwen2.5-coder:3b`，自动执行）
-- `nl-quicktest-ollama-qwen2.5-coder-3b-strict.json`：严格四步示例（先翻译预览，默认不执行）
+- `serve-web-ollama.json`：可直接用于 Web 服务启动的推荐配置
+- `config-template.json`：最小模板，适合复制后按环境修改
 
-其中 `serve-openai.json` 演示了：
+## 配置结构
 
-- `llm.reasoning_effort`（`off/low/medium/high`）：切换思考强度
-- `llm.examples_path`：让模型读取范例文档（提示词注入）
+配置只保留三个顶层分组：
 
-其中 `nl-quicktest-*.json` 演示了：
+- `common`
+  - `db_path`：数据库文件路径
+  - `allow_write`：是否允许写动作（默认建议 `true`）
+  - `timeout`：请求超时（Go duration）
+- `ollama`
+  - `base_url`：Ollama 地址（默认 `http://127.0.0.1:11434`）
+  - `model`：模型名（默认 `qwen2.5-coder:3b`）
+  - `stream`：是否启用流式翻译（默认建议 `true`）
+- `serve`
+  - `listen`：HTTP 监听地址
 
-- `common.allow_write=true`：允许插入/删除这类写动作
-- `nl.mode=read_write` + `nl.execute=true`：翻译后直接执行
-- `nl.input`：自然语言输入也可预置在配置里（可不写 `--input`）
-- `llm.examples_path`：先喂动作范例，再让模型输出
-- `llm.reasoning_effort`：可测试“是否携带思考参数”
-- `llm.stream=true`：对 `qwen3` 这类长思考模型更稳，避免非流式长时间不回包
-
-示例命令：
+## 启动示例
 
 ```bash
 cd /home/suzumiya/__code__/code/HaruhiDB/GO
-
-go run ./cmd/haruhidb serve --config ../docs/configs/serve-no-llm.json
-go run ./cmd/haruhidb serve --config ../docs/configs/serve-openai.json
-go run ./cmd/haruhidb serve --config ../docs/configs/serve-ollama.json
-go run ./cmd/haruhidb serve --config ../docs/configs/serve-web-ollama-3b.json
+go run ./cmd/haruhidb serve --config ../docs/configs/serve-web-ollama.json
 ```
 
-模型直连快速测试（插入/查询/删除）：
-
-```bash
-cd /home/suzumiya/__code__/code/HaruhiDB
-cp GO/haruhidb/test_output/quickstart_demo.db /tmp/haruhidb-nl-quicktest.db
-cp GO/haruhidb/test_output/quickstart_demo.wal /tmp/haruhidb-nl-quicktest.wal || true
-
-cd GO
-# OpenAI:
-export OPENAI_API_KEY=your_key
-go run ./cmd/haruhidb nl --config ../docs/configs/nl-quicktest-openai.json
-
-# Ollama:
-# 先确认本地 Ollama 服务可用，且模型已拉取 qwen3:1.7b
-ollama pull qwen3:1.7b
-
-# 携带思考参数（reasoning_effort=medium）
-go run ./cmd/haruhidb nl --config ../docs/configs/nl-quicktest-ollama.json
-
-# 不携带思考参数（reasoning_effort=off）
-go run ./cmd/haruhidb nl --config ../docs/configs/nl-quicktest-ollama-no-thinking.json
-
-# 若要临时覆盖配置中的 nl.input，依然可加 --input：
-go run ./cmd/haruhidb nl --config ../docs/configs/nl-quicktest-ollama.json --input "查询 student 表主键 id=1 的记录"
-```
-
-命令行参数会覆盖配置文件中的同名配置。
-
-例如临时打开思考强度：
+命令行参数会覆盖配置文件同名项，例如：
 
 ```bash
 go run ./cmd/haruhidb serve \
-  --config ../docs/configs/serve-openai.json \
-  --reasoning-effort medium
+  --config ../docs/configs/serve-web-ollama.json \
+  --db-path /tmp/haruhidb-demo.db \
+  --model qwen2.5-coder:3b \
+  --listen :8090
 ```
 
-完整参数示例（尽量配置化）见：
-
-- [`config-full-example.json`](config-full-example.json)
-
-也可以直接一键启动（自动检查 Ollama、拉模型并启动服务）：
+也可以使用 `HARUHIDB_CONFIG`：
 
 ```bash
-cd /home/suzumiya/__code__/code/HaruhiDB
-./scripts/serve_ollama_one_click.sh
+export HARUHIDB_CONFIG=../docs/configs/serve-web-ollama.json
+go run ./cmd/haruhidb serve
 ```

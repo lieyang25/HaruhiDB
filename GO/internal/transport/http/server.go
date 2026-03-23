@@ -7,10 +7,8 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"haruhidb-go/internal/action"
@@ -22,19 +20,10 @@ const (
 )
 
 type Config struct {
-	MaxBodyBytes       int64
-	AuthToken          string
-	RateLimitPerMinute int
-	TrustProxyHeaders  bool
-	Logger             *log.Logger
+	Logger *log.Logger
 }
 
 func NewHandler(service *app.ActionService, cfg Config) http.Handler {
-	if cfg.MaxBodyBytes <= 0 {
-		cfg.MaxBodyBytes = defaultMaxBodyBytes
-	}
-	limiter := newRateLimiter(cfg.RateLimitPerMinute, cfg.TrustProxyHeaders)
-
 	uiFileServer, uiErr := buildUIFileServer()
 	if uiErr != nil {
 		if cfg.Logger != nil {
@@ -89,25 +78,12 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 		}
 		uiAssetsHandler.ServeHTTP(w, r)
 	})
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
 			logRequest(cfg.Logger, r, "", http.StatusMethodNotAllowed, start)
-			return
-		}
-		if !authorizeRequest(w, r, cfg.AuthToken) {
-			logRequest(cfg.Logger, r, "", http.StatusUnauthorized, start)
-			return
-		}
-		if !limiter.allow(r) {
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"code":    "RATE_LIMITED",
-					"message": "rate limit exceeded",
-				},
-			})
-			logRequest(cfg.Logger, r, "", http.StatusTooManyRequests, start)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -121,22 +97,8 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 			logRequest(cfg.Logger, r, "", http.StatusMethodNotAllowed, start)
 			return
 		}
-		if !authorizeRequest(w, r, cfg.AuthToken) {
-			logRequest(cfg.Logger, r, "", http.StatusUnauthorized, start)
-			return
-		}
-		if !limiter.allow(r) {
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"code":    "RATE_LIMITED",
-					"message": "rate limit exceeded",
-				},
-			})
-			logRequest(cfg.Logger, r, "", http.StatusTooManyRequests, start)
-			return
-		}
 
-		raw, err := readLimitedBody(r.Body, cfg.MaxBodyBytes)
+		raw, err := readLimitedBody(r.Body, defaultMaxBodyBytes)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": map[string]any{
@@ -168,22 +130,8 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 			logRequest(cfg.Logger, r, "", http.StatusMethodNotAllowed, start)
 			return
 		}
-		if !authorizeRequest(w, r, cfg.AuthToken) {
-			logRequest(cfg.Logger, r, "", http.StatusUnauthorized, start)
-			return
-		}
-		if !limiter.allow(r) {
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"code":    "RATE_LIMITED",
-					"message": "rate limit exceeded",
-				},
-			})
-			logRequest(cfg.Logger, r, "", http.StatusTooManyRequests, start)
-			return
-		}
 
-		raw, err := readLimitedBody(r.Body, cfg.MaxBodyBytes)
+		raw, err := readLimitedBody(r.Body, defaultMaxBodyBytes)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": map[string]any{
@@ -289,27 +237,6 @@ func decodeStrictJSON(raw []byte, target any) error {
 	return nil
 }
 
-func authorizeRequest(w http.ResponseWriter, r *http.Request, token string) bool {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return true
-	}
-
-	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-	expected := "Bearer " + token
-	if authHeader == expected {
-		return true
-	}
-
-	writeJSON(w, http.StatusUnauthorized, map[string]any{
-		"error": map[string]any{
-			"code":    "UNAUTHORIZED",
-			"message": "missing or invalid bearer token",
-		},
-	})
-	return false
-}
-
 func decodeRequestID(raw []byte) string {
 	env, err := action.Decode(raw)
 	if err != nil {
@@ -328,81 +255,4 @@ func logRequest(logger *log.Logger, r *http.Request, requestID string, statusCod
 		return
 	}
 	logger.Printf("method=%s path=%s status=%d latency_ms=%d", r.Method, r.URL.Path, statusCode, duration)
-}
-
-type rateLimiter struct {
-	mu                sync.Mutex
-	limit             int
-	window            time.Duration
-	trustProxyHeaders bool
-	counters          map[string]rateCounter
-}
-
-type rateCounter struct {
-	windowStart time.Time
-	count       int
-}
-
-func newRateLimiter(perMinute int, trustProxyHeaders bool) *rateLimiter {
-	if perMinute <= 0 {
-		return &rateLimiter{trustProxyHeaders: trustProxyHeaders}
-	}
-	return &rateLimiter{
-		limit:             perMinute,
-		window:            time.Minute,
-		trustProxyHeaders: trustProxyHeaders,
-		counters:          make(map[string]rateCounter),
-	}
-}
-
-func (l *rateLimiter) allow(r *http.Request) bool {
-	if l == nil || l.limit <= 0 {
-		return true
-	}
-	key := clientIP(r, l.trustProxyHeaders)
-	if key == "" {
-		key = "unknown"
-	}
-
-	now := time.Now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	counter := l.counters[key]
-	if counter.windowStart.IsZero() || now.Sub(counter.windowStart) >= l.window {
-		counter.windowStart = now
-		counter.count = 0
-	}
-	if counter.count >= l.limit {
-		l.counters[key] = counter
-		return false
-	}
-	counter.count++
-	l.counters[key] = counter
-	return true
-}
-
-func clientIP(r *http.Request, trustProxyHeaders bool) string {
-	if trustProxyHeaders {
-		forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
-		if forwarded != "" {
-			parts := strings.Split(forwarded, ",")
-			if len(parts) > 0 {
-				return strings.TrimSpace(parts[0])
-			}
-		}
-		realIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
-		if realIP != "" {
-			return realIP
-		}
-	}
-	remoteAddr := strings.TrimSpace(r.RemoteAddr)
-	if remoteAddr == "" {
-		return ""
-	}
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err == nil {
-		return strings.TrimSpace(host)
-	}
-	return remoteAddr
 }

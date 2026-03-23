@@ -5,12 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_DIR="${ROOT_DIR}/GO"
 CXX_DIR="${ROOT_DIR}/CXX"
 CXX_BUILD_DIR="${CXX_BUILD_DIR:-${ROOT_DIR}/CXX/build}"
-CONFIG_PATH="${ROOT_DIR}/docs/configs/serve-web-ollama-3b.json"
+CONFIG_PATH="${ROOT_DIR}/docs/configs/serve-web-ollama.json"
 
 MODEL="${HARU_MODEL:-qwen2.5-coder:3b}"
+BASE_URL="${HARU_BASE_URL:-http://127.0.0.1:11434}"
 DB_PATH="${HARU_DB_PATH:-/tmp/haruhidb-web.db}"
 LISTEN="${HARU_LISTEN:-:8080}"
 TIMEOUT="${HARU_TIMEOUT:-60s}"
+STREAM="${HARU_STREAM:-true}"
+ALLOW_WRITE="${HARU_ALLOW_WRITE:-true}"
 OPEN_BROWSER="${HARU_OPEN_BROWSER:-true}"
 
 if [[ -n "${HARU_UI_URL:-}" ]]; then
@@ -29,13 +32,18 @@ require_cmd() {
   fi
 }
 
+is_enabled() {
+  local value="${1,,}"
+  [[ "${value}" != "false" && "${value}" != "0" && "${value}" != "no" && "${value}" != "off" ]]
+}
+
 require_cmd go
 require_cmd ollama
 require_cmd cmake
 
 ensure_ollama_service() {
   if command -v curl >/dev/null 2>&1; then
-    if curl -fsS "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
+    if curl -fsS "${BASE_URL}/api/tags" >/dev/null 2>&1; then
       echo "[1/5] Ollama service is running"
       return
     fi
@@ -61,13 +69,9 @@ ensure_capi() {
 }
 
 open_ui_if_needed() {
-  shopt -s nocasematch
-  case "${OPEN_BROWSER}" in
-    false|0|no|off)
-      return
-      ;;
-  esac
-  shopt -u nocasematch
+  if ! is_enabled "${OPEN_BROWSER}"; then
+    return
+  fi
 
   if command -v xdg-open >/dev/null 2>&1; then
     (sleep 1; xdg-open "${UI_URL}" >/dev/null 2>&1 || true) &
@@ -91,18 +95,23 @@ export DYLD_LIBRARY_PATH="${ROOT_DIR}/CXX/build/src/capi:${DYLD_LIBRARY_PATH:-}"
 
 echo "[5/5] Start HaruhiDB Web"
 echo "        UI: ${UI_URL}"
-
 echo "        db_path=${DB_PATH}"
 echo "        listen=${LISTEN}"
 echo "        timeout=${TIMEOUT}"
 echo "        model=${MODEL}"
+echo "        base_url=${BASE_URL}"
+echo "        stream=${STREAM}"
+echo "        allow_write=${ALLOW_WRITE}"
 
 open_ui_if_needed
 
 cd "${GO_DIR}"
 exec go run ./cmd/haruhidb serve \
   --config "${CONFIG_PATH}" \
-  --model "${MODEL}" \
   --db-path "${DB_PATH}" \
   --listen "${LISTEN}" \
-  --timeout "${TIMEOUT}"
+  --timeout "${TIMEOUT}" \
+  --model "${MODEL}" \
+  --base-url "${BASE_URL}" \
+  --stream="${STREAM}" \
+  --allow-write="${ALLOW_WRITE}"
