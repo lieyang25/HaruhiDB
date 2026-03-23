@@ -9,6 +9,7 @@ HaruhiDB 的网页 UI 由 Go `serve` 进程内置提供，和 API 同端口同�
 - Action 执行：`POST /v1/action`
 - NL 翻译：`POST /v1/nl/translate`
 - 报错排查：[错误经验汇总](error-experience-playbook.md)
+- 设计原理：[Web 原理与信息流](web-principle-and-dataflow.md)
 
 ## 一键启动（推荐）
 

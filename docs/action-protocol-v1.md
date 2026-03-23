@@ -37,6 +37,24 @@ HaruhiDB 动作协议 v1 采用“统一请求信封 + 动作枚举 + 强结构�
 - `NULL`、nullable 列、`DECIMAL` 仍然不在 v1 支持范围
 - `batch` 不是事务；默认遇错继续，`stop_on_error=true` 时在首个失败子动作后停止
 
+
+## 与 Go API 的覆盖关系
+
+如果你关心“Go 底层已经有的能力”和“Action v1 目前暴露的能力”之间的差异，见：
+
+- [Go 完整 API 与动作集覆盖矩阵](go-api-action-capability-matrix.md)
+
+v1 的定位是“稳定协议 + 既有表上的读写闭环”，因此当前不包含 DDL 动作：
+
+- `create_table`
+- `drop_table`
+- `create_primary_int_index`
+- `drop_index`
+
+这 4 项底层 Go API 已具备，但未在 v1 对外暴露。
+
+若后续扩展，建议新增 `v2` 做增量动作扩展，保持 `v1` 完全兼容。
+
 ## 请求信封
 
 ```json

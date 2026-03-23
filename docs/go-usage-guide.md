@@ -24,6 +24,19 @@ HaruhiDB Go 层有两条独立链路：
 - 你问到的 “`shell` 可启动，但 `:nl` 会失败”，并不表示本地不支持模型。
 - 真正含义是：当前没配置 translator（没提供 `--openai-api-key` 或 `OPENAI_API_KEY`）。
 
+## Go 完整 API 与动作集覆盖
+
+如果你关心“Go 侧到底有哪些能力、Action 目前暴露了哪些、缺了哪些”，直接看：
+
+- [Go 完整 API 与动作集覆盖矩阵](go-api-action-capability-matrix.md)
+
+一句话结论：
+
+- 当前 Action v1 已覆盖既有表上的读写闭环。
+- 但 v1 不包含 DDL（建表/删表/建索引/删索引）。
+- Go 底层 API 已具备 DDL，若对外开放建议走 `v2` 版本化扩展，避免影响 v1 用户。
+
+
 ## 是否必须先启动项目服务器
 
 不一定，取决于你走哪条链路：
