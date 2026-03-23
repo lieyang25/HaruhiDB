@@ -105,6 +105,21 @@ func TestExtractJSONPayload(t *testing.T) {
 			want:    valid,
 		},
 		{
+			name:    "multiple json objects chooses protocol envelope",
+			content: "debug: {\"note\":\"tmp\"}\nresult: " + valid,
+			want:    valid,
+		},
+		{
+			name:    "nested wrapper object chooses inner protocol envelope",
+			content: "raw: {\"note\":\"tmp\",\"candidate\":" + valid + "}\nend",
+			want:    valid,
+		},
+		{
+			name:    "code fences with extra object chooses protocol envelope",
+			content: "```json\n{\"note\":\"tmp\"}\n```\n```json\n" + valid + "\n```",
+			want:    valid,
+		},
+		{
 			name:    "top-level array is invalid",
 			content: `["not","object"]`,
 			wantErr: true,

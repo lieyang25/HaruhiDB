@@ -216,19 +216,16 @@ func extractJSONPayload(content string) ([]byte, error) {
 		return nil, errors.New("openai content is empty")
 	}
 
-	if candidate, ok := decodeJSONObjectStrict(trimmed); ok {
-		return candidate, nil
+	candidates := collectJSONCandidates(trimmed)
+	if len(candidates) == 0 {
+		return nil, errors.New("openai content does not contain a valid JSON object")
 	}
 
-	if candidate, ok := extractJSONObjectFromCodeFences(trimmed); ok {
-		return candidate, nil
+	best, ok := selectBestJSONCandidate(candidates)
+	if !ok {
+		return nil, errors.New("openai content does not contain a valid JSON object")
 	}
-
-	if candidate, ok := extractFirstJSONObject(trimmed); ok {
-		return candidate, nil
-	}
-
-	return nil, errors.New("openai content does not contain a valid JSON object")
+	return best, nil
 }
 
 func decodeJSONObjectStrict(raw string) ([]byte, bool) {
@@ -253,25 +250,59 @@ func decodeJSONObjectStrict(raw string) ([]byte, bool) {
 	return []byte(raw), true
 }
 
-func extractJSONObjectFromCodeFences(content string) ([]byte, bool) {
+func collectJSONCandidates(content string) [][]byte {
+	candidates := make([][]byte, 0, 8)
+	seen := make(map[string]struct{})
+
+	add := func(candidate []byte) {
+		candidate = bytes.TrimSpace(candidate)
+		if len(candidate) == 0 {
+			return
+		}
+		key := string(candidate)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		copied := append([]byte(nil), candidate...)
+		candidates = append(candidates, copied)
+	}
+
+	if candidate, ok := decodeJSONObjectStrict(content); ok {
+		add(candidate)
+	}
+
+	for _, block := range extractJSONObjectFromCodeFences(content) {
+		if candidate, ok := decodeJSONObjectStrict(block); ok {
+			add(candidate)
+		}
+	}
+
+	for _, candidate := range extractJSONObjectCandidates(content) {
+		add(candidate)
+	}
+
+	return candidates
+}
+
+func extractJSONObjectFromCodeFences(content string) []string {
+	blocks := make([]string, 0, 4)
 	remaining := content
 	for {
 		start := strings.Index(remaining, "```")
 		if start < 0 {
-			return nil, false
+			return blocks
 		}
 
 		afterStart := remaining[start+3:]
 		end := strings.Index(afterStart, "```")
 		if end < 0 {
-			return nil, false
+			return blocks
 		}
 
 		block := strings.TrimSpace(afterStart[:end])
 		block = trimCodeFenceLanguage(block)
-		if candidate, ok := decodeJSONObjectStrict(block); ok {
-			return candidate, true
-		}
+		blocks = append(blocks, block)
 
 		remaining = afterStart[end+3:]
 	}
@@ -293,7 +324,8 @@ func trimCodeFenceLanguage(block string) string {
 	}
 }
 
-func extractFirstJSONObject(content string) ([]byte, bool) {
+func extractJSONObjectCandidates(content string) [][]byte {
+	candidates := make([][]byte, 0, 8)
 	for i := 0; i < len(content); i++ {
 		if content[i] != '{' {
 			continue
@@ -309,15 +341,113 @@ func extractFirstJSONObject(content string) ([]byte, bool) {
 		}
 
 		offset := dec.InputOffset()
-		if offset <= 0 {
+		if offset <= 0 || offset > int64(len(segment)) {
 			continue
 		}
 
 		candidate := strings.TrimSpace(segment[:offset])
 		if strict, ok := decodeJSONObjectStrict(candidate); ok {
-			return strict, true
+			candidates = append(candidates, strict)
 		}
 	}
 
-	return nil, false
+	return candidates
+}
+
+func selectBestJSONCandidate(candidates [][]byte) ([]byte, bool) {
+	bestIndex := -1
+	bestScore := -1 << 30
+
+	for i, candidate := range candidates {
+		score := scoreJSONCandidate(candidate)
+		if bestIndex == -1 || score > bestScore {
+			bestIndex = i
+			bestScore = score
+			continue
+		}
+		if score == bestScore && len(candidate) < len(candidates[bestIndex]) {
+			bestIndex = i
+		}
+	}
+
+	if bestIndex < 0 {
+		return nil, false
+	}
+	return candidates[bestIndex], true
+}
+
+func scoreJSONCandidate(raw []byte) int {
+	var payload map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return -1 << 30
+	}
+
+	requiredKeys := []string{"version", "request_id", "mode", "action", "args"}
+	matchedKeys := 0
+	score := 0
+	for _, key := range requiredKeys {
+		if _, ok := payload[key]; ok {
+			matchedKeys++
+			score += 2
+		}
+	}
+
+	if value, ok := payload["version"].(string); ok {
+		version := strings.TrimSpace(value)
+		switch version {
+		case action.VersionV1:
+			score += 4
+		case "":
+		default:
+			score++
+		}
+	}
+
+	if value, ok := payload["request_id"].(string); ok && strings.TrimSpace(value) != "" {
+		score += 2
+	}
+
+	if value, ok := payload["mode"].(string); ok {
+		mode := action.Mode(strings.TrimSpace(value))
+		if mode.Valid() {
+			score += 4
+		}
+	}
+
+	if value, ok := payload["action"].(string); ok {
+		actionName := strings.TrimSpace(value)
+		if actionName != "" {
+			score += 6
+			if action.Action(actionName).Valid() {
+				score += 3
+			}
+		}
+	}
+
+	if args, exists := payload["args"]; exists {
+		switch args.(type) {
+		case map[string]any:
+			score += 6
+		case nil:
+			score++
+		default:
+			score += 2
+		}
+	}
+
+	if matchedKeys >= 3 {
+		score += 3
+	}
+	if matchedKeys == len(requiredKeys) {
+		score += 6
+	}
+
+	unknown := len(payload) - matchedKeys
+	if unknown > 0 {
+		score -= unknown
+	}
+
+	return score
 }

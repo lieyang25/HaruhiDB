@@ -30,6 +30,13 @@ const (
 	TypeVarchar  Type = Type(C.HARUHIDB_TYPE_VARCHAR)
 )
 
+const (
+	// GoStringN accepts C.int length. Guard against oversized/corrupt lengths from C.
+	maxCStringLen = 1<<31 - 1
+	// Defensive cap for decoded row width to avoid pathological allocations.
+	maxRowValueCount = 1 << 20
+)
+
 type ErrorCode uint8
 
 const (
@@ -777,6 +784,12 @@ func unmarshalValue(cValue C.haruhidb_value_t) (Value, error) {
 	case TypeDouble:
 		value.Float64 = float64(cValue.double_v)
 	case TypeVarchar:
+		if cValue.string_len > 0 && cValue.string_data == nil {
+			return Value{}, errors.New("invalid VARCHAR payload: non-zero length with nil data pointer")
+		}
+		if uint64(cValue.string_len) > uint64(maxCStringLen) {
+			return Value{}, fmt.Errorf("varchar length %d exceeds supported maximum %d", uint64(cValue.string_len), maxCStringLen)
+		}
 		value.String = C.GoStringN(cValue.string_data, C.int(cValue.string_len))
 	case TypeDecimal:
 		return Value{}, errors.New("DECIMAL is not supported in the first version")
@@ -787,12 +800,21 @@ func unmarshalValue(cValue C.haruhidb_value_t) (Value, error) {
 }
 
 func unmarshalRow(cRow C.haruhidb_row_t) (Row, error) {
-	values := make([]Value, int(cRow.value_count))
+	maxInt := int(^uint(0) >> 1)
+	if uint64(cRow.value_count) > uint64(maxInt) {
+		return Row{}, fmt.Errorf("row value count %d exceeds int range", uint64(cRow.value_count))
+	}
+	valueCount := int(cRow.value_count)
+	if valueCount > maxRowValueCount {
+		return Row{}, fmt.Errorf("row value count %d exceeds hard limit %d", valueCount, maxRowValueCount)
+	}
+
+	values := make([]Value, valueCount)
 	if cRow.value_count == 0 || cRow.values == nil {
 		return Row{Values: values}, nil
 	}
 
-	cValues := unsafe.Slice(cRow.values, int(cRow.value_count))
+	cValues := unsafe.Slice(cRow.values, valueCount)
 	for i, cValue := range cValues {
 		value, err := unmarshalValue(cValue)
 		if err != nil {

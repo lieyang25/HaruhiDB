@@ -25,6 +25,7 @@ type Config struct {
 	MaxBodyBytes       int64
 	AuthToken          string
 	RateLimitPerMinute int
+	TrustProxyHeaders  bool
 	Logger             *log.Logger
 }
 
@@ -32,7 +33,7 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = defaultMaxBodyBytes
 	}
-	limiter := newRateLimiter(cfg.RateLimitPerMinute)
+	limiter := newRateLimiter(cfg.RateLimitPerMinute, cfg.TrustProxyHeaders)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -277,10 +278,11 @@ func logRequest(logger *log.Logger, r *http.Request, requestID string, statusCod
 }
 
 type rateLimiter struct {
-	mu       sync.Mutex
-	limit    int
-	window   time.Duration
-	counters map[string]rateCounter
+	mu                sync.Mutex
+	limit             int
+	window            time.Duration
+	trustProxyHeaders bool
+	counters          map[string]rateCounter
 }
 
 type rateCounter struct {
@@ -288,14 +290,15 @@ type rateCounter struct {
 	count       int
 }
 
-func newRateLimiter(perMinute int) *rateLimiter {
+func newRateLimiter(perMinute int, trustProxyHeaders bool) *rateLimiter {
 	if perMinute <= 0 {
-		return &rateLimiter{}
+		return &rateLimiter{trustProxyHeaders: trustProxyHeaders}
 	}
 	return &rateLimiter{
-		limit:    perMinute,
-		window:   time.Minute,
-		counters: make(map[string]rateCounter),
+		limit:             perMinute,
+		window:            time.Minute,
+		trustProxyHeaders: trustProxyHeaders,
+		counters:          make(map[string]rateCounter),
 	}
 }
 
@@ -303,7 +306,7 @@ func (l *rateLimiter) allow(r *http.Request) bool {
 	if l == nil || l.limit <= 0 {
 		return true
 	}
-	key := clientIP(r)
+	key := clientIP(r, l.trustProxyHeaders)
 	if key == "" {
 		key = "unknown"
 	}
@@ -326,17 +329,19 @@ func (l *rateLimiter) allow(r *http.Request) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
-	forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
-	if forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
+func clientIP(r *http.Request, trustProxyHeaders bool) string {
+	if trustProxyHeaders {
+		forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+		if forwarded != "" {
+			parts := strings.Split(forwarded, ",")
+			if len(parts) > 0 {
+				return strings.TrimSpace(parts[0])
+			}
 		}
-	}
-	realIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
-	if realIP != "" {
-		return realIP
+		realIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+		if realIP != "" {
+			return realIP
+		}
 	}
 	remoteAddr := strings.TrimSpace(r.RemoteAddr)
 	if remoteAddr == "" {

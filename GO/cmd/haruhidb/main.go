@@ -86,6 +86,7 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	var maxBodyBytes int64
 	var authToken string
 	var rateLimitPerMinute int
+	var trustProxyHeaders bool
 
 	listenAddr = ":8080"
 	maxBodyBytes = 1 << 20
@@ -101,6 +102,9 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	if cfg.Serve.RateLimitPerMinute != nil {
 		rateLimitPerMinute = *cfg.Serve.RateLimitPerMinute
 	}
+	if cfg.Serve.TrustProxyHeaders != nil {
+		trustProxyHeaders = *cfg.Serve.TrustProxyHeaders
+	}
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -111,6 +115,7 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.Int64Var(&maxBodyBytes, "max-body-bytes", maxBodyBytes, "max HTTP request body bytes")
 	fs.StringVar(&authToken, "auth-token", authToken, "optional bearer token for HTTP API")
 	fs.IntVar(&rateLimitPerMinute, "rate-limit-per-minute", rateLimitPerMinute, "optional per-client request limit per minute")
+	fs.BoolVar(&trustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-For/X-Real-IP for rate-limit client IP")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -128,6 +133,7 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 		MaxBodyBytes:       maxBodyBytes,
 		AuthToken:          authToken,
 		RateLimitPerMinute: rateLimitPerMinute,
+		TrustProxyHeaders:  trustProxyHeaders,
 		Logger:             log.New(stderr, "http ", log.LstdFlags),
 	})
 

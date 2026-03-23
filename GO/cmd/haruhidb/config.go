@@ -50,6 +50,7 @@ type serveConfig struct {
 	MaxBodyBytes       *int64  `json:"max_body_bytes"`
 	AuthToken          *string `json:"auth_token"`
 	RateLimitPerMinute *int    `json:"rate_limit_per_minute"`
+	TrustProxyHeaders  *bool   `json:"trust_proxy_headers"`
 }
 
 type runConfig struct {

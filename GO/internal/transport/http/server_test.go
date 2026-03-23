@@ -243,6 +243,136 @@ func TestActionEndpointRateLimit(t *testing.T) {
 	}
 }
 
+func TestActionEndpointRateLimitIgnoresForwardedHeadersByDefault(t *testing.T) {
+	db := openHTTPTestDB(t)
+	defer closeHTTPTestDB(t, db)
+	createHTTPUsersTable(t, db)
+
+	service, err := app.NewActionService(app.Config{
+		DB:             db,
+		RequestTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	server := httptest.NewServer(NewHandler(service, Config{
+		RateLimitPerMinute: 1,
+	}))
+	defer server.Close()
+
+	body := []byte(`{
+		"version":"v1",
+		"request_id":"req-rate-default-proxy",
+		"mode":"read_only",
+		"action":"list_tables",
+		"args":{}
+	}`)
+
+	req1, err := http.NewRequest(http.MethodPost, server.URL+"/v1/action", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create first request failed: %v", err)
+	}
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Forwarded-For", "203.0.113.10")
+	resp1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("expected first request 200, got %d", resp1.StatusCode)
+	}
+
+	req2, err := http.NewRequest(http.MethodPost, server.URL+"/v1/action", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create second request failed: %v", err)
+	}
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Forwarded-For", "198.51.100.20")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected second request 429, got %d", resp2.StatusCode)
+	}
+}
+
+func TestActionEndpointRateLimitTrustsForwardedHeadersWhenEnabled(t *testing.T) {
+	db := openHTTPTestDB(t)
+	defer closeHTTPTestDB(t, db)
+	createHTTPUsersTable(t, db)
+
+	service, err := app.NewActionService(app.Config{
+		DB:             db,
+		RequestTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	server := httptest.NewServer(NewHandler(service, Config{
+		RateLimitPerMinute: 1,
+		TrustProxyHeaders:  true,
+	}))
+	defer server.Close()
+
+	body := []byte(`{
+		"version":"v1",
+		"request_id":"req-rate-trust-proxy",
+		"mode":"read_only",
+		"action":"list_tables",
+		"args":{}
+	}`)
+
+	req1, err := http.NewRequest(http.MethodPost, server.URL+"/v1/action", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create first request failed: %v", err)
+	}
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Forwarded-For", "203.0.113.10")
+	resp1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("expected first request 200, got %d", resp1.StatusCode)
+	}
+
+	req2, err := http.NewRequest(http.MethodPost, server.URL+"/v1/action", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create second request failed: %v", err)
+	}
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Forwarded-For", "198.51.100.20")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected second request 200 for different forwarded client, got %d", resp2.StatusCode)
+	}
+
+	req3, err := http.NewRequest(http.MethodPost, server.URL+"/v1/action", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create third request failed: %v", err)
+	}
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Forwarded-For", "198.51.100.20")
+	resp3, err := http.DefaultClient.Do(req3)
+	if err != nil {
+		t.Fatalf("third request failed: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected third request 429 for same forwarded client, got %d", resp3.StatusCode)
+	}
+}
+
 func openHTTPTestDB(t *testing.T) *haruhidb.DB {
 	t.Helper()
 	dir := t.TempDir()
