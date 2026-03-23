@@ -61,15 +61,17 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) err
 }
 
 type commonOptions struct {
-	dbPath        string
-	allowWrite    bool
-	timeout       time.Duration
-	llmBackend    string
-	openAIAPIKey  string
-	openAIBaseURL string
-	openAIModel   string
-	ollama        bool
-	ollamaModel   string
+	dbPath          string
+	allowWrite      bool
+	timeout         time.Duration
+	llmBackend      string
+	openAIAPIKey    string
+	openAIBaseURL   string
+	openAIModel     string
+	reasoningEffort string
+	examplesPath    string
+	ollama          bool
+	ollamaModel     string
 }
 
 func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -422,6 +424,8 @@ func bindLLMFlags(fs *flag.FlagSet, opts *commonOptions) {
 	fs.StringVar(&opts.openAIBaseURL, "base-url", opts.openAIBaseURL, "alias of --openai-base-url")
 	fs.StringVar(&opts.openAIModel, "openai-model", opts.openAIModel, "openai model name")
 	fs.StringVar(&opts.openAIModel, "model", opts.openAIModel, "alias of --openai-model")
+	fs.StringVar(&opts.reasoningEffort, "reasoning-effort", opts.reasoningEffort, "reasoning effort for capable models: off, low, medium, high")
+	fs.StringVar(&opts.examplesPath, "examples-path", opts.examplesPath, "path to action examples document injected into NL translation prompt")
 	fs.BoolVar(&opts.ollama, "ollama", opts.ollama, "use local Ollama endpoint (http://127.0.0.1:11434)")
 	fs.StringVar(&opts.ollamaModel, "ollama-model", opts.ollamaModel, "model name used with --ollama (default qwen2.5-coder:0.5b)")
 }
@@ -453,6 +457,8 @@ func normalizeLLMOptions(opts *commonOptions) error {
 		opts.openAIAPIKey = ""
 		opts.openAIBaseURL = ""
 		opts.openAIModel = ""
+		opts.reasoningEffort = ""
+		opts.examplesPath = ""
 		opts.ollama = false
 		opts.ollamaModel = ""
 		return nil
@@ -541,10 +547,22 @@ func buildTranslator(opts commonOptions) (nl.Translator, error) {
 		return nil, nil
 	}
 
+	promptExamplesPath := strings.TrimSpace(opts.examplesPath)
+	promptExamples := ""
+	if promptExamplesPath != "" {
+		rawExamples, err := os.ReadFile(promptExamplesPath)
+		if err != nil {
+			return nil, fmt.Errorf("read llm examples file %q: %w", promptExamplesPath, err)
+		}
+		promptExamples = strings.TrimSpace(string(rawExamples))
+	}
+
 	translator, err := nl.NewOpenAITranslator(nl.OpenAIConfig{
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-		Model:   model,
+		APIKey:          apiKey,
+		BaseURL:         baseURL,
+		Model:           model,
+		ReasoningEffort: strings.TrimSpace(opts.reasoningEffort),
+		PromptExamples:  promptExamples,
 		HTTPClient: &http.Client{
 			Timeout: opts.timeout,
 		},

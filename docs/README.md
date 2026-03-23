@@ -1,0 +1,39 @@
+# HaruhiDB 文档总入口
+
+这份索引用于解决“文档很多，不知道先看哪篇”的问题。
+
+## 按目标查文档
+
+| 你要做什么 | 先看哪里 | 说明 |
+| --- | --- | --- |
+| 最快跑起来（本地/服务/模型） | [Go 使用指南](go-usage-guide.md) | 启动、切模型、CLI/HTTP 示例、常见报错 |
+| 用配置文件启动 | [配置示例](configs/README.md) | `--config`、`HARUHIDB_CONFIG`、现成 JSON 配置 |
+| 查所有支持参数 | [配置参数总表](config-parameter-reference.md) | 配置键、类型、CLI 参数一一对应 |
+| 看 Action 协议字段和约束 | [Action 协议 v1](action-protocol-v1.md) | 请求/响应格式、字段约束、错误码 |
+| 给模型喂“动作集合” | [动作机器可读规范](action-v1-model-spec.json) | 动作、参数、限制的机器可读清单 |
+| 快速拿一个请求模板 | [请求模板](action-v1-request-template.json) | 最小可用信封模板 |
+| 看协议实例（成功/失败） | [功能演示](action-v1-showcase-example.md) | 一组可直接参考的示例 |
+| 理解 Go 层代码结构 | [Go 阅读指南](../GO_READING_GUIDE.md) | 从入口到执行链路的阅读顺序 |
+| 理解 C++ 内核架构 | [CXX 文档索引](../CXX/docs/README.md) | 架构、执行链路、WAL、文件布局 |
+
+## 推荐阅读路径
+
+### 路线 A：使用者（先跑通）
+
+1. [Go 使用指南](go-usage-guide.md)
+2. [配置示例](configs/README.md)
+3. [配置参数总表](config-parameter-reference.md)
+4. [Action 协议 v1](action-protocol-v1.md)
+
+### 路线 B：提示词/Agent 集成者
+
+1. [Action 协议 v1](action-protocol-v1.md)
+2. [动作机器可读规范](action-v1-model-spec.json)
+3. [请求模板](action-v1-request-template.json)
+4. [功能演示](action-v1-showcase-example.md)
+
+### 路线 C：代码开发者
+
+1. [Go 阅读指南](../GO_READING_GUIDE.md)
+2. [Go 使用指南](go-usage-guide.md)
+3. [CXX 文档索引](../CXX/docs/README.md)

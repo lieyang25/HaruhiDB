@@ -8,23 +8,36 @@
 
 ## 文档入口
 
-除了本 README，`CXX/docs/` 现在还维护了一套面向当前实现的架构文档：
+如果你只想找“该看哪篇文档”，先看总索引：
 
-- [文档索引](CXX/docs/README.md)
-- [系统架构总览](CXX/docs/architecture_overview.md)
-- [运行与数据链路](CXX/docs/execution_and_dataflow.md)
-- [持久化与恢复](CXX/docs/persistence_and_recovery.md)
-- [数据库文件与 WAL 布局](CXX/docs/file_layout.md)
-- [当前实现使用方法](CXX/docs/integration_guide.md)
-- [可运行示例](CXX/example/README.md)
-- [Go 阅读指南（从最简单路径开始）](GO_READING_GUIDE.md)
-- [Go 使用指南（本地 / 网络 / 模型组合）](docs/go-usage-guide.md)
-- [Go 启动配置示例](docs/configs/README.md)
-- [Ollama 一键启动脚本](scripts/serve_ollama_one_click.sh)
-- [Action 协议 v1](docs/action-protocol-v1.md)
-- [Action v1 功能演示](docs/action-v1-showcase-example.md)
-- [Action v1 请求模板（JSON）](docs/action-v1-request-template.json)
-- [Action v1 模型规范（JSON）](docs/action-v1-model-spec.json)
+- [HaruhiDB 文档总入口](docs/README.md)
+
+按主题分组如下：
+
+### 1) 快速上手与运行
+
+- [Go 使用指南（本地 / 网络 / 模型组合）](docs/go-usage-guide.md)：启动、切模型、CLI/HTTP 示例、报错排查
+- [Go 启动配置示例](docs/configs/README.md)：`--config` 与现成配置文件
+- [Go 配置参数总表](docs/config-parameter-reference.md)：所有配置键与 CLI 参数映射
+- [Ollama 一键启动脚本](scripts/serve_ollama_one_click.sh)：本地模型一键拉起
+
+### 2) 协议与模型集成
+
+- [Action 协议 v1](docs/action-protocol-v1.md)：字段约束、动作列表、`batch` 规则
+- [Action v1 功能演示](docs/action-v1-showcase-example.md)：请求/响应示例集合
+- [Action v1 请求模板（JSON）](docs/action-v1-request-template.json)：最小请求模板
+- [Action v1 模型规范（JSON）](docs/action-v1-model-spec.json)：动作与参数的机器可读规范
+
+### 3) 代码阅读与架构
+
+- [Go 阅读指南（从最简单路径开始）](GO_READING_GUIDE.md)：Go 链路阅读顺序
+- [CXX 文档索引](CXX/docs/README.md)：C++ 架构文档总入口
+- [系统架构总览](CXX/docs/architecture_overview.md)：模块分层与职责
+- [运行与数据链路](CXX/docs/execution_and_dataflow.md)：从入口到执行路径
+- [持久化与恢复](CXX/docs/persistence_and_recovery.md)：WAL 与恢复流程
+- [数据库文件与 WAL 布局](CXX/docs/file_layout.md)：磁盘布局细节
+- [当前实现使用方法](CXX/docs/integration_guide.md)：集成方式与边界
+- [可运行示例](CXX/example/README.md)：可直接执行的示例
 
 ## 项目当前定位
 

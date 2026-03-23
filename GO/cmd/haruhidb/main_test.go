@@ -155,6 +155,42 @@ func TestBuildTranslatorRequiresAPIKeyForDefaultOpenAIEndpoint(t *testing.T) {
 	}
 }
 
+func TestBuildTranslatorRejectsInvalidReasoningEffort(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	translator, err := buildTranslator(commonOptions{
+		openAIBaseURL:   "http://127.0.0.1:11434",
+		openAIModel:     "qwen2.5-coder:0.5b",
+		reasoningEffort: "max",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid reasoning effort")
+	}
+	if translator != nil {
+		t.Fatal("expected nil translator on error")
+	}
+}
+
+func TestBuildTranslatorReadsExamplesFile(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+
+	examplesPath := filepath.Join(t.TempDir(), "examples.txt")
+	if err := os.WriteFile(examplesPath, []byte("example: use batch"), 0o644); err != nil {
+		t.Fatalf("write examples file failed: %v", err)
+	}
+
+	translator, err := buildTranslator(commonOptions{
+		openAIBaseURL: "http://127.0.0.1:11434",
+		openAIModel:   "qwen2.5-coder:0.5b",
+		examplesPath:  examplesPath,
+	})
+	if err != nil {
+		t.Fatalf("buildTranslator returned error: %v", err)
+	}
+	if translator == nil {
+		t.Fatal("expected translator to be configured")
+	}
+}
+
 func TestNormalizeLLMOptionsCLIOverrideBackendNoneWithOllama(t *testing.T) {
 	opts := commonOptions{
 		llmBackend: llmBackendNone,

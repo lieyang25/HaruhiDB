@@ -6,7 +6,9 @@
   },
   "llm": {
     "backend": "openai",
-    "model": "gpt-5-mini"
+    "model": "gpt-5-mini",
+    "reasoning_effort": "off",
+    "examples_path": "../docs/action-v1-showcase-example.md"
   },
   "serve": {
     "listen": ":8080",

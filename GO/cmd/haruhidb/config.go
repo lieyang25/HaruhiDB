@@ -43,6 +43,8 @@ type llmConfig struct {
 	BaseURL     *string `json:"base_url"`
 	Model       *string `json:"model"`
 	OllamaModel *string `json:"ollama_model"`
+	Reasoning   *string `json:"reasoning_effort"`
+	Examples    *string `json:"examples_path"`
 }
 
 type serveConfig struct {
@@ -158,6 +160,12 @@ func applyCommonConfig(opts *commonOptions, cfg runtimeConfig) error {
 	}
 	if cfg.LLM.OllamaModel != nil {
 		opts.ollamaModel = strings.TrimSpace(*cfg.LLM.OllamaModel)
+	}
+	if cfg.LLM.Reasoning != nil {
+		opts.reasoningEffort = strings.TrimSpace(*cfg.LLM.Reasoning)
+	}
+	if cfg.LLM.Examples != nil {
+		opts.examplesPath = strings.TrimSpace(*cfg.LLM.Examples)
 	}
 
 	return nil

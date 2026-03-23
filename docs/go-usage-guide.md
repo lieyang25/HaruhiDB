@@ -63,6 +63,8 @@ HARU_MODEL=qwen2.5-coder:1.5b HARU_LISTEN=:9090 ./scripts/serve_ollama_one_click
 - `--api-key` = `--openai-api-key`
 - `--base-url` = `--openai-base-url`
 - `--model` = `--openai-model`
+- `--reasoning-effort`：思考强度开关（`off` / `low` / `medium` / `high`）
+- `--examples-path`：把本地范例文档注入 NL 翻译提示词
 - `--ollama`：一键使用本地 Ollama（默认 `http://127.0.0.1:11434` + `qwen2.5-coder:0.5b`）
 
 ## 配置文件启动（推荐）
@@ -109,10 +111,70 @@ go run ./cmd/haruhidb serve \
 - `llm.base_url`：模型服务地址
 - `llm.model`：模型名
 - `llm.ollama_model`：配合 ollama 的模型名快捷字段
-- `serve.listen`、`serve.max_body_bytes`、`serve.auth_token`、`serve.rate_limit_per_minute`
+- `llm.reasoning_effort`：思考强度（`off` / `low` / `medium` / `high`）
+- `llm.examples_path`：范例文档路径，会注入到 NL 提示词
+- `serve.listen`、`serve.max_body_bytes`、`serve.auth_token`、`serve.rate_limit_per_minute`、`serve.trust_proxy_headers`
 - `nl.mode`、`nl.execute`、`nl.pretty`
 - `run.pretty`
 - `shell.mode`
+
+## 模型思考模式开关（reasoning_effort）
+
+如果你使用支持该参数的模型（例如 OpenAI 推理模型），可以通过 `reasoning_effort` 控制“思考/不思考”：
+
+- `off`：尽量关闭思考过程，响应更快、更省
+- `low` / `medium` / `high`：逐步增加思考强度
+
+配置文件写法：
+
+```json
+{
+  "llm": {
+    "backend": "openai",
+    "model": "gpt-5-mini",
+    "reasoning_effort": "off"
+  }
+}
+```
+
+命令行写法：
+
+```bash
+go run ./cmd/haruhidb nl \
+  --db-path /tmp/haru.db \
+  --input "列出所有表" \
+  --openai-model gpt-5-mini \
+  --reasoning-effort off
+```
+
+## 让模型读取范例（examples_path）
+
+你可以把协议示例文件注入模型提示词，帮助小模型稳定输出：
+
+配置文件写法：
+
+```json
+{
+  "llm": {
+    "backend": "openai",
+    "model": "gpt-5-mini",
+    "examples_path": "../docs/action-v1-showcase-example.md"
+  }
+}
+```
+
+命令行覆盖写法：
+
+```bash
+go run ./cmd/haruhidb nl \
+  --config ../docs/configs/serve-openai.json \
+  --input "先插入用户再检查是否存在" \
+  --examples-path ../docs/action-v1-showcase-example.md
+```
+
+说明：
+- `examples_path` 按“程序运行时当前工作目录”解析相对路径
+- 文件过长会自动截断，只保留前半部分用于提示词
 
 ## 组合总表
 

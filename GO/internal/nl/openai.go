@@ -15,22 +15,27 @@ import (
 )
 
 const (
-	defaultOpenAIBaseURL = "https://api.openai.com"
-	defaultOpenAIModel   = "gpt-4.1-mini"
+	defaultOpenAIBaseURL  = "https://api.openai.com"
+	defaultOpenAIModel    = "gpt-4.1-mini"
+	maxExamplePromptRunes = 6000
 )
 
 type OpenAIConfig struct {
-	APIKey     string
-	BaseURL    string
-	Model      string
-	HTTPClient *http.Client
+	APIKey          string
+	BaseURL         string
+	Model           string
+	ReasoningEffort string
+	PromptExamples  string
+	HTTPClient      *http.Client
 }
 
 type OpenAITranslator struct {
-	apiKey  string
-	baseURL string
-	model   string
-	client  *http.Client
+	apiKey          string
+	baseURL         string
+	model           string
+	reasoningEffort string
+	promptExamples  string
+	client          *http.Client
 }
 
 func NewOpenAITranslator(cfg OpenAIConfig) (*OpenAITranslator, error) {
@@ -52,16 +57,24 @@ func NewOpenAITranslator(cfg OpenAIConfig) (*OpenAITranslator, error) {
 		model = defaultOpenAIModel
 	}
 
+	reasoningEffort, err := normalizeReasoningEffort(cfg.ReasoningEffort)
+	if err != nil {
+		return nil, err
+	}
+	promptExamples := normalizePromptExamples(cfg.PromptExamples)
+
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
 	return &OpenAITranslator{
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		model:   model,
-		client:  client,
+		apiKey:          apiKey,
+		baseURL:         baseURL,
+		model:           model,
+		reasoningEffort: reasoningEffort,
+		promptExamples:  promptExamples,
+		client:          client,
 	}, nil
 }
 
@@ -70,7 +83,7 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 		return TranslateOutput{}, errors.New("translator is nil")
 	}
 
-	userPrompt, err := buildOpenAIUserPrompt(in)
+	userPrompt, err := buildOpenAIUserPrompt(in, t.promptExamples)
 	if err != nil {
 		return TranslateOutput{}, err
 	}
@@ -91,6 +104,9 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 		"response_format": map[string]string{
 			"type": "json_object",
 		},
+	}
+	if t.reasoningEffort != "" && t.reasoningEffort != "off" {
+		reqBody["reasoning_effort"] = t.reasoningEffort
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -171,6 +187,31 @@ func (t *OpenAITranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 	}, nil
 }
 
+func normalizeReasoningEffort(raw string) (string, error) {
+	effort := strings.ToLower(strings.TrimSpace(raw))
+	switch effort {
+	case "", "off", "none", "low", "medium", "high":
+		if effort == "none" {
+			return "off", nil
+		}
+		return effort, nil
+	default:
+		return "", fmt.Errorf("invalid reasoning effort %q: expected one of off/low/medium/high", raw)
+	}
+}
+
+func normalizePromptExamples(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxExamplePromptRunes {
+		return trimmed
+	}
+	return string(runes[:maxExamplePromptRunes])
+}
+
 func openAISystemPrompt() string {
 	return strings.TrimSpace(`
 You are HaruhiDB action protocol translator.
@@ -184,7 +225,7 @@ If request implies multiple steps, use action "batch" with "requests" list.
 `)
 }
 
-func buildOpenAIUserPrompt(in TranslateInput) (string, error) {
+func buildOpenAIUserPrompt(in TranslateInput, promptExamples string) (string, error) {
 	catalogJSON, err := json.Marshal(in.Catalog)
 	if err != nil {
 		return "", fmt.Errorf("marshal catalog snapshot: %w", err)
@@ -205,6 +246,9 @@ func buildOpenAIUserPrompt(in TranslateInput) (string, error) {
 	if strings.TrimSpace(in.RepairHint) != "" {
 		parts = append(parts, fmt.Sprintf("previous_output_error: %s", in.RepairHint))
 		parts = append(parts, "Regenerate and strictly fix the error above.")
+	}
+	if strings.TrimSpace(promptExamples) != "" {
+		parts = append(parts, fmt.Sprintf("action_examples_reference: %s", promptExamples))
 	}
 
 	return strings.Join(parts, "\n"), nil

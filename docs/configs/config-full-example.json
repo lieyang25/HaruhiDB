@@ -1,0 +1,34 @@
+{
+  "common": {
+    "db_path": "/tmp/haruhidb-full.db",
+    "allow_write": false,
+    "timeout": "30s"
+  },
+  "llm": {
+    "backend": "openai",
+    "api_key": "",
+    "base_url": "https://api.openai.com",
+    "model": "gpt-5-mini",
+    "ollama_model": "",
+    "reasoning_effort": "off",
+    "examples_path": "../docs/action-v1-showcase-example.md"
+  },
+  "serve": {
+    "listen": ":8080",
+    "max_body_bytes": 1048576,
+    "auth_token": "",
+    "rate_limit_per_minute": 120,
+    "trust_proxy_headers": false
+  },
+  "run": {
+    "pretty": true
+  },
+  "nl": {
+    "mode": "read_only",
+    "execute": false,
+    "pretty": true
+  },
+  "shell": {
+    "mode": "read_only"
+  }
+}
