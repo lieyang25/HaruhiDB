@@ -16,6 +16,9 @@ STREAM="${HARU_STREAM:-true}"
 ALLOW_WRITE="${HARU_ALLOW_WRITE:-true}"
 OPEN_BROWSER="${HARU_OPEN_BROWSER:-true}"
 
+CAPI_DIR="${HARU_CAPI_DIR:-${ROOT_DIR}/CXX/build/src/capi}"
+CAPI_RUNTIME_DIR="${HARU_CAPI_RUNTIME_DIR:-${CAPI_DIR}}"
+
 if [[ -n "${HARU_UI_URL:-}" ]]; then
   UI_URL="${HARU_UI_URL}"
 elif [[ "${LISTEN}" =~ ^:([0-9]+)$ ]]; then
@@ -56,10 +59,23 @@ ensure_ollama_service() {
   echo "[1/5] curl not found, skip probe and continue"
 }
 
+has_capi_artifacts() {
+  local dir="$1"
+  [[ -f "${dir}/libharuhidb_capi.so" || -f "${dir}/libharuhidb_capi.dylib" || -f "${dir}/libharuhidb_capi.dll.a" || -f "${dir}/haruhidb_capi.lib" ]]
+}
+
 ensure_capi() {
-  local capi_dir="${ROOT_DIR}/CXX/build/src/capi"
-  if [[ -f "${capi_dir}/libharuhidb_capi.so" || -f "${capi_dir}/libharuhidb_capi.dylib" ]]; then
-    echo "[3/5] C API shared library already exists"
+  if [[ -n "${HARU_CAPI_DIR:-}" ]]; then
+    if has_capi_artifacts "${CAPI_DIR}"; then
+      echo "[3/5] Using custom C API dir: ${CAPI_DIR}"
+      return
+    fi
+    echo "HARU_CAPI_DIR is set but no C API artifacts found in: ${CAPI_DIR}" >&2
+    exit 1
+  fi
+
+  if has_capi_artifacts "${CAPI_DIR}"; then
+    echo "[3/5] C API library already exists"
     return
   fi
 
@@ -90,8 +106,20 @@ ollama pull "${MODEL}"
 ensure_capi
 
 echo "[4/5] Prepare runtime library path"
-export LD_LIBRARY_PATH="${ROOT_DIR}/CXX/build/src/capi:${LD_LIBRARY_PATH:-}"
-export DYLD_LIBRARY_PATH="${ROOT_DIR}/CXX/build/src/capi:${DYLD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${CAPI_RUNTIME_DIR}:${LD_LIBRARY_PATH:-}"
+export DYLD_LIBRARY_PATH="${CAPI_RUNTIME_DIR}:${DYLD_LIBRARY_PATH:-}"
+
+if [[ -n "${HARU_CGO_CFLAGS:-}" ]]; then
+  export CGO_CFLAGS="${HARU_CGO_CFLAGS}"
+else
+  export CGO_CFLAGS="-I${ROOT_DIR}/CXX/src/include"
+fi
+
+if [[ -n "${HARU_CGO_LDFLAGS:-}" ]]; then
+  export CGO_LDFLAGS="${HARU_CGO_LDFLAGS}"
+else
+  export CGO_LDFLAGS="-L${CAPI_DIR} -lharuhidb_capi"
+fi
 
 echo "[5/5] Start HaruhiDB Web"
 echo "        UI: ${UI_URL}"
@@ -102,6 +130,10 @@ echo "        model=${MODEL}"
 echo "        base_url=${BASE_URL}"
 echo "        stream=${STREAM}"
 echo "        allow_write=${ALLOW_WRITE}"
+echo "        capi_dir=${CAPI_DIR}"
+
+echo "        cgo_cflags=${CGO_CFLAGS}"
+echo "        cgo_ldflags=${CGO_LDFLAGS}"
 
 open_ui_if_needed
 

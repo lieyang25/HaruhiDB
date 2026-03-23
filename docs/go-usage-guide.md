@@ -27,9 +27,10 @@ cd E:\__code__\HaruhiDB
 ./scripts/start_web_one_click.ps1
 ```
 
-## 唯一入口：serve
+## 当前如何运行（手动）
 
 ```bash
+cd /path/to/HaruhiDB/GO
 go run ./cmd/haruhidb serve --config ../docs/configs/serve-web-ollama.json
 ```
 
@@ -57,6 +58,34 @@ go run ./cmd/haruhidb serve \
   --timeout 60s \
   --allow-write=true
 ```
+
+## Windows + MSVC 构建产物如何接入 Go
+
+Go 侧通过 `cgo` 链接 C API 动态库。Windows 下推荐用脚本提供的覆盖变量，避免写死目录：
+
+- `HARU_CAPI_DIR`：C API 链接目录（放导入库）
+- `HARU_CAPI_RUNTIME_DIR`：运行时目录（放 DLL）
+- `HARU_CGO_CFLAGS`：可覆盖编译 include 参数
+- `HARU_CGO_LDFLAGS`：可覆盖链接参数
+
+常用两种方式：
+
+1. 使用 MinGW 风格导入库（`libharuhidb_capi.dll.a`）
+```powershell
+$env:HARU_CAPI_DIR='E:\__code__\HaruhiDB\CXX\build\src\capi'
+$env:HARU_CAPI_RUNTIME_DIR='E:\__code__\HaruhiDB\CXX\build\src\capi'
+./scripts/start_web_one_click.ps1
+```
+
+2. 使用 MSVC 导入库（`haruhidb_capi.lib`）时，显式传 `HARU_CGO_LDFLAGS`
+```powershell
+$env:HARU_CAPI_DIR='E:\path\to\msvc\capi\dir'
+$env:HARU_CAPI_RUNTIME_DIR='E:\path\to\msvc\capi\dir'
+$env:HARU_CGO_LDFLAGS='-LE:\path\to\msvc\capi\dir -l:haruhidb_capi.lib'
+./scripts/start_web_one_click.ps1
+```
+
+说明：如果你的 Go/cgo 工具链无法直接消费 `.lib`，建议提供 `libharuhidb_capi.dll.a`，或继续让脚本走 MinGW 产物路径。
 
 ## HTTP 路由（保留）
 

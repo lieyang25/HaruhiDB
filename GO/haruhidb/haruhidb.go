@@ -1,8 +1,6 @@
 package haruhidb
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../CXX/src/include
-#cgo LDFLAGS: -L${SRCDIR}/../../CXX/build/src/capi -lharuhidb_capi -Wl,-rpath,${SRCDIR}/../../CXX/build/src/capi
 #include <stdlib.h>
 #include "capi/haruhidb.h"
 */

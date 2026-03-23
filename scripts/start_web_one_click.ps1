@@ -15,6 +15,9 @@ $Stream = if ($env:HARU_STREAM) { $env:HARU_STREAM } else { 'true' }
 $AllowWrite = if ($env:HARU_ALLOW_WRITE) { $env:HARU_ALLOW_WRITE } else { 'true' }
 $OpenBrowser = if ($env:HARU_OPEN_BROWSER) { $env:HARU_OPEN_BROWSER } else { 'true' }
 
+$CapiDir = if ($env:HARU_CAPI_DIR) { $env:HARU_CAPI_DIR } else { Join-Path $RootDir 'CXX\build\src\capi' }
+$CapiRuntimeDir = if ($env:HARU_CAPI_RUNTIME_DIR) { $env:HARU_CAPI_RUNTIME_DIR } else { $CapiDir }
+
 function Require-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
     throw "$Name is required but not found in PATH"
@@ -48,12 +51,36 @@ function Ensure-OllamaService {
   }
 }
 
-function Ensure-CapiLibrary {
-  $capiOutDir = Join-Path $RootDir 'CXX\build\src\capi'
-  $dllPath = Join-Path $capiOutDir 'libharuhidb_capi.dll'
-  $importLibPath = Join-Path $capiOutDir 'libharuhidb_capi.dll.a'
+function Test-CapiArtifacts([string]$Dir) {
+  if (-not (Test-Path $Dir)) {
+    return $false
+  }
 
-  if ((Test-Path $dllPath) -and (Test-Path $importLibPath)) {
+  $candidates = @(
+    'libharuhidb_capi.dll.a',
+    'haruhidb_capi.lib',
+    'libharuhidb_capi.so',
+    'libharuhidb_capi.dylib'
+  )
+
+  foreach ($name in $candidates) {
+    if (Test-Path (Join-Path $Dir $name)) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Ensure-CapiLibrary {
+  if ($env:HARU_CAPI_DIR) {
+    if (Test-CapiArtifacts $CapiDir) {
+      Write-Host "[3/5] Using custom C API dir: $CapiDir"
+      return
+    }
+    throw "HARU_CAPI_DIR is set but no C API artifacts found in: $CapiDir"
+  }
+
+  if (Test-CapiArtifacts $CapiDir) {
     Write-Host '[3/5] C API library already exists'
     return
   }
@@ -73,9 +100,9 @@ function Ensure-CapiLibrary {
     throw 'C API build finished but expected output files are missing'
   }
 
-  New-Item -ItemType Directory -Force -Path $capiOutDir | Out-Null
-  Copy-Item -Force $builtDll $dllPath
-  Copy-Item -Force $builtImport $importLibPath
+  New-Item -ItemType Directory -Force -Path $CapiDir | Out-Null
+  Copy-Item -Force $builtDll (Join-Path $CapiDir 'libharuhidb_capi.dll')
+  Copy-Item -Force $builtImport (Join-Path $CapiDir 'libharuhidb_capi.dll.a')
 }
 
 Require-Command 'go'
@@ -92,8 +119,21 @@ Write-Host "[2/5] Pull model: $Model"
 Ensure-CapiLibrary
 
 Write-Host '[4/5] Prepare runtime library path'
-$capiRuntimeDir = Join-Path $RootDir 'CXX\build\src\capi'
-$env:PATH = "$capiRuntimeDir;$env:PATH"
+$env:PATH = "$CapiRuntimeDir;$env:PATH"
+
+if ($env:HARU_CGO_CFLAGS) {
+  $env:CGO_CFLAGS = $env:HARU_CGO_CFLAGS
+}
+else {
+  $env:CGO_CFLAGS = "-I$RootDir\CXX\src\include"
+}
+
+if ($env:HARU_CGO_LDFLAGS) {
+  $env:CGO_LDFLAGS = $env:HARU_CGO_LDFLAGS
+}
+else {
+  $env:CGO_LDFLAGS = "-L$CapiDir -lharuhidb_capi"
+}
 
 Write-Host '[5/5] Start HaruhiDB Web'
 Write-Host "        UI: $uiUrl"
@@ -104,6 +144,9 @@ Write-Host "        model=$Model"
 Write-Host "        base_url=$BaseUrl"
 Write-Host "        stream=$Stream"
 Write-Host "        allow_write=$AllowWrite"
+Write-Host "        capi_dir=$CapiDir"
+Write-Host "        cgo_cflags=$($env:CGO_CFLAGS)"
+Write-Host "        cgo_ldflags=$($env:CGO_LDFLAGS)"
 
 if (Is-Enabled $OpenBrowser) {
   Start-Process $uiUrl | Out-Null

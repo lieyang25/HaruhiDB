@@ -19,7 +19,7 @@
 - [Go 使用指南（Web + 网络 + Ollama）](docs/go-usage-guide.md)：单入口 serve、网页/API 路径、配置与启动
 - [网页快速上手](docs/web-quickstart.md)：一键脚本启动 + 浏览器 UI
 - [Web 原理与信息流](docs/web-principle-and-dataflow.md)：网页架构、信息流、输出语义
-- [静态库与远程联动指南](docs/static-link-web-cli-and-remote-exec-guide.md)：Win/Linux 静态库方案 + Web/CLI/serve 使用 + PC/VM/树莓派联动
+- [静态库与远程联动指南](docs/static-link-web-cli-and-remote-exec-guide.md)：Win/Linux 静态库方案 + Web/serve 使用 + 远程联动
 - [Go 启动配置示例](docs/configs/README.md)：`--config` 与现成配置文件
 - [Go 配置参数总表](docs/config-parameter-reference.md)：所有配置键与 CLI 参数映射
 - [Linux 一键网页启动脚本](scripts/start_web_one_click.sh)：自动启动服务并打开网页
