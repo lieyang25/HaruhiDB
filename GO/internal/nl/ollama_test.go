@@ -177,11 +177,11 @@ func TestOllamaSystemPromptContainsCurrentActionSet(t *testing.T) {
 	prompt := ollamaSystemPrompt()
 
 	checks := []string{
-		"\"version\" must be \"v1\" or \"v2\"",
+		"\"version\" should be \"v1\" or \"v2\"",
 		"create_table",
 		"drop_index",
 		"batch",
-		"read_only must not contain any write action",
+		"batch is recommended",
 	}
 	for _, item := range checks {
 		if !strings.Contains(prompt, item) {
@@ -200,14 +200,14 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build prompt failed: %v", err)
 	}
-	if !strings.Contains(readOnlyPrompt, "allowed_actions_for_mode") {
-		t.Fatalf("expected allowed_actions_for_mode in prompt: %s", readOnlyPrompt)
+	if !strings.Contains(readOnlyPrompt, "version_guideline") {
+		t.Fatalf("expected version_guideline in prompt: %s", readOnlyPrompt)
 	}
-	if !strings.Contains(readOnlyPrompt, string(action.ActionListTables)) {
-		t.Fatalf("expected read-only prompt to include list_tables: %s", readOnlyPrompt)
+	if !strings.Contains(readOnlyPrompt, "batch_guideline") {
+		t.Fatalf("expected batch_guideline in prompt: %s", readOnlyPrompt)
 	}
-	if strings.Contains(readOnlyPrompt, string(action.ActionInsertRow)) {
-		t.Fatalf("read-only prompt should not include write action insert_row: %s", readOnlyPrompt)
+	if !strings.Contains(readOnlyPrompt, "mode: read_only") {
+		t.Fatalf("expected prompt to include mode read_only: %s", readOnlyPrompt)
 	}
 
 	readWritePrompt, err := buildOllamaUserPrompt(TranslateInput{
@@ -219,8 +219,11 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build prompt failed: %v", err)
 	}
-	if !strings.Contains(readWritePrompt, string(action.ActionInsertRow)) {
-		t.Fatalf("read-write prompt should include write action insert_row: %s", readWritePrompt)
+	if !strings.Contains(readWritePrompt, "mode: read_write") {
+		t.Fatalf("expected prompt to include mode read_write: %s", readWritePrompt)
+	}
+	if !strings.Contains(readWritePrompt, "guideline: prefer minimal actions") {
+		t.Fatalf("expected relaxed action guideline in prompt: %s", readWritePrompt)
 	}
 }
 

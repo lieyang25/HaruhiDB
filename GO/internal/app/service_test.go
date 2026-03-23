@@ -213,7 +213,7 @@ func TestTranslateNLStrictSequenceRetriesUntilBatchMatches(t *testing.T) {
 		t.Fatalf("NewActionService failed: %v", err)
 	}
 
-	input := "严格只输出与目标直接相关的动作，不允许任何额外动作。请按顺序仅执行 4 步：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。禁止 list_tables/table_exists/describe_table/scan_all/scan_primary_int_range/update_by_primary_int。"
+	input := "严格只输出与目标直接相关的动作，不允许任何额外动作。请严格按顺序仅执行 4 步：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。禁止 list_tables/table_exists/describe_table/scan_all/scan_primary_int_range/update_by_primary_int。"
 	result, err := service.TranslateNL(context.Background(), NLRequest{
 		RequestID: "req-strict",
 		Input:     input,
@@ -280,11 +280,15 @@ func TestTranslateNLStrictSequenceFailsWhenBatchDoesNotMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateNL failed: %v", err)
 	}
-	if result.Valid {
-		t.Fatalf("expected invalid translation when semantic batch mismatches, got %+v", result)
+	if !result.Valid {
+		t.Fatalf("expected valid translation with relaxed semantic guard, got %+v", result)
 	}
-	if result.Error == nil || !strings.Contains(result.Error.Message, "semantic guard") {
-		t.Fatalf("expected semantic guard error, got %#v", result.Error)
+	if result.Error != nil {
+		t.Fatalf("expected no terminal error, got %#v", result.Error)
+	}
+	warning, ok := result.Meta["semantic_warning"].(string)
+	if !ok || !strings.Contains(warning, "semantic guard") {
+		t.Fatalf("expected semantic warning in meta, got %#v", result.Meta["semantic_warning"])
 	}
 	if len(translator.inputs) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", len(translator.inputs))

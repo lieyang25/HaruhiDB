@@ -9,7 +9,7 @@ CONFIG_PATH="${ROOT_DIR}/docs/configs/serve-web-ollama.json"
 
 MODEL="${HARU_MODEL:-qwen2.5-coder:3b}"
 BASE_URL="${HARU_BASE_URL:-http://127.0.0.1:11434}"
-DB_PATH="${HARU_DB_PATH:-/tmp/haruhidb-web.db}"
+DB_PATH="${HARU_DB_PATH:-${ROOT_DIR}/haruhidb-web.db}"
 LISTEN="${HARU_LISTEN:-:8080}"
 TIMEOUT="${HARU_TIMEOUT:-60s}"
 STREAM="${HARU_STREAM:-true}"
@@ -38,6 +38,32 @@ require_cmd() {
 is_enabled() {
   local value="${1,,}"
   [[ "${value}" != "false" && "${value}" != "0" && "${value}" != "no" && "${value}" != "off" ]]
+}
+
+ensure_db_path() {
+  local db_dir
+  db_dir="$(dirname "${DB_PATH}")"
+
+  if [[ ! -d "${db_dir}" ]]; then
+    mkdir -p "${db_dir}" || {
+      echo "failed to create db directory: ${db_dir}" >&2
+      exit 1
+    }
+  fi
+
+  if [[ ! -w "${db_dir}" ]]; then
+    echo "db directory is not writable: ${db_dir}" >&2
+    exit 1
+  fi
+
+  local probe_file="${db_dir}/.haruhidb-write-test.$$"
+  if ! : >"${probe_file}" 2>/dev/null; then
+    echo "db directory write test failed: ${db_dir}" >&2
+    exit 1
+  fi
+  rm -f "${probe_file}"
+
+  DB_PATH="$(cd "${db_dir}" && pwd)/$(basename "${DB_PATH}")"
 }
 
 require_cmd go
@@ -98,6 +124,7 @@ open_ui_if_needed() {
   fi
 }
 
+ensure_db_path
 ensure_ollama_service
 
 echo "[2/5] Pull model: ${MODEL}"

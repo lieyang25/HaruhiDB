@@ -221,9 +221,13 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 				candidateMap, candidateRaw, validateErr = s.validateCandidateEnvelope(normalized)
 			}
 		}
+		var semanticErr error
 		if validateErr == nil {
-			if semanticErr := enforceSemanticExpectation(req.Input, candidateMap); semanticErr != nil {
-				validateErr = semanticErr
+			semanticErr = enforceSemanticExpectation(req.Input, candidateMap)
+			if semanticErr != nil && attempt == 0 {
+				lastErr = semanticErr
+				hint = semanticErr.Error()
+				continue
 			}
 		}
 		if validateErr != nil {
@@ -235,6 +239,9 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 		result.Valid = true
 		result.CandidateEnvelope = candidateMap
 		result.CandidateRaw = candidateRaw
+		if semanticErr != nil {
+			result.Meta["semantic_warning"] = semanticErr.Error()
+		}
 		if model != "" {
 			result.Meta["model"] = model
 		}
@@ -616,17 +623,14 @@ func deriveSemanticBatchExpectation(naturalRequest string) *semanticBatchExpecta
 
 func containsStrictSequencingMarker(lower string) bool {
 	markers := []string{
-		"按顺序",
-		"仅执行",
-		"只执行",
-		"严格",
-		"禁止",
-		"不允许任何额外动作",
-		"strict",
-		"only",
-		"in order",
-		"forbid",
-		"do not",
+		"严格按顺序",
+		"必须按顺序",
+		"严格仅执行",
+		"严格只执行",
+		"exact order",
+		"exactly 4 steps",
+		"step 1",
+		"step1",
 	}
 
 	for _, marker := range markers {

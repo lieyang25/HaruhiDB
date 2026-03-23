@@ -8,7 +8,7 @@ $ConfigPath = Join-Path $RootDir 'docs\configs\serve-web-ollama.json'
 
 $Model = if ($env:HARU_MODEL) { $env:HARU_MODEL } else { 'qwen2.5-coder:3b' }
 $BaseUrl = if ($env:HARU_BASE_URL) { $env:HARU_BASE_URL } else { 'http://127.0.0.1:11434' }
-$DbPath = if ($env:HARU_DB_PATH) { $env:HARU_DB_PATH } else { Join-Path $env:TEMP 'haruhidb-web.db' }
+$DbPath = if ($env:HARU_DB_PATH) { $env:HARU_DB_PATH } else { Join-Path $RootDir 'haruhidb-web.db' }
 $Listen = if ($env:HARU_LISTEN) { $env:HARU_LISTEN } else { ':8080' }
 $Timeout = if ($env:HARU_TIMEOUT) { $env:HARU_TIMEOUT } else { '60s' }
 $Stream = if ($env:HARU_STREAM) { $env:HARU_STREAM } else { 'true' }
@@ -37,6 +37,27 @@ function Resolve-UiUrl([string]$ListenValue) {
     return "http://127.0.0.1:$($Matches[1])/ui"
   }
   return 'http://127.0.0.1:8080/ui'
+}
+
+function Ensure-DbPath {
+  $script:DbPath = [System.IO.Path]::GetFullPath($script:DbPath)
+  $dbDir = Split-Path -Parent $script:DbPath
+  if ([string]::IsNullOrWhiteSpace($dbDir)) {
+    throw "invalid DB path: $script:DbPath"
+  }
+
+  if (-not (Test-Path $dbDir)) {
+    New-Item -ItemType Directory -Force -Path $dbDir | Out-Null
+  }
+
+  $probe = Join-Path $dbDir ".haruhidb-write-test-$PID.tmp"
+  try {
+    Set-Content -Path $probe -Value '' -NoNewline
+    Remove-Item -Force $probe
+  }
+  catch {
+    throw "db directory is not writable: $dbDir"
+  }
 }
 
 function Ensure-OllamaService {
@@ -109,6 +130,7 @@ Require-Command 'go'
 Require-Command 'ollama'
 Require-Command 'cmake'
 
+Ensure-DbPath
 $uiUrl = Resolve-UiUrl -ListenValue $Listen
 
 Ensure-OllamaService

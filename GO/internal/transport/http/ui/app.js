@@ -1,5 +1,5 @@
 (function () {
-  const strictTemplate = "严格只输出与目标直接相关的动作，不允许任何额外动作。请按顺序仅执行 4 步：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。禁止 list_tables/table_exists/describe_table/scan_all/scan_primary_int_range/update_by_primary_int。";
+  const strictTemplate = "请完成这个四步流程（可直接用 batch）：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。除非必要，不要添加无关动作。";
 
   const modeEl = document.getElementById("mode");
   const tokenEl = document.getElementById("authToken");
@@ -124,7 +124,7 @@
 
   strictBtn.addEventListener("click", function () {
     inputEl.value = strictTemplate;
-    setStatus("已填入严格四步示例。", false);
+    setStatus("已填入四步流程示例。", false);
   });
 
   translateBtn.addEventListener("click", function () {
@@ -143,3 +143,4 @@
     copyFrom(executionOutEl);
   });
 })();
+

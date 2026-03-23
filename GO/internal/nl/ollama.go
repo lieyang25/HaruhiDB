@@ -71,7 +71,7 @@ func (t *OllamaTranslator) Translate(ctx context.Context, in TranslateInput) (Tr
 
 	reqBody := map[string]any{
 		"model":       t.model,
-		"temperature": 0,
+		"temperature": 0.2,
 		"messages": []map[string]string{
 			{
 				"role":    "system",
@@ -291,16 +291,15 @@ func parseOllamaStream(reader io.Reader) (responseID string, responseModel strin
 func ollamaSystemPrompt() string {
 	return strings.TrimSpace(`
 You are HaruhiDB action protocol translator.
-Convert user natural-language requests into exactly one JSON object that matches HaruhiDB Action Protocol request envelope.
+Convert user natural-language requests into one executable HaruhiDB Action Protocol envelope.
 
-Hard constraints:
-1) Output MUST be valid JSON and must contain only these top-level keys:
-"version", "request_id", "mode", "action", "args".
-2) "version" must be "v1" or "v2".
-3) "mode" must be "read_only" or "read_write".
-4) "args" must always be a JSON object (never array or null).
-5) Do not include markdown fences or explanation text.
-6) Return only one JSON object.
+Core requirements:
+1) Output must be a valid JSON object.
+2) Keep only these top-level keys: "version", "request_id", "mode", "action", "args".
+3) "version" should be "v1" or "v2".
+4) "mode" should be "read_only" or "read_write".
+5) "args" should be a JSON object (use {} when no args are needed).
+6) Do not include markdown fences or extra explanation text.
 
 Action set and args schema:
 - list_tables: {}
@@ -322,10 +321,10 @@ Version compatibility:
 - v1 supports: list_tables, table_exists, describe_table, get_by_primary_int, scan_all, scan_primary_int_range, insert_row, update_by_primary_int, delete_by_primary_int, batch.
 - v2 supports all v1 actions, plus: create_table, drop_table, create_primary_int_index, drop_index.
 
-Mode compatibility:
-- read_only must not contain any write action.
-- write actions are: insert_row, update_by_primary_int, delete_by_primary_int, create_table, drop_table, create_primary_int_index, drop_index.
-- For batch, sub-actions must follow the same mode/version rules.
+Behavior guidance:
+- Prefer minimal actions that satisfy user intent.
+- For clearly multi-step tasks, batch is recommended.
+- If user intent conflicts with mode/version, still output the best valid envelope and let server validation decide.
 `)
 }
 
@@ -341,55 +340,23 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 	}
 
 	parts := []string{
-		"Translate the natural request into a strict HaruhiDB protocol envelope.",
+		"Translate the natural request into one executable HaruhiDB protocol envelope.",
 		fmt.Sprintf("request_id: %s", in.RequestID),
 		fmt.Sprintf("mode: %s", mode),
-		fmt.Sprintf("allowed_actions_for_mode: %s", strings.Join(allowedActionsForMode(mode), ", ")),
-		"version_rule: use v2 only when action requires v2; otherwise prefer v1.",
-		"args_rule: all args must be JSON objects with exact fields only.",
+		"guideline: prefer minimal actions; avoid unrelated actions when possible.",
+		"version_guideline: prefer v1 for v1-capable actions; use v2 when DDL actions are needed.",
+		"batch_guideline: if the request clearly contains multiple ordered actions, batch is recommended.",
 		fmt.Sprintf("natural_request: %s", in.NaturalRequest),
 		fmt.Sprintf("catalog_snapshot_json: %s", string(catalogJSON)),
 	}
 
 	if strings.TrimSpace(in.RepairHint) != "" {
-		parts = append(parts, fmt.Sprintf("previous_output_error: %s", in.RepairHint))
-		parts = append(parts, "Regenerate and strictly fix the error above.")
+		parts = append(parts, fmt.Sprintf("previous_output_feedback: %s", in.RepairHint))
+		parts = append(parts, "Try to improve the result, but keep it as a valid protocol envelope.")
 	}
 
 	return strings.Join(parts, "\n"), nil
 }
-
-func allowedActionsForMode(mode action.Mode) []string {
-	if mode == action.ModeReadOnly {
-		return []string{
-			string(action.ActionListTables),
-			string(action.ActionTableExists),
-			string(action.ActionDescribeTable),
-			string(action.ActionGetByPrimaryInt),
-			string(action.ActionScanAll),
-			string(action.ActionScanPrimaryIntRange),
-			string(action.ActionBatch),
-		}
-	}
-
-	return []string{
-		string(action.ActionListTables),
-		string(action.ActionTableExists),
-		string(action.ActionDescribeTable),
-		string(action.ActionGetByPrimaryInt),
-		string(action.ActionScanAll),
-		string(action.ActionScanPrimaryIntRange),
-		string(action.ActionInsertRow),
-		string(action.ActionUpdateByPrimaryInt),
-		string(action.ActionDeleteByPrimaryInt),
-		string(action.ActionCreateTable),
-		string(action.ActionDropTable),
-		string(action.ActionCreatePrimaryIndex),
-		string(action.ActionDropIndex),
-		string(action.ActionBatch),
-	}
-}
-
 func extractJSONPayload(content string) ([]byte, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
