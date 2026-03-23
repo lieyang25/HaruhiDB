@@ -291,13 +291,41 @@ func parseOllamaStream(reader io.Reader) (responseID string, responseModel strin
 func ollamaSystemPrompt() string {
 	return strings.TrimSpace(`
 You are HaruhiDB action protocol translator.
-Convert user natural-language requests into exactly one JSON object that matches HaruhiDB Action Protocol v1 request envelope.
-Output MUST be valid JSON and must contain only these top-level keys:
+Convert user natural-language requests into exactly one JSON object that matches HaruhiDB Action Protocol request envelope.
+
+Hard constraints:
+1) Output MUST be valid JSON and must contain only these top-level keys:
 "version", "request_id", "mode", "action", "args".
-Do not include markdown fences.
-Do not include explanation text.
-Use action names and fields exactly as specified.
-If request implies multiple steps, use action "batch" with "requests" list.
+2) "version" must be "v1" or "v2".
+3) "mode" must be "read_only" or "read_write".
+4) "args" must always be a JSON object (never array or null).
+5) Do not include markdown fences or explanation text.
+6) Return only one JSON object.
+
+Action set and args schema:
+- list_tables: {}
+- table_exists: {"table": string}
+- describe_table: {"table": string}
+- get_by_primary_int: {"table": string, "key": int}
+- scan_all: {"table": string, "limit": int(optional)}
+- scan_primary_int_range: {"table": string, "start_key": int, "end_key": int, "limit": int(optional)}
+- insert_row: {"table": string, "values": object}
+- update_by_primary_int: {"table": string, "key": int, "values": object}
+- delete_by_primary_int: {"table": string, "key": int}
+- create_table: {"table": string, "columns": [{"name": string, "type": "BOOLEAN|TINYINT|SMALLINT|INTEGER|BIGINT|FLOAT|DOUBLE|DECIMAL|VARCHAR", "nullable": bool, "length": uint(optional)}]}
+- drop_table: {"table": string}
+- create_primary_int_index: {"table": string, "index": string}
+- drop_index: {"table": string, "index": string}
+- batch: {"requests": [{"action": string, "args": object}], "stop_on_error": bool(optional)}
+
+Version compatibility:
+- v1 supports: list_tables, table_exists, describe_table, get_by_primary_int, scan_all, scan_primary_int_range, insert_row, update_by_primary_int, delete_by_primary_int, batch.
+- v2 supports all v1 actions, plus: create_table, drop_table, create_primary_int_index, drop_index.
+
+Mode compatibility:
+- read_only must not contain any write action.
+- write actions are: insert_row, update_by_primary_int, delete_by_primary_int, create_table, drop_table, create_primary_int_index, drop_index.
+- For batch, sub-actions must follow the same mode/version rules.
 `)
 }
 
@@ -313,8 +341,12 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 	}
 
 	parts := []string{
+		"Translate the natural request into a strict HaruhiDB protocol envelope.",
 		fmt.Sprintf("request_id: %s", in.RequestID),
 		fmt.Sprintf("mode: %s", mode),
+		fmt.Sprintf("allowed_actions_for_mode: %s", strings.Join(allowedActionsForMode(mode), ", ")),
+		"version_rule: use v2 only when action requires v2; otherwise prefer v1.",
+		"args_rule: all args must be JSON objects with exact fields only.",
 		fmt.Sprintf("natural_request: %s", in.NaturalRequest),
 		fmt.Sprintf("catalog_snapshot_json: %s", string(catalogJSON)),
 	}
@@ -325,6 +357,37 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 	}
 
 	return strings.Join(parts, "\n"), nil
+}
+
+func allowedActionsForMode(mode action.Mode) []string {
+	if mode == action.ModeReadOnly {
+		return []string{
+			string(action.ActionListTables),
+			string(action.ActionTableExists),
+			string(action.ActionDescribeTable),
+			string(action.ActionGetByPrimaryInt),
+			string(action.ActionScanAll),
+			string(action.ActionScanPrimaryIntRange),
+			string(action.ActionBatch),
+		}
+	}
+
+	return []string{
+		string(action.ActionListTables),
+		string(action.ActionTableExists),
+		string(action.ActionDescribeTable),
+		string(action.ActionGetByPrimaryInt),
+		string(action.ActionScanAll),
+		string(action.ActionScanPrimaryIntRange),
+		string(action.ActionInsertRow),
+		string(action.ActionUpdateByPrimaryInt),
+		string(action.ActionDeleteByPrimaryInt),
+		string(action.ActionCreateTable),
+		string(action.ActionDropTable),
+		string(action.ActionCreatePrimaryIndex),
+		string(action.ActionDropIndex),
+		string(action.ActionBatch),
+	}
 }
 
 func extractJSONPayload(content string) ([]byte, error) {
@@ -504,6 +567,24 @@ func scoreJSONCandidate(raw []byte) int {
 	requiredKeys := []string{"version", "request_id", "mode", "action", "args"}
 	matchedKeys := 0
 	score := 0
+
+	version := ""
+	if value, ok := payload["version"].(string); ok {
+		version = strings.TrimSpace(value)
+	}
+
+	mode := action.Mode("")
+	if value, ok := payload["mode"].(string); ok {
+		mode = action.Mode(strings.TrimSpace(value))
+	}
+
+	actionName := ""
+	parsedAction := action.Action("")
+	if value, ok := payload["action"].(string); ok {
+		actionName = strings.TrimSpace(value)
+		parsedAction = action.Action(actionName)
+	}
+
 	for _, key := range requiredKeys {
 		if _, ok := payload[key]; ok {
 			matchedKeys++
@@ -511,14 +592,11 @@ func scoreJSONCandidate(raw []byte) int {
 		}
 	}
 
-	if value, ok := payload["version"].(string); ok {
-		version := strings.TrimSpace(value)
-		switch version {
-		case action.VersionV1:
+	if version != "" {
+		if action.SupportedVersion(version) {
 			score += 4
-		case "":
-		default:
-			score++
+		} else {
+			score -= 2
 		}
 	}
 
@@ -526,20 +604,24 @@ func scoreJSONCandidate(raw []byte) int {
 		score += 2
 	}
 
-	if value, ok := payload["mode"].(string); ok {
-		mode := action.Mode(strings.TrimSpace(value))
-		if mode.Valid() {
-			score += 4
-		}
+	if mode.Valid() {
+		score += 4
+	} else if mode != "" {
+		score -= 2
 	}
 
-	if value, ok := payload["action"].(string); ok {
-		actionName := strings.TrimSpace(value)
-		if actionName != "" {
-			score += 6
-			if action.Action(actionName).Valid() {
-				score += 3
+	if actionName != "" {
+		score += 6
+		if parsedAction.Valid() {
+			score += 3
+			if version != "" && action.ActionSupportedInVersion(version, parsedAction) {
+				score += 4
 			}
+			if mode == action.ModeReadOnly && parsedAction.IsWrite() {
+				score -= 6
+			}
+		} else {
+			score -= 3
 		}
 	}
 

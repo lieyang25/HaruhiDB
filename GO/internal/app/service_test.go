@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,111 @@ func TestTranslateNLSuccessWithRepair(t *testing.T) {
 	}
 }
 
+func TestTranslateNLStrictSequenceRetriesUntilBatchMatches(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+	createStudentTable(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-strict","mode":"read_write","action":"insert_row","args":{"table":"student","values":{"id":303,"name":"instruct_test"}}}`),
+				Model:     "test-model",
+			},
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-strict","mode":"read_write","action":"batch","args":{"requests":[{"action":"insert_row","args":{"table":"student","values":{"id":303,"name":"instruct_test"}}},{"action":"get_by_primary_int","args":{"table":"student","key":303}},{"action":"delete_by_primary_int","args":{"table":"student","key":303}},{"action":"get_by_primary_int","args":{"table":"student","key":303}}]}}`),
+				Model:     "test-model",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     true,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	input := "严格只输出与目标直接相关的动作，不允许任何额外动作。请按顺序仅执行 4 步：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。禁止 list_tables/table_exists/describe_table/scan_all/scan_primary_int_range/update_by_primary_int。"
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-strict",
+		Input:     input,
+		Mode:      action.ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation, got %+v", result)
+	}
+	if len(translator.inputs) != 2 {
+		t.Fatalf("expected semantic-guard-triggered retry, got %d calls", len(translator.inputs))
+	}
+	if translator.inputs[1].RepairHint == "" {
+		t.Fatalf("expected second attempt to contain repair hint")
+	}
+	if got := result.CandidateEnvelope["action"]; got != string(action.ActionBatch) {
+		t.Fatalf("expected batch action, got %#v", got)
+	}
+	args, ok := result.CandidateEnvelope["args"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected args object, got %#v", result.CandidateEnvelope["args"])
+	}
+	requests, ok := args["requests"].([]any)
+	if !ok || len(requests) != 4 {
+		t.Fatalf("expected 4 batch requests, got %#v", args["requests"])
+	}
+}
+
+func TestTranslateNLStrictSequenceFailsWhenBatchDoesNotMatch(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+	createStudentTable(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-strict-fail","mode":"read_write","action":"insert_row","args":{"table":"student","values":{"id":303,"name":"instruct_test"}}}`),
+				Model:     "test-model",
+			},
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-strict-fail","mode":"read_write","action":"batch","args":{"requests":[{"action":"insert_row","args":{"table":"student","values":{"id":303,"name":"instruct_test"}}},{"action":"delete_by_primary_int","args":{"table":"student","key":303}}]}}`),
+				Model:     "test-model",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     true,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-strict-fail",
+		Input:     "请严格按顺序执行 4 步：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。",
+		Mode:      action.ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if result.Valid {
+		t.Fatalf("expected invalid translation when semantic batch mismatches, got %+v", result)
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Message, "semantic guard") {
+		t.Fatalf("expected semantic guard error, got %#v", result.Error)
+	}
+	if len(translator.inputs) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", len(translator.inputs))
+	}
+}
 func TestTranslateNLAutoNormalizesCommonEnvelopeFields(t *testing.T) {
 	db := openServiceTestDB(t)
 	defer closeServiceTestDB(t, db)
@@ -493,6 +599,18 @@ func createUsersTable(t *testing.T, db *haruhidb.DB) {
 	}
 }
 
+func createStudentTable(t *testing.T, db *haruhidb.DB) {
+	t.Helper()
+	if err := db.CreateTable("student", []haruhidb.ColumnDef{
+		{Name: "id", Type: haruhidb.TypeInteger},
+		{Name: "name", Type: haruhidb.TypeVarchar, Length: 64},
+	}); err != nil {
+		t.Fatalf("create student table failed: %v", err)
+	}
+	if err := db.CreatePrimaryIntIndex("student", "idx_student_id"); err != nil {
+		t.Fatalf("create student index failed: %v", err)
+	}
+}
 func assertActionResponseOK(t *testing.T, raw []byte, expected bool) {
 	t.Helper()
 	var envelope action.ResponseEnvelope[map[string]any]

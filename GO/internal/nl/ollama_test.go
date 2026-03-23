@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"haruhidb-go/internal/action"
 )
 
 func TestNewOllamaTranslatorAppliesDefaults(t *testing.T) {
@@ -167,5 +170,72 @@ func TestExtractJSONPayload(t *testing.T) {
 				t.Fatalf("unexpected payload: got %s, want %s", string(got), tc.want)
 			}
 		})
+	}
+}
+
+func TestOllamaSystemPromptContainsCurrentActionSet(t *testing.T) {
+	prompt := ollamaSystemPrompt()
+
+	checks := []string{
+		"\"version\" must be \"v1\" or \"v2\"",
+		"create_table",
+		"drop_index",
+		"batch",
+		"read_only must not contain any write action",
+	}
+	for _, item := range checks {
+		if !strings.Contains(prompt, item) {
+			t.Fatalf("system prompt missing %q", item)
+		}
+	}
+}
+
+func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
+	readOnlyPrompt, err := buildOllamaUserPrompt(TranslateInput{
+		RequestID:      "req-readonly",
+		NaturalRequest: "列出所有表",
+		Mode:           action.ModeReadOnly,
+		Catalog:        CatalogSnapshot{},
+	})
+	if err != nil {
+		t.Fatalf("build prompt failed: %v", err)
+	}
+	if !strings.Contains(readOnlyPrompt, "allowed_actions_for_mode") {
+		t.Fatalf("expected allowed_actions_for_mode in prompt: %s", readOnlyPrompt)
+	}
+	if !strings.Contains(readOnlyPrompt, string(action.ActionListTables)) {
+		t.Fatalf("expected read-only prompt to include list_tables: %s", readOnlyPrompt)
+	}
+	if strings.Contains(readOnlyPrompt, string(action.ActionInsertRow)) {
+		t.Fatalf("read-only prompt should not include write action insert_row: %s", readOnlyPrompt)
+	}
+
+	readWritePrompt, err := buildOllamaUserPrompt(TranslateInput{
+		RequestID:      "req-readwrite",
+		NaturalRequest: "创建表",
+		Mode:           action.ModeReadWrite,
+		Catalog:        CatalogSnapshot{},
+	})
+	if err != nil {
+		t.Fatalf("build prompt failed: %v", err)
+	}
+	if !strings.Contains(readWritePrompt, string(action.ActionInsertRow)) {
+		t.Fatalf("read-write prompt should include write action insert_row: %s", readWritePrompt)
+	}
+}
+
+func TestExtractJSONPayloadPrefersSupportedVersionAndAction(t *testing.T) {
+	content := strings.Join([]string{
+		"debug candidate: {\"version\":\"v3\",\"request_id\":\"bad\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}",
+		"final candidate: {\"version\":\"v2\",\"request_id\":\"req-v2\",\"mode\":\"read_write\",\"action\":\"create_table\",\"args\":{\"table\":\"books\",\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\",\"nullable\":false}]}}",
+	}, "\n")
+
+	got, err := extractJSONPayload(content)
+	if err != nil {
+		t.Fatalf("extract payload failed: %v", err)
+	}
+
+	if !strings.Contains(string(got), "\"version\":\"v2\"") || !strings.Contains(string(got), "\"action\":\"create_table\"") {
+		t.Fatalf("unexpected selected candidate: %s", string(got))
 	}
 }

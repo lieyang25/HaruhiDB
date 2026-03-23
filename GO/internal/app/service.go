@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,22 @@ import (
 const (
 	ErrorCodeTranslation = "TRANSLATION_ERROR"
 )
+
+var (
+	strictActionCallPattern = regexp.MustCompile(`(?i)(list_tables|table_exists|describe_table|get_by_primary_int|scan_all|scan_primary_int_range|insert_row|update_by_primary_int|delete_by_primary_int|create_table|drop_table|create_primary_int_index|drop_index)\s*\(([^)]*)\)`)
+	strictTableArgPattern   = regexp.MustCompile(`(?i)table\s*=\s*["']?([a-zA-Z0-9_]+)["']?`)
+	strictKeyArgPattern     = regexp.MustCompile(`(?i)key\s*=\s*(-?\d+)`)
+)
+
+type semanticStepExpectation struct {
+	Action action.Action
+	Table  string
+	Key    *int64
+}
+
+type semanticBatchExpectation struct {
+	Steps []semanticStepExpectation
+}
 
 type Config struct {
 	DB             *haruhidb.DB
@@ -201,6 +219,11 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 		if validateErr != nil {
 			if normalized, ok := normalizeCandidateEnvelope(output.Candidate, result.RequestID, req.Mode); ok {
 				candidateMap, candidateRaw, validateErr = s.validateCandidateEnvelope(normalized)
+			}
+		}
+		if validateErr == nil {
+			if semanticErr := enforceSemanticExpectation(req.Input, candidateMap); semanticErr != nil {
+				validateErr = semanticErr
 			}
 		}
 		if validateErr != nil {
@@ -489,6 +512,188 @@ func batchContainsV2OnlyAction(argsValue any) bool {
 	return false
 }
 
+func enforceSemanticExpectation(naturalRequest string, candidate map[string]any) error {
+	expectation := deriveSemanticBatchExpectation(naturalRequest)
+	if expectation == nil {
+		return nil
+	}
+
+	rawAction, _ := candidate["action"].(string)
+	if action.Action(canonicalActionName(rawAction)) != action.ActionBatch {
+		return fmt.Errorf("semantic guard: expected top-level action %q for ordered multi-step request", action.ActionBatch)
+	}
+
+	args, ok := candidate["args"].(map[string]any)
+	if !ok {
+		return errors.New("semantic guard: expected args to be object")
+	}
+
+	rawRequests, ok := args["requests"].([]any)
+	if !ok {
+		return errors.New("semantic guard: expected batch args.requests to be array")
+	}
+	if len(rawRequests) != len(expectation.Steps) {
+		return fmt.Errorf("semantic guard: expected %d batch steps, got %d", len(expectation.Steps), len(rawRequests))
+	}
+
+	for i, expected := range expectation.Steps {
+		requestMap, ok := rawRequests[i].(map[string]any)
+		if !ok {
+			return fmt.Errorf("semantic guard: requests[%d] must be object", i)
+		}
+
+		rawSubAction, _ := requestMap["action"].(string)
+		subAction := action.Action(canonicalActionName(rawSubAction))
+		if subAction != expected.Action {
+			return fmt.Errorf("semantic guard: expected requests[%d].action=%q, got %q", i, expected.Action, strings.TrimSpace(rawSubAction))
+		}
+
+		subArgs, ok := requestMap["args"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("semantic guard: requests[%d].args must be object", i)
+		}
+
+		if expected.Table != "" {
+			table, _ := subArgs["table"].(string)
+			if strings.TrimSpace(table) != expected.Table {
+				return fmt.Errorf("semantic guard: expected requests[%d].args.table=%q, got %q", i, expected.Table, strings.TrimSpace(table))
+			}
+		}
+		if expected.Key != nil {
+			key, ok := parseInt64Value(subArgs["key"])
+			if !ok || key != *expected.Key {
+				return fmt.Errorf("semantic guard: expected requests[%d].args.key=%d", i, *expected.Key)
+			}
+		}
+	}
+
+	return nil
+}
+
+func deriveSemanticBatchExpectation(naturalRequest string) *semanticBatchExpectation {
+	trimmed := strings.TrimSpace(naturalRequest)
+	if trimmed == "" {
+		return nil
+	}
+
+	lower := strings.ToLower(trimmed)
+	if !containsStrictSequencingMarker(lower) {
+		return nil
+	}
+
+	matches := strictActionCallPattern.FindAllStringSubmatch(trimmed, -1)
+	if len(matches) < 2 {
+		return nil
+	}
+
+	steps := make([]semanticStepExpectation, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+
+		actionName := action.Action(canonicalActionName(match[1]))
+		if !actionName.Valid() || actionName == action.ActionBatch {
+			continue
+		}
+
+		step := semanticStepExpectation{Action: actionName}
+		argsText := match[2]
+		if table := parseStrictTableArg(argsText); table != "" {
+			step.Table = table
+		}
+		if key, ok := parseStrictKeyArg(argsText); ok {
+			step.Key = &key
+		}
+		steps = append(steps, step)
+	}
+
+	if len(steps) < 2 {
+		return nil
+	}
+	return &semanticBatchExpectation{Steps: steps}
+}
+
+func containsStrictSequencingMarker(lower string) bool {
+	markers := []string{
+		"按顺序",
+		"仅执行",
+		"只执行",
+		"严格",
+		"禁止",
+		"不允许任何额外动作",
+		"strict",
+		"only",
+		"in order",
+		"forbid",
+		"do not",
+	}
+
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseStrictTableArg(argsText string) string {
+	match := strictTableArgPattern.FindStringSubmatch(argsText)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func parseStrictKeyArg(argsText string) (int64, bool) {
+	match := strictKeyArgPattern.FindStringSubmatch(argsText)
+	if len(match) < 2 {
+		return 0, false
+	}
+	key, err := strconv.ParseInt(strings.TrimSpace(match[1]), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return key, true
+}
+
+func parseInt64Value(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case float64:
+		parsed := int64(typed)
+		if float64(parsed) == typed {
+			return parsed, true
+		}
+		return 0, false
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return parsed, true
+		}
+		floatParsed, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		parsed := int64(floatParsed)
+		if float64(parsed) == floatParsed {
+			return parsed, true
+		}
+		return 0, false
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
 func (s *ActionService) withRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if s.requestTimeout <= 0 {
 		return ctx, func() {}
