@@ -301,29 +301,13 @@ Core requirements:
 5) "args" should be a JSON object (use {} when no args are needed).
 6) Do not include markdown fences or extra explanation text.
 
-Action set and args schema:
-- list_tables: {}
-- table_exists: {"table": string}
-- describe_table: {"table": string}
-- get_by_primary_int: {"table": string, "key": int}
-- scan_all: {"table": string, "limit": int(optional)}
-- scan_primary_int_range: {"table": string, "start_key": int, "end_key": int, "limit": int(optional)}
-- insert_row: {"table": string, "values": object}
-- update_by_primary_int: {"table": string, "key": int, "values": object}
-- delete_by_primary_int: {"table": string, "key": int}
-- create_table: {"table": string, "columns": [{"name": string, "type": "BOOLEAN|TINYINT|SMALLINT|INTEGER|BIGINT|FLOAT|DOUBLE|DECIMAL|VARCHAR", "nullable": bool, "length": uint(optional)}]}
-- drop_table: {"table": string}
-- create_primary_int_index: {"table": string, "index": string}
-- drop_index: {"table": string, "index": string}
-- batch: {"requests": [{"action": string, "args": object}], "stop_on_error": bool(optional)}
-
-Version compatibility:
-- v3 supports all actions above in a single unified action set.
+Action set, args schema, and examples are provided in USER prompt as "action_guide".
+Only actions present in action_guide are allowed.
 
 	Behavior guidance:
 	- Prefer minimal actions that satisfy user intent.
 	- For clearly multi-step tasks, batch is recommended.
-	- Never include prompt artifacts (for example catalog_snapshot_json, guidelines, or explanations) in args.
+	- Never include prompt artifacts (for example catalog_snapshot_json, action_guide, or explanations) in args.
 	- If user intent conflicts with mode/version, still output the best valid envelope and let server validation decide.
 	`)
 }
@@ -339,14 +323,22 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 		mode = action.ModeReadOnly
 	}
 
+	actionGuide, err := buildActionGuideForPrompt(mode)
+	if err != nil {
+		return "", fmt.Errorf("build action guide: %w", err)
+	}
+
 	parts := []string{
 		"Translate the natural request into one executable HaruhiDB protocol envelope.",
 		fmt.Sprintf("request_id: %s", in.RequestID),
 		fmt.Sprintf("mode: %s", mode),
+		fmt.Sprintf("version: %s", action.DefaultVersion),
 		"guideline: prefer minimal actions; avoid unrelated actions when possible.",
-		"version_guideline: always set version to v3.",
 		"batch_guideline: if the request clearly contains multiple ordered actions, batch is recommended.",
-		"args_rule: do not copy prompt fields (request_id/mode/catalog_snapshot_json/guidelines) into args.",
+		"args_rule: do not copy prompt fields (request_id/mode/catalog_snapshot_json/guidelines/action_guide) into args.",
+		"forbidden: SQL, markdown code fences, explanation text, unsupported actions, DECIMAL values, NULL values.",
+		"output_contract: output exactly one JSON object with keys version/request_id/mode/action/args.",
+		actionGuide,
 		fmt.Sprintf("natural_request: %s", in.NaturalRequest),
 		fmt.Sprintf("catalog_snapshot_json: %s", string(catalogJSON)),
 	}
@@ -357,6 +349,43 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 	}
 
 	return strings.Join(parts, "\n"), nil
+}
+
+func buildActionGuideForPrompt(mode action.Mode) (string, error) {
+	categoryOrder := []action.ActionCategory{
+		action.ActionCategoryMetadata,
+		action.ActionCategoryRead,
+		action.ActionCategoryWrite,
+		action.ActionCategoryDDL,
+		action.ActionCategoryBatch,
+	}
+	specByCategory := action.PublicActionSpecsByCategoryForMode(mode)
+	lines := []string{"action_guide:"}
+
+	for _, category := range categoryOrder {
+		specs := specByCategory[string(category)]
+		if len(specs) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("[%s]", category))
+		for _, spec := range specs {
+			schemaJSON, err := json.Marshal(spec.ArgsSchema)
+			if err != nil {
+				return "", err
+			}
+			lines = append(lines, fmt.Sprintf("- action=%s form_action=%t", spec.Name, spec.IsFormAction))
+			lines = append(lines, fmt.Sprintf("  args_schema=%s", string(schemaJSON)))
+			for i := 0; i < len(spec.Examples) && i < 2; i++ {
+				exampleJSON, marshalErr := json.Marshal(spec.Examples[i])
+				if marshalErr != nil {
+					return "", marshalErr
+				}
+				lines = append(lines, fmt.Sprintf("  example_%d=%s", i+1, string(exampleJSON)))
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n"), nil
 }
 func extractJSONPayload(content string) ([]byte, error) {
 	trimmed := strings.TrimSpace(content)

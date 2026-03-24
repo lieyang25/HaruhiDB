@@ -54,6 +54,7 @@ type ActionService struct {
 
 type NLRequest struct {
 	RequestID string      `json:"request_id"`
+	DBPath    string      `json:"db_path,omitempty"`
 	Input     string      `json:"input"`
 	Mode      action.Mode `json:"mode,omitempty"`
 }
@@ -185,16 +186,19 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 
 	startedAt := time.Now()
 	var (
-		lastErr error
-		hint    string
-		model   string
-		meta    map[string]any
+		lastErr     error
+		hint        string
+		model       string
+		meta        map[string]any
+		attemptsRun int
 	)
+	const maxTranslateAttempts = 3
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < maxTranslateAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		attemptsRun = attempt + 1
 
 		output, translateErr := s.translator.Translate(ctx, nl.TranslateInput{
 			RequestID:      result.RequestID,
@@ -215,36 +219,33 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 			meta = output.Meta
 		}
 
-		candidateForValidation := output.Candidate
-		if normalized, ok := normalizeCandidateEnvelope(output.Candidate, result.RequestID, req.Mode); ok {
-			candidateForValidation = normalized
-		}
-
-		candidateMap, candidateRaw, validateErr := s.validateCandidateEnvelope(candidateForValidation)
-		var semanticErr error
-		if validateErr == nil {
-			semanticErr = enforceSemanticExpectation(req.Input, candidateMap)
-			if semanticErr != nil && attempt == 0 {
-				lastErr = semanticErr
-				hint = semanticErr.Error()
-				continue
-			}
-		}
+		candidateMap, candidateRaw, validateErr := s.validateCandidateEnvelope(output.Candidate)
 		if validateErr != nil {
 			lastErr = validateErr
-			hint = validateErr.Error()
+			if attempt < maxTranslateAttempts-1 {
+				hint = buildTranslationRepairHint(req.Mode, output.Candidate, validateErr)
+				continue
+			}
+			break
+		}
+
+		semanticErr := enforceSemanticExpectation(req.Input, candidateMap)
+		if semanticErr != nil {
+			lastErr = semanticErr
+			if attempt < maxTranslateAttempts-1 {
+				hint = buildTranslationRepairHint(req.Mode, output.Candidate, semanticErr)
+				continue
+			}
 			continue
 		}
 
 		result.Valid = true
 		result.CandidateEnvelope = candidateMap
 		result.CandidateRaw = candidateRaw
-		if semanticErr != nil {
-			result.Meta["semantic_warning"] = semanticErr.Error()
-		}
 		if model != "" {
 			result.Meta["model"] = model
 		}
+		result.Meta["attempts"] = attemptsRun
 		result.Meta["latency_ms"] = time.Since(startedAt).Milliseconds()
 		mergeMeta(result.Meta, meta)
 		s.logf("translate_nl request_id=%s valid=true model=%q", result.RequestID, result.Meta["model"])
@@ -261,6 +262,7 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 	if model != "" {
 		result.Meta["model"] = model
 	}
+	result.Meta["attempts"] = attemptsRun
 	result.Meta["latency_ms"] = time.Since(startedAt).Milliseconds()
 	mergeMeta(result.Meta, meta)
 	s.logf("translate_nl request_id=%s valid=false error=%q", result.RequestID, result.Error.Message)
@@ -819,6 +821,41 @@ func mergeMeta(target map[string]any, incoming map[string]any) {
 		}
 		target[key] = value
 	}
+}
+
+func buildTranslationRepairHint(mode action.Mode, candidate []byte, err error) string {
+	hint := map[string]any{
+		"error_code":        ErrorCodeTranslation,
+		"reason":            err.Error(),
+		"supported_actions": action.PublicActionNamesForMode(mode),
+		"output_rules": []string{
+			"must output a single JSON object",
+			"must only use supported_actions",
+			"must include top-level keys: version, request_id, mode, action, args",
+			"must not output SQL, markdown, or explanation text",
+		},
+	}
+
+	var typed *action.Error
+	if errors.As(err, &typed) {
+		hint["error_code"] = string(typed.Code)
+		hint["reason"] = typed.Message
+	}
+
+	if env, decodeErr := action.Decode(candidate); decodeErr == nil {
+		if spec, ok := action.ActionSpecByName(env.Action); ok {
+			hint["expected_args_schema"] = spec.ArgsSchema
+			if len(spec.Examples) > 0 {
+				hint["example"] = spec.Examples[0]
+			}
+		}
+	}
+
+	raw, marshalErr := json.Marshal(hint)
+	if marshalErr != nil {
+		return err.Error()
+	}
+	return string(raw)
 }
 
 func (s *ActionService) logf(format string, args ...any) {

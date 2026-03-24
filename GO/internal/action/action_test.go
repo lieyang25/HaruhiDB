@@ -322,6 +322,23 @@ func TestDecodeAndValidateV3UnifiedActions(t *testing.T) {
 		}
 	})
 
+	t.Run("v3 create_table rejects DECIMAL column", func(t *testing.T) {
+		_, err := DecodeAndValidate([]byte(`{
+			"version":"v3",
+			"request_id":"req-v3-create-table-decimal",
+			"mode":"read_write",
+			"action":"create_table",
+			"args":{
+				"table":"books",
+				"columns":[
+					{"name":"id","type":"INTEGER","nullable":false},
+					{"name":"price","type":"DECIMAL","nullable":false}
+				]
+			}
+		}`), catalog)
+		requireProtocolErrorCode(t, err, CodeUnsupported)
+	})
+
 	t.Run("v3 read_only rejects ddl write action", func(t *testing.T) {
 		_, err := DecodeAndValidate([]byte(`{
 			"version":"v3",
@@ -517,7 +534,7 @@ func TestDecodeAndValidateValueFailures(t *testing.T) {
 			"action":"insert_row",
 			"args":{"table":"users","values":{"id":null,"name":"alice"}}
 		}`), catalog)
-		requireProtocolErrorCode(t, err, CodeConstraint)
+		requireProtocolErrorCode(t, err, CodeUnsupported)
 	})
 
 	t.Run("insert type mismatch", func(t *testing.T) {

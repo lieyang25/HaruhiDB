@@ -259,6 +259,10 @@ func TestTranslateNLStrictSequenceFailsWhenBatchDoesNotMatch(t *testing.T) {
 				Candidate: []byte(`{"version":"v1","request_id":"req-strict-fail","mode":"read_write","action":"batch","args":{"requests":[{"action":"insert_row","args":{"table":"student","values":{"id":303,"name":"instruct_test"}}},{"action":"delete_by_primary_int","args":{"table":"student","key":303}}]}}`),
 				Model:     "test-model",
 			},
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-strict-fail","mode":"read_write","action":"batch","args":{"requests":[{"action":"insert_row","args":{"table":"student","values":{"id":303,"name":"instruct_test"}}},{"action":"delete_by_primary_int","args":{"table":"student","key":303}}]}}`),
+				Model:     "test-model",
+			},
 		},
 	}
 
@@ -280,28 +284,40 @@ func TestTranslateNLStrictSequenceFailsWhenBatchDoesNotMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateNL failed: %v", err)
 	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation with relaxed semantic guard, got %+v", result)
+	if result.Valid {
+		t.Fatalf("expected invalid translation when semantic guard keeps failing, got %+v", result)
 	}
-	if result.Error != nil {
-		t.Fatalf("expected no terminal error, got %#v", result.Error)
+	if result.Error == nil || result.Error.Code != ErrorCodeTranslation {
+		t.Fatalf("expected translation error, got %#v", result.Error)
 	}
-	warning, ok := result.Meta["semantic_warning"].(string)
-	if !ok || !strings.Contains(warning, "semantic guard") {
-		t.Fatalf("expected semantic warning in meta, got %#v", result.Meta["semantic_warning"])
+	if !strings.Contains(result.Error.Message, "semantic guard") {
+		t.Fatalf("expected semantic guard error message, got %q", result.Error.Message)
 	}
-	if len(translator.inputs) != 2 {
-		t.Fatalf("expected 2 attempts, got %d", len(translator.inputs))
+	if len(translator.inputs) != 3 {
+		t.Fatalf("expected 3 attempts, got %d", len(translator.inputs))
+	}
+	if translator.inputs[1].RepairHint == "" || translator.inputs[2].RepairHint == "" {
+		t.Fatalf("expected retries to carry structured repair hints")
 	}
 }
-func TestTranslateNLAutoNormalizesCommonEnvelopeFields(t *testing.T) {
+
+func TestTranslateNLValidationFailureRetriesUntilLimit(t *testing.T) {
 	db := openServiceTestDB(t)
 	defer closeServiceTestDB(t, db)
+	createUsersTable(t, db)
 
 	translator := &scriptedTranslator{
 		outputs: []nl.TranslateOutput{
 			{
-				Candidate: []byte(`{"action":"list_tables","args":[]}`),
+				Candidate: []byte(`{"version":"v1","request_id":"req-validate","mode":"read_only","action":"table_exists","args":{}}`),
+				Model:     "qwen2.5-coder:0.5b",
+			},
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-validate","mode":"read_only","action":"table_exists","args":{}}`),
+				Model:     "qwen2.5-coder:0.5b",
+			},
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-validate","mode":"read_only","action":"table_exists","args":{}}`),
 				Model:     "qwen2.5-coder:0.5b",
 			},
 		},
@@ -318,226 +334,47 @@ func TestTranslateNLAutoNormalizesCommonEnvelopeFields(t *testing.T) {
 	}
 
 	result, err := service.TranslateNL(context.Background(), NLRequest{
-		RequestID: "req-normalize",
+		RequestID: "req-validate",
 		Input:     "列出所有表",
 		Mode:      action.ModeReadOnly,
 	})
 	if err != nil {
 		t.Fatalf("TranslateNL failed: %v", err)
 	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation, got %+v", result)
+	if result.Valid {
+		t.Fatalf("expected invalid translation, got %+v", result)
 	}
-	if len(translator.inputs) != 1 {
-		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
+	if result.Error == nil || result.Error.Code != ErrorCodeTranslation {
+		t.Fatalf("expected translation error, got %#v", result.Error)
 	}
-	if got := result.CandidateEnvelope["request_id"]; got != "req-normalize" {
-		t.Fatalf("unexpected request_id in normalized candidate: %#v", got)
+	if !strings.Contains(result.Error.Message, "table must not be empty") {
+		t.Fatalf("unexpected terminal message: %q", result.Error.Message)
 	}
-	if got := result.CandidateEnvelope["mode"]; got != string(action.ModeReadOnly) {
-		t.Fatalf("unexpected mode in normalized candidate: %#v", got)
+	if len(translator.inputs) != 3 {
+		t.Fatalf("expected 3 attempts, got %d", len(translator.inputs))
 	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
-		t.Fatalf("unexpected version in normalized candidate: %#v", got)
-	}
-	args, ok := result.CandidateEnvelope["args"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected normalized args object, got %#v", result.CandidateEnvelope["args"])
-	}
-	if len(args) != 0 {
-		t.Fatalf("expected empty args object, got %#v", args)
+	if translator.inputs[1].RepairHint == "" || translator.inputs[2].RepairHint == "" {
+		t.Fatalf("expected retries to carry structured repair hints")
 	}
 }
 
-func TestTranslateNLAutoPromotesVersionForV2OnlyAction(t *testing.T) {
+func TestTranslateNLDoesNotAutoNormalizeCandidateEnvelope(t *testing.T) {
 	db := openServiceTestDB(t)
 	defer closeServiceTestDB(t, db)
+	createUsersTable(t, db)
 
 	translator := &scriptedTranslator{
 		outputs: []nl.TranslateOutput{
 			{
-				Candidate: []byte(`{"action":"table_create","args":{"table":"books","columns":[{"name":"id","type":"INTEGER","nullable":false}]}}`),
-				Model:     "qwen2.5-coder:3b",
+				Candidate: []byte(`{"action":"list_tables","args":[]}`),
+				Model:     "qwen2.5-coder:0.5b",
 			},
-		},
-	}
-
-	service, err := NewActionService(Config{
-		DB:             db,
-		AllowWrite:     true,
-		RequestTimeout: 5 * time.Second,
-		Translator:     translator,
-	})
-	if err != nil {
-		t.Fatalf("NewActionService failed: %v", err)
-	}
-
-	result, err := service.TranslateNL(context.Background(), NLRequest{
-		RequestID: "req-v2-normalize-single",
-		Input:     "创建 books 表",
-		Mode:      action.ModeReadWrite,
-	})
-	if err != nil {
-		t.Fatalf("TranslateNL failed: %v", err)
-	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation, got %+v", result)
-	}
-	if len(translator.inputs) != 1 {
-		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
-	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
-		t.Fatalf("expected version %q, got %#v", action.VersionV3, got)
-	}
-	if got := result.CandidateEnvelope["action"]; got != string(action.ActionCreateTable) {
-		t.Fatalf("unexpected canonical action: %#v", got)
-	}
-}
-
-func TestTranslateNLAutoPromotesVersionForBatchContainingV2OnlyAction(t *testing.T) {
-	db := openServiceTestDB(t)
-	defer closeServiceTestDB(t, db)
-
-	translator := &scriptedTranslator{
-		outputs: []nl.TranslateOutput{
 			{
-				Candidate: []byte(`{"action":"batch","args":{"requests":[{"action":"table_create","args":{"table":"books","columns":[{"name":"id","type":"INTEGER","nullable":false}],"extra":1}}],"extra":"x"}}`),
-				Model:     "qwen2.5-coder:3b",
+				Candidate: []byte(`{"action":"list_tables","args":[]}`),
+				Model:     "qwen2.5-coder:0.5b",
 			},
-		},
-	}
-
-	service, err := NewActionService(Config{
-		DB:             db,
-		AllowWrite:     true,
-		RequestTimeout: 5 * time.Second,
-		Translator:     translator,
-	})
-	if err != nil {
-		t.Fatalf("NewActionService failed: %v", err)
-	}
-
-	result, err := service.TranslateNL(context.Background(), NLRequest{
-		RequestID: "req-v2-normalize-batch",
-		Input:     "批量创建 books 表",
-		Mode:      action.ModeReadWrite,
-	})
-	if err != nil {
-		t.Fatalf("TranslateNL failed: %v", err)
-	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation, got %+v", result)
-	}
-	if len(translator.inputs) != 1 {
-		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
-	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
-		t.Fatalf("expected version %q for batch with v2-only sub action, got %#v", action.VersionV3, got)
-	}
-
-	args, ok := result.CandidateEnvelope["args"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected args object, got %#v", result.CandidateEnvelope["args"])
-	}
-	requests, ok := args["requests"].([]any)
-	if !ok || len(requests) != 1 {
-		t.Fatalf("unexpected batch requests payload: %#v", args["requests"])
-	}
-	first, ok := requests[0].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected batch item type: %T", requests[0])
-	}
-	if got := first["action"]; got != string(action.ActionCreateTable) {
-		t.Fatalf("unexpected normalized batch sub action: %#v", got)
-	}
-}
-
-func TestTranslateNLAutoPromotesVersionWhenModelReturnsV1ForV2OnlyAction(t *testing.T) {
-	db := openServiceTestDB(t)
-	defer closeServiceTestDB(t, db)
-
-	translator := &scriptedTranslator{
-		outputs: []nl.TranslateOutput{
 			{
-				Candidate: []byte(`{"version":"v1","request_id":"req-v1-v2-single","mode":"read_write","action":"create_table","args":{"table":"roles","columns":[{"name":"id","type":"INTEGER","nullable":false}]}}`),
-				Model:     "qwen2.5-coder:3b",
-			},
-		},
-	}
-
-	service, err := NewActionService(Config{
-		DB:             db,
-		AllowWrite:     true,
-		RequestTimeout: 5 * time.Second,
-		Translator:     translator,
-	})
-	if err != nil {
-		t.Fatalf("NewActionService failed: %v", err)
-	}
-
-	result, err := service.TranslateNL(context.Background(), NLRequest{
-		RequestID: "req-v1-v2-single",
-		Input:     "创建 roles 表",
-		Mode:      action.ModeReadWrite,
-	})
-	if err != nil {
-		t.Fatalf("TranslateNL failed: %v", err)
-	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation, got %+v", result)
-	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
-		t.Fatalf("expected version %q, got %#v", action.VersionV3, got)
-	}
-}
-
-func TestTranslateNLAutoPromotesVersionWhenBatchContainsV2OnlyActionUnderV1(t *testing.T) {
-	db := openServiceTestDB(t)
-	defer closeServiceTestDB(t, db)
-
-	translator := &scriptedTranslator{
-		outputs: []nl.TranslateOutput{
-			{
-				Candidate: []byte(`{"version":"v1","request_id":"req-v1-v2-batch","mode":"read_write","action":"batch","args":{"requests":[{"action":"create_table","args":{"table":"roles","columns":[{"name":"id","type":"INTEGER","nullable":false}]}}]}}`),
-				Model:     "qwen2.5-coder:3b",
-			},
-		},
-	}
-
-	service, err := NewActionService(Config{
-		DB:             db,
-		AllowWrite:     true,
-		RequestTimeout: 5 * time.Second,
-		Translator:     translator,
-	})
-	if err != nil {
-		t.Fatalf("NewActionService failed: %v", err)
-	}
-
-	result, err := service.TranslateNL(context.Background(), NLRequest{
-		RequestID: "req-v1-v2-batch",
-		Input:     "批量创建 roles 表",
-		Mode:      action.ModeReadWrite,
-	})
-	if err != nil {
-		t.Fatalf("TranslateNL failed: %v", err)
-	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation, got %+v", result)
-	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
-		t.Fatalf("expected version %q, got %#v", action.VersionV3, got)
-	}
-}
-
-func TestTranslateNLDropsUnknownTopLevelFields(t *testing.T) {
-	db := openServiceTestDB(t)
-	defer closeServiceTestDB(t, db)
-
-	translator := &scriptedTranslator{
-		outputs: []nl.TranslateOutput{
-			{
-				Candidate: []byte(`{"version":"v1","request_id":"req-extra","mode":"read_only","action":"list_tables","args":{},"previous_output_error":"x"}`),
+				Candidate: []byte(`{"action":"list_tables","args":[]}`),
 				Model:     "qwen2.5-coder:0.5b",
 			},
 		},
@@ -561,60 +398,20 @@ func TestTranslateNLDropsUnknownTopLevelFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranslateNL failed: %v", err)
 	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation after dropping unknown fields, got %+v", result)
+	if result.Valid {
+		t.Fatalf("expected invalid translation without local normalization, got %+v", result)
 	}
-	if len(translator.inputs) != 1 {
-		t.Fatalf("expected no repair retry after dropping unknown fields, got %d calls", len(translator.inputs))
+	if result.Error == nil || result.Error.Code != ErrorCodeTranslation {
+		t.Fatalf("expected translation error, got %#v", result.Error)
 	}
-	if _, exists := result.CandidateEnvelope["previous_output_error"]; exists {
-		t.Fatalf("unexpected unknown field left in candidate envelope: %#v", result.CandidateEnvelope)
+	if !strings.Contains(result.Error.Message, "version must be one of") {
+		t.Fatalf("unexpected terminal message: %q", result.Error.Message)
 	}
-}
-
-func TestTranslateNLDropsUnknownArgsFieldsForListTables(t *testing.T) {
-	db := openServiceTestDB(t)
-	defer closeServiceTestDB(t, db)
-
-	translator := &scriptedTranslator{
-		outputs: []nl.TranslateOutput{
-			{
-				Candidate: []byte(`{"version":"v1","request_id":"req-args","mode":"read_only","action":"list_tables","args":{"catalog_snapshot_json":"...","x":1}}`),
-				Model:     "qwen2.5-coder:0.5b",
-			},
-		},
+	if len(translator.inputs) != 3 {
+		t.Fatalf("expected 3 attempts, got %d", len(translator.inputs))
 	}
-
-	service, err := NewActionService(Config{
-		DB:             db,
-		AllowWrite:     false,
-		RequestTimeout: 5 * time.Second,
-		Translator:     translator,
-	})
-	if err != nil {
-		t.Fatalf("NewActionService failed: %v", err)
-	}
-
-	result, err := service.TranslateNL(context.Background(), NLRequest{
-		RequestID: "req-args",
-		Input:     "列出所有表",
-		Mode:      action.ModeReadOnly,
-	})
-	if err != nil {
-		t.Fatalf("TranslateNL failed: %v", err)
-	}
-	if !result.Valid {
-		t.Fatalf("expected valid translation after args cleanup, got %+v", result)
-	}
-	if len(translator.inputs) != 1 {
-		t.Fatalf("expected no repair retry after args cleanup, got %d calls", len(translator.inputs))
-	}
-	args, ok := result.CandidateEnvelope["args"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected args object, got %#v", result.CandidateEnvelope["args"])
-	}
-	if len(args) != 0 {
-		t.Fatalf("expected list_tables args to be empty object, got %#v", args)
+	if translator.inputs[1].RepairHint == "" || translator.inputs[2].RepairHint == "" {
+		t.Fatalf("expected retries to carry structured repair hints")
 	}
 }
 

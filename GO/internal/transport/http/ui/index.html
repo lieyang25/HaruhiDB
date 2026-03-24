@@ -12,8 +12,73 @@
     <header class="hero">
       <p class="eyebrow">HaruhiDB</p>
       <h1>Web Console</h1>
-      <p class="sub">把自然语言翻译成 Action，再选择执行。先预览，后落库。</p>
+      <p class="sub">支持切库、快捷动作分流与严格翻译链路。先预览，后落库。</p>
     </header>
+
+    <section class="panel db-panel">
+      <h2>数据库上下文</h2>
+      <div class="row">
+        <label for="dbPathInput">数据库路径</label>
+        <div class="inline-actions">
+          <input id="dbPathInput" type="text" placeholder="/abs/path/to/database.db">
+          <button id="switchDbBtn" type="button">切换数据库</button>
+        </div>
+      </div>
+      <div class="row">
+        <label for="recentDbSelect">最近使用</label>
+        <div class="inline-actions">
+          <select id="recentDbSelect"></select>
+          <button id="useRecentBtn" class="ghost" type="button">使用选中路径</button>
+        </div>
+      </div>
+      <p id="dbInfo" class="db-info">当前数据库: (未连接)</p>
+    </section>
+
+    <section class="panel quick-panel">
+      <h2>快捷动作面板</h2>
+      <p id="capabilitiesInfo" class="subtle">加载能力中...</p>
+
+      <div class="quick-grid">
+        <div class="quick-card">
+          <h3>list_tables</h3>
+          <button id="qaListTablesBtn" type="button">执行 list_tables</button>
+        </div>
+
+        <div class="quick-card">
+          <h3>describe_table</h3>
+          <div class="row">
+            <label for="qaDescribeTable">表名</label>
+            <select id="qaDescribeTable"></select>
+          </div>
+          <button id="qaDescribeBtn" type="button">执行 describe_table</button>
+        </div>
+
+        <div class="quick-card">
+          <h3>drop_table</h3>
+          <div class="row">
+            <label for="qaDropTable">表名</label>
+            <select id="qaDropTable"></select>
+          </div>
+          <button id="qaDropBtn" class="danger" type="button">执行 drop_table</button>
+        </div>
+      </div>
+
+      <div class="quick-create">
+        <h3>create_table</h3>
+        <div class="row">
+          <label for="qaCreateTableName">表名</label>
+          <input id="qaCreateTableName" type="text" placeholder="例如 users">
+        </div>
+        <div class="row">
+          <label>列定义</label>
+          <div id="qaColumns" class="columns"></div>
+          <div class="inline-actions">
+            <button id="qaAddColumnBtn" class="ghost" type="button">新增列</button>
+            <button id="qaCreateBtn" type="button">执行 create_table</button>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section class="panel input-panel">
       <div class="row">
@@ -31,7 +96,7 @@
 
       <div class="row text-row">
         <label for="nlInput">Natural Language</label>
-        <textarea id="nlInput" rows="8" spellcheck="false">请完成这个四步流程（可直接用 batch）：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。除非必要，不要添加无关动作。</textarea>
+        <textarea id="nlInput" rows="8" spellcheck="false">请列出当前数据库中的所有表。</textarea>
       </div>
 
       <div class="actions">
@@ -63,4 +128,3 @@
   <script src="/ui/app.js"></script>
 </body>
 </html>
-

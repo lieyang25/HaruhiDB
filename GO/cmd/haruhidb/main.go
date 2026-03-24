@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"haruhidb-go/haruhidb"
 	"haruhidb-go/internal/app"
 	"haruhidb-go/internal/nl"
 	transporthttp "haruhidb-go/internal/transport/http"
@@ -125,13 +124,13 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 		opts.ollamaBaseURL = defaultOllamaBaseURL
 	}
 
-	service, cleanup, err := buildService(opts)
+	runtimeManager, cleanup, err := buildRuntimeManager(opts)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	handler := transporthttp.NewHandler(service, transporthttp.Config{
+	handler := transporthttp.NewHandler(runtimeManager, transporthttp.Config{
 		Logger: log.New(stderr, "http ", log.LstdFlags),
 	})
 
@@ -140,35 +139,27 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	return http.ListenAndServe(opts.listenAddr, handler)
 }
 
-func buildService(opts serveOptions) (*app.ActionService, func(), error) {
-	db, err := haruhidb.Open(opts.dbPath, haruhidb.OpenOptions{})
-	if err != nil {
-		return nil, nil, err
-	}
-
+func buildRuntimeManager(opts serveOptions) (*app.RuntimeManager, func(), error) {
 	translator, err := translatorFactory(opts)
 	if err != nil {
-		_ = db.Close()
 		return nil, nil, err
 	}
 	if translator == nil {
-		_ = db.Close()
 		return nil, nil, errors.New("ollama translator is required")
 	}
 
-	service, err := app.NewActionService(app.Config{
-		DB:             db,
+	runtimeManager, err := app.NewRuntimeManager(app.RuntimeManagerConfig{
+		DefaultDBPath:  opts.dbPath,
 		AllowWrite:     opts.allowWrite,
 		RequestTimeout: opts.timeout,
 		Translator:     translator,
 	})
 	if err != nil {
-		_ = db.Close()
 		return nil, nil, err
 	}
 
-	return service, func() {
-		_ = db.Close()
+	return runtimeManager, func() {
+		_ = runtimeManager.Close()
 	}, nil
 }
 

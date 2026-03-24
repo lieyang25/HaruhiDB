@@ -290,6 +290,9 @@ func validateCreateTableArgs(raw rawCreateTableArgs, catalog CatalogReader) (Cre
 		if columnType == haruhidb.TypeInvalid {
 			return CreateTableArgs{}, errorf(CodeInvalidRequest, "columns[%d].type %q is not supported", i, typeName)
 		}
+		if columnType == haruhidb.TypeDecimal {
+			return CreateTableArgs{}, errorf(CodeUnsupported, "columns[%d].type DECIMAL is not supported in public action protocol", i)
+		}
 
 		length := uint32(0)
 		if columnType == haruhidb.TypeVarchar {
@@ -448,7 +451,7 @@ func validateUpdateValues(columns []haruhidb.ColumnInfo, key int32, values map[s
 
 func normalizeValueForColumn(column haruhidb.ColumnInfo, value any) (any, haruhidb.Value, error) {
 	if value == nil {
-		return nil, haruhidb.Value{}, errorf(CodeConstraint, "NULL values are not supported")
+		return nil, haruhidb.Value{}, errorf(CodeUnsupported, "NULL values are not supported in public action protocol")
 	}
 
 	switch column.Type {

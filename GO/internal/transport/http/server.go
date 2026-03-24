@@ -23,7 +23,11 @@ type Config struct {
 	Logger *log.Logger
 }
 
-func NewHandler(service *app.ActionService, cfg Config) http.Handler {
+func NewHandler(runtimeManager *app.RuntimeManager, cfg Config) http.Handler {
+	if runtimeManager == nil {
+		panic("runtime manager must not be nil")
+	}
+
 	uiFileServer, uiErr := buildUIFileServer()
 	if uiErr != nil {
 		if cfg.Logger != nil {
@@ -109,13 +113,39 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 			logRequest(cfg.Logger, r, "", http.StatusBadRequest, start)
 			return
 		}
-		requestID := decodeRequestID(raw)
+		dbPath, envelopeRaw, extractErr := extractActionEnvelope(raw)
+		if extractErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]any{
+					"code":    string(action.CodeInvalidRequest),
+					"message": extractErr.Error(),
+				},
+			})
+			logRequest(cfg.Logger, r, "", http.StatusBadRequest, start)
+			return
+		}
 
-		resp, execErr := service.ExecuteJSON(r.Context(), raw)
+		requestID := decodeRequestID(envelopeRaw)
+		service, resolvedDBPath, resolveErr := runtimeManager.Resolve(dbPath)
+		if resolveErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]any{
+					"code":    string(action.CodeInvalidRequest),
+					"message": resolveErr.Error(),
+				},
+			})
+			logRequest(cfg.Logger, r, requestID, http.StatusBadRequest, start)
+			return
+		}
+
+		resp, execErr := service.ExecuteJSON(r.Context(), envelopeRaw)
 		if execErr != nil {
 			writeSystemError(w, execErr)
 			logRequest(cfg.Logger, r, requestID, systemErrorStatus(execErr), start)
 			return
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("action_request request_id=%s db_path=%q", requestID, resolvedDBPath)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -155,6 +185,19 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 			return
 		}
 
+		service, resolvedDBPath, resolveErr := runtimeManager.Resolve(req.DBPath)
+		if resolveErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]any{
+					"code":    string(action.CodeInvalidRequest),
+					"message": resolveErr.Error(),
+				},
+			})
+			logRequest(cfg.Logger, r, req.RequestID, http.StatusBadRequest, start)
+			return
+		}
+		req.DBPath = resolvedDBPath
+
 		result, translateErr := service.TranslateNL(r.Context(), req)
 		if translateErr != nil {
 			writeSystemError(w, translateErr)
@@ -164,6 +207,50 @@ func NewHandler(service *app.ActionService, cfg Config) http.Handler {
 
 		writeJSON(w, http.StatusOK, result)
 		logRequest(cfg.Logger, r, result.RequestID, http.StatusOK, start)
+	})
+
+	mux.HandleFunc("/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			logRequest(cfg.Logger, r, "", http.StatusMethodNotAllowed, start)
+			return
+		}
+
+		dbPath := strings.TrimSpace(r.URL.Query().Get("db_path"))
+		service, resolvedDBPath, err := runtimeManager.Resolve(dbPath)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]any{
+					"code":    string(action.CodeInvalidRequest),
+					"message": err.Error(),
+				},
+			})
+			logRequest(cfg.Logger, r, "", http.StatusBadRequest, start)
+			return
+		}
+
+		tables, _ := listTablesForCapabilities(r.Context(), service)
+		payload := map[string]any{
+			"ok":              true,
+			"db_path":         resolvedDBPath,
+			"default_db_path": runtimeManager.DefaultDBPath(),
+			"protocol_version": action.DefaultVersion,
+			"actions":         action.PublicActionSpecs(),
+			"actions_by_mode": map[string]any{
+				string(action.ModeReadOnly): map[string]any{
+					"names":      action.PublicActionNamesForMode(action.ModeReadOnly),
+					"categories": action.PublicActionSpecsByCategoryForMode(action.ModeReadOnly),
+				},
+				string(action.ModeReadWrite): map[string]any{
+					"names":      action.PublicActionNamesForMode(action.ModeReadWrite),
+					"categories": action.PublicActionSpecsByCategoryForMode(action.ModeReadWrite),
+				},
+			},
+			"tables": tables,
+		}
+		writeJSON(w, http.StatusOK, payload)
+		logRequest(cfg.Logger, r, "", http.StatusOK, start)
 	})
 
 	return mux
@@ -243,6 +330,78 @@ func decodeRequestID(raw []byte) string {
 		return ""
 	}
 	return env.RequestID
+}
+
+func extractActionEnvelope(raw []byte) (dbPath string, envelopeRaw []byte, err error) {
+	var payload map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return "", nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return "", nil, errors.New("unexpected trailing JSON input")
+		}
+		return "", nil, err
+	}
+
+	rawDBPath, hasDBPath := payload["db_path"]
+	if !hasDBPath {
+		return "", raw, nil
+	}
+
+	var parsedDBPath string
+	if err := decodeStrictJSON(rawDBPath, &parsedDBPath); err != nil {
+		return "", nil, errors.New("db_path must be a JSON string")
+	}
+	delete(payload, "db_path")
+	if len(payload) == 0 {
+		return "", nil, errors.New("action envelope is required")
+	}
+
+	envelopeRaw, err = json.Marshal(payload)
+	if err != nil {
+		return "", nil, err
+	}
+	return strings.TrimSpace(parsedDBPath), envelopeRaw, nil
+}
+
+func listTablesForCapabilities(ctx context.Context, service *app.ActionService) ([]string, error) {
+	if service == nil {
+		return nil, errors.New("service is nil")
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"version":    action.DefaultVersion,
+		"request_id": "caps-list-tables",
+		"mode":       action.ModeReadOnly,
+		"action":     action.ActionListTables,
+		"args":       map[string]any{},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	respRaw, err := service.ExecuteJSON(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed struct {
+		Ok   bool `json:"ok"`
+		Data struct {
+			Tables []string `json:"tables"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respRaw, &parsed); err != nil {
+		return nil, err
+	}
+	if !parsed.Ok {
+		return nil, nil
+	}
+	return append([]string(nil), parsed.Data.Tables...), nil
 }
 
 func logRequest(logger *log.Logger, r *http.Request, requestID string, statusCode int, startedAt time.Time) {

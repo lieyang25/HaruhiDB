@@ -105,8 +105,14 @@ func ValidateEnvelope(envelope RequestEnvelope, catalog CatalogReader) (*Request
 	if !envelope.Action.Valid() {
 		return nil, errorf(CodeInvalidRequest, "unsupported action %q", envelope.Action)
 	}
+	if !IsPublicAction(envelope.Action) {
+		return nil, errorf(CodeInvalidRequest, "action %q is not publicly supported", envelope.Action)
+	}
 	if !ActionSupportedInVersion(envelope.Version, envelope.Action) {
 		return nil, errorf(CodeInvalidRequest, "action %q is not supported in version %q", envelope.Action, envelope.Version)
+	}
+	if !ActionSupportsMode(envelope.Action, envelope.Mode) {
+		return nil, errorf(CodeInvalidRequest, "action %q is not supported in mode %q", envelope.Action, envelope.Mode)
 	}
 	if envelope.Mode == ModeReadOnly && envelope.Action.IsWrite() {
 		return nil, errorf(CodeInvalidRequest, "action %q requires mode %q", envelope.Action, ModeReadWrite)
@@ -320,8 +326,14 @@ func validateBatchArgs(
 		if !item.Action.Valid() {
 			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action unsupported action %q", i, item.Action)
 		}
+		if !IsPublicAction(item.Action) {
+			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action %q is not publicly supported", i, item.Action)
+		}
 		if !ActionSupportedInVersion(envelope.Version, item.Action) {
 			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action %q is not supported in version %q", i, item.Action, envelope.Version)
+		}
+		if !ActionSupportsMode(item.Action, envelope.Mode) {
+			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action %q is not supported in mode %q", i, item.Action, envelope.Mode)
 		}
 		if item.Action == ActionBatch {
 			return BatchArgs{}, errorf(CodeInvalidRequest, "requests[%d].action %q is not supported", i, item.Action)

@@ -178,9 +178,8 @@ func TestOllamaSystemPromptContainsCurrentActionSet(t *testing.T) {
 
 	checks := []string{
 		"\"version\" should be \"v3\"",
-		"create_table",
-		"drop_index",
-		"batch",
+		"Action set, args schema, and examples are provided in USER prompt as \"action_guide\"",
+		"Only actions present in action_guide are allowed",
 		"batch is recommended",
 	}
 	for _, item := range checks {
@@ -200,8 +199,8 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build prompt failed: %v", err)
 	}
-	if !strings.Contains(readOnlyPrompt, "version_guideline") {
-		t.Fatalf("expected version_guideline in prompt: %s", readOnlyPrompt)
+	if !strings.Contains(readOnlyPrompt, "version: v3") {
+		t.Fatalf("expected protocol version hint in prompt: %s", readOnlyPrompt)
 	}
 	if !strings.Contains(readOnlyPrompt, "batch_guideline") {
 		t.Fatalf("expected batch_guideline in prompt: %s", readOnlyPrompt)
@@ -211,6 +210,12 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 	}
 	if !strings.Contains(readOnlyPrompt, "mode: read_only") {
 		t.Fatalf("expected prompt to include mode read_only: %s", readOnlyPrompt)
+	}
+	if !strings.Contains(readOnlyPrompt, "action=list_tables") || !strings.Contains(readOnlyPrompt, "action=describe_table") {
+		t.Fatalf("expected read-only actions in prompt: %s", readOnlyPrompt)
+	}
+	if strings.Contains(readOnlyPrompt, "action=create_table") || strings.Contains(readOnlyPrompt, "action=insert_row") {
+		t.Fatalf("read-only prompt must not include write actions: %s", readOnlyPrompt)
 	}
 
 	readWritePrompt, err := buildOllamaUserPrompt(TranslateInput{
@@ -227,6 +232,9 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 	}
 	if !strings.Contains(readWritePrompt, "guideline: prefer minimal actions") {
 		t.Fatalf("expected relaxed action guideline in prompt: %s", readWritePrompt)
+	}
+	if !strings.Contains(readWritePrompt, "action=create_table") || !strings.Contains(readWritePrompt, "action=drop_table") {
+		t.Fatalf("expected write actions in read-write prompt: %s", readWritePrompt)
 	}
 }
 
