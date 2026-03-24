@@ -22,9 +22,9 @@ cd /path/to/HaruhiDB
 
 脚本会自动：
 
-1. 检查依赖（`go`、`ollama`；缺少 C API 库时额外需要 `cmake`）
+1. 检查依赖（`go`；若 `HARU_BASE_URL` 指向本机 Ollama，则还需要 `ollama`；缺少 C API 库时额外需要 `cmake`）
 2. 确保 Ollama 服务可用
-3. 拉取模型（默认 `qwen2.5-coder:3b`）
+3. 拉取模型（仅本机 Ollama；默认 `qwen2.5-coder:3b`）
 4. 确保 C API 动态库存在（缺失时自动构建）
 5. 启动 Go 服务并打开 `http://127.0.0.1:8080/ui`
 
@@ -49,6 +49,15 @@ cd /path/to/HaruhiDB
 ```bash
 export HARU_MODEL='qwen2.5-coder:3b'
 export HARU_LISTEN=':9090'
+export HARU_OPEN_BROWSER='false'
+./scripts/start_web_one_click.sh
+```
+
+树莓派远程 Ollama 示例：
+
+```bash
+export HARU_BASE_URL='http://192.168.137.236:11434'
+export HARU_MODEL='qwen2.5-coder:0.5b'
 export HARU_OPEN_BROWSER='false'
 ./scripts/start_web_one_click.sh
 ```

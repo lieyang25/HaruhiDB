@@ -3,6 +3,7 @@
 当前 `docs/configs` 只保留两类配置文件：
 
 - `serve-web-ollama.json`：可直接用于 Web 服务启动的推荐配置
+- `serve-web-ollama-rpi.json`：本地服务 + 树莓派 Ollama 的示例配置
 - `config-template.json`：最小模板，适合复制后按环境修改
 
 ## 配置结构
@@ -42,4 +43,13 @@ go run ./cmd/haruhidb serve \
 ```bash
 export HARUHIDB_CONFIG=../docs/configs/serve-web-ollama.json
 go run ./cmd/haruhidb serve
+```
+
+## 一键脚本使用指定配置
+
+`scripts/start_web_one_click.sh` 支持 `HARU_CONFIG` 覆盖默认配置文件：
+
+```bash
+cd /home/suzumiya/__code__/code/HaruhiDB
+HARU_CONFIG=docs/configs/serve-web-ollama-rpi.json ./scripts/start_web_one_click.sh
 ```

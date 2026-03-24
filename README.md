@@ -8,41 +8,25 @@
 
 ## 文档入口
 
-如果你只想找“该看哪篇文档”，先看总索引：
+如果你只想快速进入可用状态，先看：
 
-- [HaruhiDB 文档总入口](docs/README.md)
+- [一页上手与动作速查](docs/web-action-one-page-guide.md)
 
-按主题分组如下：
+完整索引见：
 
-### 1) 快速上手与运行
+- [HaruhiDB 文档中心（整合版）](docs/README.md)
 
-- [Go 使用指南（Web + 网络 + Ollama）](docs/go-usage-guide.md)：单入口 serve、网页/API 路径、配置与启动
-- [网页快速上手](docs/web-quickstart.md)：一键脚本启动 + 浏览器 UI
-- [Web 原理与信息流](docs/web-principle-and-dataflow.md)：网页架构、信息流、输出语义
-- [静态库与远程联动指南](docs/static-link-web-cli-and-remote-exec-guide.md)：Linux/macOS 静态库方案 + Web/serve 使用 + 远程联动
-- [Go 启动配置示例](docs/configs/README.md)：`--config` 与现成配置文件
-- [Go 配置参数总表](docs/config-parameter-reference.md)：所有配置键与 CLI 参数映射
-- [Linux 一键网页启动脚本](scripts/start_web_one_click.sh)：自动启动服务并打开网页
+常用文档：
 
-### 2) 协议与模型集成
+- [一页上手与动作速查](docs/web-action-one-page-guide.md)：启动流程 + 支持动作表 + 动作示例 + 常见报错
+- [Web 原理与信息流](docs/web-principle-and-dataflow.md)：网页架构与两段式执行
+- [错误经验汇总](docs/error-experience-playbook.md)：联调排错
+- [配置参数总表](docs/config-parameter-reference.md)：配置键与 CLI 参数映射
 
-- [Action 协议 v1](docs/action-protocol-v1.md)：字段约束、动作列表、batch 规则
-- [Go API 与动作覆盖矩阵](docs/go-api-action-capability-matrix.md)：完整 Go 能力 vs v1 暴露范围
-- [Action v1 功能演示](docs/action-v1-showcase-example.md)：请求/响应示例集合
-- [Action v2 功能演示](docs/action-v2-showcase-example.md)：含 create/drop table/index 的 v2 动作集示意
-- [Action v1 请求模板（JSON）](docs/action-v1-request-template.json)：最小请求模板
-- [Action v1 模型规范（JSON）](docs/action-v1-model-spec.json)：动作与参数的机器可读规范
+深入阅读：
 
-### 3) 代码阅读与架构
-
-- [Go 阅读指南（从最简单路径开始）](GO_READING_GUIDE.md)：Go 链路阅读顺序
-- [CXX 文档索引](CXX/docs/README.md)：C++ 架构文档总入口
-- [系统架构总览](CXX/docs/architecture_overview.md)：模块分层与职责
-- [运行与数据链路](CXX/docs/execution_and_dataflow.md)：从入口到执行路径
-- [持久化与恢复](CXX/docs/persistence_and_recovery.md)：WAL 与恢复流程
-- [数据库文件与 WAL 布局](CXX/docs/file_layout.md)：磁盘布局细节
-- [当前实现使用方法](CXX/docs/integration_guide.md)：集成方式与边界
-- [可运行示例](CXX/example/README.md)：可直接执行的示例
+- [Go 阅读指南（从最简单路径开始）](GO_READING_GUIDE.md)
+- [CXX 文档索引](CXX/docs/README.md)
 
 ## 项目当前定位
 
@@ -566,4 +550,3 @@ Go 外壳默认链接 `CXX/build/src/capi/libharuhidb_capi.so`。为了避免“
 3. 这一层向上层暴露的稳定入口是什么？
 
 只要这个骨架始终不丢，后面无论继续补 SQL、事务还是优化器，项目都还能沿着同一条主线演进，而不是再次散成一堆局部修补。
-

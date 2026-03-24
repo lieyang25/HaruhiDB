@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_DIR="${ROOT_DIR}/GO"
 CXX_DIR="${ROOT_DIR}/CXX"
 CXX_BUILD_DIR="${CXX_BUILD_DIR:-${ROOT_DIR}/CXX/build}"
-CONFIG_PATH="${ROOT_DIR}/docs/configs/serve-web-ollama.json"
+CONFIG_PATH="${HARU_CONFIG:-${ROOT_DIR}/docs/configs/serve-web-ollama.json}"
 
 MODEL="${HARU_MODEL:-qwen2.5-coder:3b}"
 BASE_URL="${HARU_BASE_URL:-http://127.0.0.1:11434}"
@@ -33,6 +33,24 @@ require_cmd() {
     echo "${name} is required but not found in PATH" >&2
     exit 1
   fi
+}
+
+is_local_ollama_url() {
+  local url="${1,,}"
+  [[ "${url}" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$) ]]
+}
+
+probe_ollama_tags() {
+  local tags_url="${BASE_URL%/}/api/tags"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS "${tags_url}" >/dev/null 2>&1
+    return
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- "${tags_url}" >/dev/null 2>&1
+    return
+  fi
+  return 1
 }
 
 is_enabled() {
@@ -67,12 +85,20 @@ ensure_db_path() {
 }
 
 require_cmd go
-require_cmd ollama
+if is_local_ollama_url "${BASE_URL}"; then
+  require_cmd ollama
+fi
 
 ensure_ollama_service() {
-  if command -v curl >/dev/null 2>&1 && curl -fsS "${BASE_URL}/api/tags" >/dev/null 2>&1; then
-    echo "[1/5] Ollama service is running"
+  if probe_ollama_tags; then
+    echo "[1/5] Ollama service is reachable: ${BASE_URL}"
     return
+  fi
+
+  if ! is_local_ollama_url "${BASE_URL}"; then
+    echo "remote Ollama is not reachable: ${BASE_URL}" >&2
+    echo "tip: verify network and run: curl ${BASE_URL%/}/api/tags" >&2
+    exit 1
   fi
 
   if ollama list >/dev/null 2>&1; then
@@ -83,6 +109,10 @@ ensure_ollama_service() {
   echo "[1/5] Starting Ollama service in background"
   nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
   sleep 2
+  if ! probe_ollama_tags; then
+    echo "failed to start local Ollama service at ${BASE_URL}" >&2
+    exit 1
+  fi
 }
 
 has_capi_artifacts() {
@@ -134,8 +164,12 @@ ensure_db_path
 write_db_hint
 ensure_ollama_service
 
-echo "[2/5] Pull model: ${MODEL}"
-ollama pull "${MODEL}"
+if is_local_ollama_url "${BASE_URL}"; then
+  echo "[2/5] Pull model: ${MODEL}"
+  ollama pull "${MODEL}"
+else
+  echo "[2/5] Skip local model pull (remote Ollama): ${BASE_URL}"
+fi
 
 ensure_capi
 
@@ -166,6 +200,7 @@ echo "        base_url=${BASE_URL}"
 echo "        stream=${STREAM}"
 echo "        allow_write=${ALLOW_WRITE}"
 echo "        capi_dir=${CAPI_DIR}"
+echo "        config=${CONFIG_PATH}"
 
 echo "        cgo_cflags=${CGO_CFLAGS}"
 echo "        cgo_ldflags=${CGO_LDFLAGS}"

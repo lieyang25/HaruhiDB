@@ -1,5 +1,9 @@
 # HaruhiDB Action Protocol v1
 
+> 先读建议：日常联调优先看 [一页上手与动作速查](web-action-one-page-guide.md)。
+> 
+> 历史命名说明：本文件名保留为 `v1`，但当前服务已统一按 `v3` 语义处理请求（`v1/v2/v3` 均可输入，内部会 canonicalize 到 `v3`）。
+
 HaruhiDB 动作协议 v1 采用“统一请求信封 + 动作枚举 + 强结构参数”模型。
 
 面向模型训练/提示词注入可直接使用：
@@ -15,51 +19,53 @@ HaruhiDB 动作协议 v1 采用“统一请求信封 + 动作枚举 + 强结构�
 - 行和值统一使用“列名 -> JSON 标量”对象，不暴露底层 `[]Value`
 - 响应统一使用 `ok / data / error / meta` 包装
 
-## 当前边界
+## 当前边界（以运行时为准）
 
-- v1 包含 10 个动作：
-  - `list_tables`
-  - `table_exists`
-  - `describe_table`
-  - `get_by_primary_int`
-  - `scan_all`
-  - `scan_primary_int_range`
-  - `insert_row`
-  - `update_by_primary_int`
-  - `delete_by_primary_int`
-  - `batch`
+当前实现可用动作（含 DDL）：
+
+| 动作 | 支持 mode | 备注 |
+| --- | --- | --- |
+| `list_tables` | `read_only`, `read_write` | 元数据读取 |
+| `table_exists` | `read_only`, `read_write` | 元数据读取 |
+| `describe_table` | `read_only`, `read_write` | 元数据读取 |
+| `get_by_primary_int` | `read_only`, `read_write` | 依赖 primary-int index |
+| `scan_all` | `read_only`, `read_write` | `limit` 可选，默认 `100` |
+| `scan_primary_int_range` | `read_only`, `read_write` | 依赖 primary-int index，`limit` 可选 |
+| `insert_row` | `read_write` | 写动作 |
+| `update_by_primary_int` | `read_write` | 写动作 |
+| `delete_by_primary_int` | `read_write` | 写动作 |
+| `create_table` | `read_write` | DDL |
+| `drop_table` | `read_write` | DDL |
+| `create_primary_int_index` | `read_write` | DDL |
+| `drop_index` | `read_write` | DDL |
+| `batch` | `read_only`, `read_write` | 顺序执行子动作 |
+
+通用约束：
+
 - `mode` 只接受 `read_only` 和 `read_write`
-- `read_only` 不允许写动作
-- `batch` 子动作继承外层 `mode`；`read_only` 下同样不允许出现写子动作
-- `scan_all` 和 `scan_primary_int_range` 的 `limit` 为可选字段，默认值固定为 `100`
-- 所有 `*_by_primary_int` / `scan_primary_int_range` 动作都要求目标表首列是 `INTEGER NOT NULL`
-- `get_by_primary_int` 和 `scan_primary_int_range` 额外要求目标表已存在 primary-int index
-- `NULL`、nullable 列、`DECIMAL` 仍然不在 v1 支持范围
+- `read_only` 不允许写动作与 DDL 动作
+- `batch` 子动作继承外层 `mode`
+- 所有 `*_by_primary_int` / `scan_primary_int_range` 要求目标表首列为 `INTEGER NOT NULL`
+- `get_by_primary_int` / `scan_primary_int_range` 额外要求目标表已建 primary-int index
 - `batch` 不是事务；默认遇错继续，`stop_on_error=true` 时在首个失败子动作后停止
+
+`v1` 的历史语义仍可兼容输入，但新请求建议统一按 `v3` 编写。
 
 
 ## 与 Go API 的覆盖关系
 
-如果你关心“Go 底层已经有的能力”和“Action v1 目前暴露的能力”之间的差异，见：
+如果你关心“Go 底层能力”和“协议层暴露能力”的对应关系，见：
 
 - [Go 完整 API 与动作集覆盖矩阵](go-api-action-capability-matrix.md)
 
-v1 的定位是“稳定协议 + 既有表上的读写闭环”，因此当前不包含 DDL 动作：
-
-- `create_table`
-- `drop_table`
-- `create_primary_int_index`
-- `drop_index`
-
-这 4 项底层 Go API 已具备，但未在 v1 对外暴露。
-
-若后续扩展，建议新增 `v2` 做增量动作扩展，保持 `v1` 完全兼容。
+当前运行时已公开 DDL 动作（`create_table` / `drop_table` / `create_primary_int_index` / `drop_index`）。
+本文件名保留为 `v1` 仅为历史兼容，不再代表“仅 v1 动作子集”。
 
 ## 请求信封
 
 ```json
 {
-  "version": "v1",
+  "version": "v3",
   "request_id": "req-001",
   "mode": "read_only",
   "action": "list_tables",
@@ -69,7 +75,7 @@ v1 的定位是“稳定协议 + 既有表上的读写闭环”，因此当前�
 
 字段约束：
 
-- `version`：必须为 `"v1"`
+- `version`：接受 `"v1"` / `"v2"` / `"v3"`，运行时统一按 `v3` 处理
 - `request_id`：必须为非空字符串；推荐使用 UUID，但 v1 不强制格式
 - `mode`：`"read_only"` 或 `"read_write"`
 - `action`：固定枚举
