@@ -40,7 +40,7 @@ func TestTranslateUsesChatCompletionsPath(t *testing.T) {
 			"choices":[
 				{
 					"message":{
-						"content":"{\"version\":\"v1\",\"request_id\":\"req-test\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}"
+							"content":"{\"version\":\"v3\",\"request_id\":\"req-test\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}"
 					}
 				}
 			]
@@ -87,7 +87,7 @@ func TestTranslateStreamingModeParsesSSEChunks(t *testing.T) {
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"reasoning\":\"thinking\"}}]}\n\n"))
-		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"content\":\"{\\\"version\\\":\\\"v1\\\",\\\"request_id\\\":\\\"req-stream\\\"\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"content\":\"{\\\"version\\\":\\\"v3\\\",\\\"request_id\\\":\\\"req-stream\\\"\"}}]}\n\n"))
 		_, _ = w.Write([]byte("data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"content\":\",\\\"mode\\\":\\\"read_only\\\",\\\"action\\\":\\\"list_tables\\\",\\\"args\\\":{}}\"}}]}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -113,14 +113,14 @@ func TestTranslateStreamingModeParsesSSEChunks(t *testing.T) {
 		t.Fatal("expected stream=true in request payload")
 	}
 
-	want := `{"version":"v1","request_id":"req-stream","mode":"read_only","action":"list_tables","args":{}}`
+	want := `{"version":"v3","request_id":"req-stream","mode":"read_only","action":"list_tables","args":{}}`
 	if string(output.Candidate) != want {
 		t.Fatalf("unexpected candidate: got %s, want %s", string(output.Candidate), want)
 	}
 }
 
 func TestExtractJSONPayload(t *testing.T) {
-	valid := `{"version":"v1","request_id":"req-1","mode":"read_only","action":"list_tables","args":{}}`
+	valid := `{"version":"v3","request_id":"req-1","mode":"read_only","action":"list_tables","args":{}}`
 	tests := []struct {
 		name    string
 		content string
@@ -177,7 +177,7 @@ func TestOllamaSystemPromptContainsCurrentActionSet(t *testing.T) {
 	prompt := ollamaSystemPrompt()
 
 	checks := []string{
-		"\"version\" should be \"v1\" or \"v2\"",
+		"\"version\" should be \"v3\"",
 		"create_table",
 		"drop_index",
 		"batch",
@@ -232,8 +232,8 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 
 func TestExtractJSONPayloadPrefersSupportedVersionAndAction(t *testing.T) {
 	content := strings.Join([]string{
-		"debug candidate: {\"version\":\"v3\",\"request_id\":\"bad\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}",
-		"final candidate: {\"version\":\"v2\",\"request_id\":\"req-v2\",\"mode\":\"read_write\",\"action\":\"create_table\",\"args\":{\"table\":\"books\",\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\",\"nullable\":false}]}}",
+		"debug candidate: {\"version\":\"v9\",\"request_id\":\"bad\",\"mode\":\"read_only\",\"action\":\"list_tables\",\"args\":{}}",
+		"final candidate: {\"version\":\"v3\",\"request_id\":\"req-v3\",\"mode\":\"read_write\",\"action\":\"create_table\",\"args\":{\"table\":\"books\",\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\",\"nullable\":false}]}}",
 	}, "\n")
 
 	got, err := extractJSONPayload(content)
@@ -241,7 +241,7 @@ func TestExtractJSONPayloadPrefersSupportedVersionAndAction(t *testing.T) {
 		t.Fatalf("extract payload failed: %v", err)
 	}
 
-	if !strings.Contains(string(got), "\"version\":\"v2\"") || !strings.Contains(string(got), "\"action\":\"create_table\"") {
+	if !strings.Contains(string(got), "\"version\":\"v3\"") || !strings.Contains(string(got), "\"action\":\"create_table\"") {
 		t.Fatalf("unexpected selected candidate: %s", string(got))
 	}
 }
@@ -261,7 +261,7 @@ func (r *streamErrorAfterFirstChunkReader) Read(p []byte) (int, error) {
 }
 
 func TestParseOllamaStreamReturnsCandidateWhenLateReadErrorOccurs(t *testing.T) {
-	payload := "data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"content\":\"{\\\"version\\\":\\\"v1\\\",\\\"request_id\\\":\\\"req-stream\\\",\\\"mode\\\":\\\"read_only\\\",\\\"action\\\":\\\"list_tables\\\",\\\"args\\\":{}}\"}}]}\n\n"
+	payload := "data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"content\":\"{\\\"version\\\":\\\"v3\\\",\\\"request_id\\\":\\\"req-stream\\\",\\\"mode\\\":\\\"read_only\\\",\\\"action\\\":\\\"list_tables\\\",\\\"args\\\":{}}\"}}]}\n\n"
 	reader := &streamErrorAfterFirstChunkReader{chunk: []byte(payload)}
 
 	_, _, _, candidate, err := parseOllamaStream(reader)
@@ -269,7 +269,7 @@ func TestParseOllamaStreamReturnsCandidateWhenLateReadErrorOccurs(t *testing.T) 
 		t.Fatalf("parseOllamaStream failed: %v", err)
 	}
 
-	want := `{"version":"v1","request_id":"req-stream","mode":"read_only","action":"list_tables","args":{}}`
+	want := `{"version":"v3","request_id":"req-stream","mode":"read_only","action":"list_tables","args":{}}`
 	if string(candidate) != want {
 		t.Fatalf("unexpected candidate: got %s, want %s", string(candidate), want)
 	}

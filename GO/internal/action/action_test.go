@@ -143,7 +143,7 @@ func TestDecodeAndValidateEnvelopeFailures(t *testing.T) {
 
 	t.Run("invalid version", func(t *testing.T) {
 		_, err := DecodeAndValidate([]byte(`{
-			"version":"v3",
+			"version":"v9",
 			"request_id":"req-1",
 			"mode":"read_only",
 			"action":"list_tables",
@@ -248,11 +248,11 @@ func TestDecodeAndValidateEnvelopeFailures(t *testing.T) {
 	})
 }
 
-func TestDecodeAndValidateV2Actions(t *testing.T) {
+func TestDecodeAndValidateV3UnifiedActions(t *testing.T) {
 	catalog := docCatalog()
 
-	t.Run("v1 rejects v2 ddl action", func(t *testing.T) {
-		_, err := DecodeAndValidate([]byte(`{
+	t.Run("v1 ddl action is accepted and canonicalized to v3", func(t *testing.T) {
+		req, err := DecodeAndValidate([]byte(`{
 			"version":"v1",
 			"request_id":"req-v1-ddl",
 			"mode":"read_write",
@@ -265,13 +265,15 @@ func TestDecodeAndValidateV2Actions(t *testing.T) {
 				]
 			}
 		}`), catalog)
-		typed := requireProtocolErrorCode(t, err, CodeInvalidRequest)
-		if !strings.Contains(typed.Message, "not supported in version") {
-			t.Fatalf("unexpected error message: %q", typed.Message)
+		if err != nil {
+			t.Fatalf("DecodeAndValidate failed: %v", err)
+		}
+		if req.Version != VersionV3 {
+			t.Fatalf("unexpected canonical version: got %q want %q", req.Version, VersionV3)
 		}
 	})
 
-	t.Run("v2 allows v1 action", func(t *testing.T) {
+	t.Run("v2 input is accepted and canonicalized to v3", func(t *testing.T) {
 		req, err := DecodeAndValidate([]byte(`{
 			"version":"v2",
 			"request_id":"req-v2-list",
@@ -282,18 +284,18 @@ func TestDecodeAndValidateV2Actions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DecodeAndValidate failed: %v", err)
 		}
-		if req.Version != VersionV2 {
-			t.Fatalf("unexpected version: got %q want %q", req.Version, VersionV2)
+		if req.Version != VersionV3 {
+			t.Fatalf("unexpected canonical version: got %q want %q", req.Version, VersionV3)
 		}
 		if req.Action != ActionListTables {
 			t.Fatalf("unexpected action: %q", req.Action)
 		}
 	})
 
-	t.Run("v2 create_table validates", func(t *testing.T) {
+	t.Run("v3 create_table validates", func(t *testing.T) {
 		req, err := DecodeAndValidate([]byte(`{
-			"version":"v2",
-			"request_id":"req-v2-create-table",
+			"version":"v3",
+			"request_id":"req-v3-create-table",
 			"mode":"read_write",
 			"action":"create_table",
 			"args":{
@@ -320,10 +322,10 @@ func TestDecodeAndValidateV2Actions(t *testing.T) {
 		}
 	})
 
-	t.Run("v2 read_only rejects ddl write action", func(t *testing.T) {
+	t.Run("v3 read_only rejects ddl write action", func(t *testing.T) {
 		_, err := DecodeAndValidate([]byte(`{
-			"version":"v2",
-			"request_id":"req-v2-readonly-ddl",
+			"version":"v3",
+			"request_id":"req-v3-readonly-ddl",
 			"mode":"read_only",
 			"action":"drop_table",
 			"args":{"table":"users"}
@@ -331,10 +333,10 @@ func TestDecodeAndValidateV2Actions(t *testing.T) {
 		requireProtocolErrorCode(t, err, CodeInvalidRequest)
 	})
 
-	t.Run("v2 create_primary_int_index validates", func(t *testing.T) {
+	t.Run("v3 create_primary_int_index validates", func(t *testing.T) {
 		req, err := DecodeAndValidate([]byte(`{
-			"version":"v2",
-			"request_id":"req-v2-create-index",
+			"version":"v3",
+			"request_id":"req-v3-create-index",
 			"mode":"read_write",
 			"action":"create_primary_int_index",
 			"args":{"table":"users","index":"idx_users_new"}
@@ -347,8 +349,8 @@ func TestDecodeAndValidateV2Actions(t *testing.T) {
 		}
 	})
 
-	t.Run("v1 batch rejects v2 ddl sub action", func(t *testing.T) {
-		_, err := DecodeAndValidate([]byte(`{
+	t.Run("legacy v1 batch allows ddl sub action and canonicalizes to v3", func(t *testing.T) {
+		req, err := DecodeAndValidate([]byte(`{
 			"version":"v1",
 			"request_id":"req-v1-batch-v2",
 			"mode":"read_write",
@@ -367,34 +369,11 @@ func TestDecodeAndValidateV2Actions(t *testing.T) {
 				]
 			}
 		}`), catalog)
-		typed := requireProtocolErrorCode(t, err, CodeInvalidRequest)
-		if !strings.Contains(typed.Message, "not supported in version") {
-			t.Fatalf("unexpected error message: %q", typed.Message)
-		}
-	})
-
-	t.Run("v2 batch allows ddl sub action", func(t *testing.T) {
-		req, err := DecodeAndValidate([]byte(`{
-			"version":"v2",
-			"request_id":"req-v2-batch-ddl",
-			"mode":"read_write",
-			"action":"batch",
-			"args":{
-				"requests":[
-					{
-						"action":"create_table",
-						"args":{
-							"table":"books",
-							"columns":[
-								{"name":"id","type":"INTEGER","nullable":false}
-							]
-						}
-					}
-				]
-			}
-		}`), catalog)
 		if err != nil {
 			t.Fatalf("DecodeAndValidate failed: %v", err)
+		}
+		if req.Version != VersionV3 {
+			t.Fatalf("unexpected canonical version: got %q want %q", req.Version, VersionV3)
 		}
 		batchArgs, ok := req.Args.(BatchArgs)
 		if !ok {

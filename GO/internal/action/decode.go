@@ -89,9 +89,13 @@ func Decode(data []byte) (RequestEnvelope, error) {
 }
 
 func ValidateEnvelope(envelope RequestEnvelope, catalog CatalogReader) (*Request, error) {
-	if !SupportedVersion(envelope.Version) {
-		return nil, errorf(CodeInvalidRequest, "version must be one of %q or %q", VersionV1, VersionV2)
+	canonicalVersion, ok := CanonicalProtocolVersion(envelope.Version)
+	if !ok {
+		return nil, errorf(CodeInvalidRequest, "version must be one of %q, %q, or %q", VersionV1, VersionV2, VersionV3)
 	}
+
+	envelope.Version = canonicalVersion
+
 	if strings.TrimSpace(envelope.RequestID) == "" {
 		return nil, errorf(CodeInvalidRequest, "request_id must not be empty")
 	}

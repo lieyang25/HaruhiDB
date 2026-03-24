@@ -388,14 +388,14 @@ func TestExecuteWriteActions(t *testing.T) {
 	})
 }
 
-func TestExecuteV2DDLActions(t *testing.T) {
+func TestExecuteV3DDLActions(t *testing.T) {
 	db := openExecuteTestDB(t)
 	defer closeExecuteTestDB(t, db)
 
 	t.Run("create_table create_index insert query drop", func(t *testing.T) {
 		resp := mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-create-table",
+			"version":"v3",
+			"request_id":"req-v3-create-table",
 			"mode":"read_write",
 			"action":"create_table",
 			"args":{
@@ -411,8 +411,8 @@ func TestExecuteV2DDLActions(t *testing.T) {
 		}
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-create-index",
+			"version":"v3",
+			"request_id":"req-v3-create-index",
 			"mode":"read_write",
 			"action":"create_primary_int_index",
 			"args":{"table":"ddl_users","index":"idx_ddl_users_id"}
@@ -422,8 +422,8 @@ func TestExecuteV2DDLActions(t *testing.T) {
 		}
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-insert",
+			"version":"v3",
+			"request_id":"req-v3-insert",
 			"mode":"read_write",
 			"action":"insert_row",
 			"args":{"table":"ddl_users","values":{"id":11,"name":"alice"}}
@@ -433,8 +433,8 @@ func TestExecuteV2DDLActions(t *testing.T) {
 		}
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-get",
+			"version":"v3",
+			"request_id":"req-v3-get",
 			"mode":"read_only",
 			"action":"get_by_primary_int",
 			"args":{"table":"ddl_users","key":11}
@@ -448,8 +448,8 @@ func TestExecuteV2DDLActions(t *testing.T) {
 		}
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-drop-index",
+			"version":"v3",
+			"request_id":"req-v3-drop-index",
 			"mode":"read_write",
 			"action":"drop_index",
 			"args":{"table":"ddl_users","index":"idx_ddl_users_id"}
@@ -459,8 +459,8 @@ func TestExecuteV2DDLActions(t *testing.T) {
 		}
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-drop-table",
+			"version":"v3",
+			"request_id":"req-v3-drop-table",
 			"mode":"read_write",
 			"action":"drop_table",
 			"args":{"table":"ddl_users"}
@@ -470,8 +470,8 @@ func TestExecuteV2DDLActions(t *testing.T) {
 		}
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
-			"version":"v2",
-			"request_id":"req-v2-table-exists",
+			"version":"v3",
+			"request_id":"req-v3-table-exists",
 			"mode":"read_only",
 			"action":"table_exists",
 			"args":{"table":"ddl_users"}
@@ -486,7 +486,7 @@ func TestExecuteEnvelopeValidationFailureReturnsProtocolResponse(t *testing.T) {
 	defer closeExecuteTestDB(t, db)
 
 	env := RequestEnvelope{
-		Version:   "v3",
+		Version:   "v9",
 		RequestID: "req-invalid-version",
 		Mode:      ModeReadOnly,
 		Action:    ActionListTables,

@@ -2,6 +2,7 @@ package action
 
 import (
 	"encoding/json"
+	"strings"
 
 	"haruhidb-go/haruhidb"
 )
@@ -33,9 +34,11 @@ const (
 )
 
 const (
-	VersionV1    = "v1"
-	VersionV2    = "v2"
-	DefaultLimit = 100
+	VersionV1      = "v1"
+	VersionV2      = "v2"
+	VersionV3      = "v3"
+	DefaultVersion = VersionV3
+	DefaultLimit   = 100
 )
 
 type TypeName string
@@ -343,11 +346,21 @@ func (a Action) IsWrite() bool {
 }
 
 func SupportedVersion(version string) bool {
+	_, ok := CanonicalProtocolVersion(version)
+	return ok
+}
+
+func CanonicalProtocolVersion(version string) (string, bool) {
 	switch version {
-	case VersionV1, VersionV2:
-		return true
+	case VersionV1, VersionV2, VersionV3:
+		return VersionV3, true
 	default:
-		return false
+		switch strings.ToLower(strings.TrimSpace(version)) {
+		case VersionV1, VersionV2, VersionV3:
+			return VersionV3, true
+		default:
+			return "", false
+		}
 	}
 }
 
@@ -355,19 +368,8 @@ func ActionSupportedInVersion(version string, action Action) bool {
 	if !action.Valid() {
 		return false
 	}
-	switch version {
-	case VersionV1:
-		switch action {
-		case ActionCreateTable, ActionDropTable, ActionCreatePrimaryIndex, ActionDropIndex:
-			return false
-		default:
-			return true
-		}
-	case VersionV2:
-		return true
-	default:
-		return false
-	}
+	_, ok := CanonicalProtocolVersion(version)
+	return ok
 }
 
 func ProtocolTypeName(t haruhidb.Type) (TypeName, error) {

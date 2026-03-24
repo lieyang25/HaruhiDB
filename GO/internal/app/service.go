@@ -215,12 +215,12 @@ func (s *ActionService) TranslateNL(ctx context.Context, req NLRequest) (NLResul
 			meta = output.Meta
 		}
 
-		candidateMap, candidateRaw, validateErr := s.validateCandidateEnvelope(output.Candidate)
-		if validateErr != nil {
-			if normalized, ok := normalizeCandidateEnvelope(output.Candidate, result.RequestID, req.Mode); ok {
-				candidateMap, candidateRaw, validateErr = s.validateCandidateEnvelope(normalized)
-			}
+		candidateForValidation := output.Candidate
+		if normalized, ok := normalizeCandidateEnvelope(output.Candidate, result.RequestID, req.Mode); ok {
+			candidateForValidation = normalized
 		}
+
+		candidateMap, candidateRaw, validateErr := s.validateCandidateEnvelope(candidateForValidation)
 		var semanticErr error
 		if validateErr == nil {
 			semanticErr = enforceSemanticExpectation(req.Input, candidateMap)
@@ -288,19 +288,18 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 	}
 
 	changed := len(normalized) != len(envelope)
-	currentVersion := ""
 	if version, ok := normalized["version"].(string); !ok || strings.TrimSpace(version) == "" {
-		normalized["version"] = action.VersionV1
+		normalized["version"] = action.DefaultVersion
 		changed = true
-		currentVersion = action.VersionV1
 	} else {
-		trimmedVersion := strings.TrimSpace(version)
-		if !action.SupportedVersion(trimmedVersion) {
-			normalized["version"] = action.VersionV1
+		trimmedVersion := strings.TrimSpace(strings.ToLower(version))
+		canonicalVersion, supported := action.CanonicalProtocolVersion(trimmedVersion)
+		if !supported {
+			normalized["version"] = action.DefaultVersion
 			changed = true
-			currentVersion = action.VersionV1
-		} else {
-			currentVersion = trimmedVersion
+		} else if trimmedVersion != canonicalVersion {
+			normalized["version"] = canonicalVersion
+			changed = true
 		}
 	}
 	if id, ok := normalized["request_id"].(string); !ok || strings.TrimSpace(id) == "" {
@@ -331,17 +330,17 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 		}
 
 		candidateAction := action.Action(canonical)
-		requiresV2 := false
-		if action.ActionSupportedInVersion(action.VersionV2, candidateAction) && !action.ActionSupportedInVersion(action.VersionV1, candidateAction) {
-			requiresV2 = true
-		}
-		if candidateAction == action.ActionBatch && batchContainsV2OnlyAction(normalized["args"]) {
-			requiresV2 = true
-		}
-		if requiresV2 && currentVersion != action.VersionV2 {
-			normalized["version"] = action.VersionV2
-			currentVersion = action.VersionV2
-			changed = true
+		if candidateAction.Valid() {
+			if versionValue, ok := normalized["version"].(string); !ok {
+				normalized["version"] = action.DefaultVersion
+				changed = true
+			} else if canonicalVersion, supported := action.CanonicalProtocolVersion(versionValue); !supported {
+				normalized["version"] = action.DefaultVersion
+				changed = true
+			} else if canonicalVersion != versionValue {
+				normalized["version"] = canonicalVersion
+				changed = true
+			}
 		}
 
 		normalizedArgs, argsChanged := normalizeArgsForAction(canonical, normalized["args"])
@@ -501,34 +500,6 @@ func normalizeBatchArgs(argsValue any) (any, bool) {
 	}
 
 	return filteredArgs, changed || requestsChanged
-}
-
-func batchContainsV2OnlyAction(argsValue any) bool {
-	argsMap, ok := argsValue.(map[string]any)
-	if !ok {
-		return false
-	}
-
-	requests, ok := argsMap["requests"].([]any)
-	if !ok {
-		return false
-	}
-
-	for _, item := range requests {
-		reqMap, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		actionName, ok := reqMap["action"].(string)
-		if !ok {
-			continue
-		}
-		candidateAction := action.Action(canonicalActionName(actionName))
-		if action.ActionSupportedInVersion(action.VersionV2, candidateAction) && !action.ActionSupportedInVersion(action.VersionV1, candidateAction) {
-			return true
-		}
-	}
-	return false
 }
 
 func enforceSemanticExpectation(naturalRequest string, candidate map[string]any) error {

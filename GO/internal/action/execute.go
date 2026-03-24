@@ -569,7 +569,7 @@ func protocolScalarFromValue(value haruhidb.Value) (any, error) {
 	case haruhidb.TypeVarchar:
 		return value.String, nil
 	case haruhidb.TypeDecimal:
-		return nil, errorf(CodeUnsupported, "DECIMAL values are not supported in v1")
+		return nil, errorf(CodeUnsupported, "DECIMAL values are not supported in protocol responses")
 	default:
 		return nil, errorf(CodeUnsupported, "unsupported scanned value type %d", value.Type)
 	}

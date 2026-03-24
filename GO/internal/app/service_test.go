@@ -337,7 +337,7 @@ func TestTranslateNLAutoNormalizesCommonEnvelopeFields(t *testing.T) {
 	if got := result.CandidateEnvelope["mode"]; got != string(action.ModeReadOnly) {
 		t.Fatalf("unexpected mode in normalized candidate: %#v", got)
 	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV1 {
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
 		t.Fatalf("unexpected version in normalized candidate: %#v", got)
 	}
 	args, ok := result.CandidateEnvelope["args"].(map[string]any)
@@ -386,8 +386,8 @@ func TestTranslateNLAutoPromotesVersionForV2OnlyAction(t *testing.T) {
 	if len(translator.inputs) != 1 {
 		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
 	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
-		t.Fatalf("expected version %q, got %#v", action.VersionV2, got)
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
+		t.Fatalf("expected version %q, got %#v", action.VersionV3, got)
 	}
 	if got := result.CandidateEnvelope["action"]; got != string(action.ActionCreateTable) {
 		t.Fatalf("unexpected canonical action: %#v", got)
@@ -431,8 +431,8 @@ func TestTranslateNLAutoPromotesVersionForBatchContainingV2OnlyAction(t *testing
 	if len(translator.inputs) != 1 {
 		t.Fatalf("expected no repair retry after local normalization, got %d calls", len(translator.inputs))
 	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
-		t.Fatalf("expected version %q for batch with v2-only sub action, got %#v", action.VersionV2, got)
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
+		t.Fatalf("expected version %q for batch with v2-only sub action, got %#v", action.VersionV3, got)
 	}
 
 	args, ok := result.CandidateEnvelope["args"].(map[string]any)
@@ -486,8 +486,8 @@ func TestTranslateNLAutoPromotesVersionWhenModelReturnsV1ForV2OnlyAction(t *test
 	if !result.Valid {
 		t.Fatalf("expected valid translation, got %+v", result)
 	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
-		t.Fatalf("expected version %q, got %#v", action.VersionV2, got)
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
+		t.Fatalf("expected version %q, got %#v", action.VersionV3, got)
 	}
 }
 
@@ -525,8 +525,8 @@ func TestTranslateNLAutoPromotesVersionWhenBatchContainsV2OnlyActionUnderV1(t *t
 	if !result.Valid {
 		t.Fatalf("expected valid translation, got %+v", result)
 	}
-	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
-		t.Fatalf("expected version %q, got %#v", action.VersionV2, got)
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV3 {
+		t.Fatalf("expected version %q, got %#v", action.VersionV3, got)
 	}
 }
 

@@ -1,15 +1,15 @@
-# Go 完整 API 与 Action 动作集覆盖矩阵
+# Go 完整 API 与 Action v3 覆盖矩阵
 
 这份文档把两层能力放在同一张图里：
 
 - Go 侧 `haruhidb` 包实际可用 API（完整能力）
-- Action Protocol `v1 / v2` 对外暴露动作（协议能力）
+- Action Protocol `v3` 对外暴露动作（协议能力）
 
 结论先说：
 
 - Go 层能力完整，覆盖 DDL + DML + 元数据。
-- `v1` 保持“既有表上的稳定读写闭环”。
-- `v2` 在 `v1` 基础上新增 4 个 DDL 动作，实现完整生命周期动作集。
+- 协议层现在统一为 `v3`，不再区分动作集 `v1/v2`。
+- 服务端仍兼容接收 `v1/v2` 输入，但会按 `v3` 语义执行与归一化。
 
 ## 0) Go 侧对外入口（当前形态）
 
@@ -64,9 +64,9 @@
 - `(*DB).ListTableColumns(tableName string) ([]ColumnInfo, error)`
 - `(*DB).ListTableIndexes(tableName string) ([]string, error)`
 
-## 2) Action 动作集（v1 / v2）
+## 2) Action 动作集（v3 统一集）
 
-### v1 动作集（10）
+`v3` 动作集包含 14 个动作：
 
 1. `list_tables`
 2. `table_exists`
@@ -77,50 +77,46 @@
 7. `insert_row`
 8. `update_by_primary_int`
 9. `delete_by_primary_int`
-10. `batch`
+10. `create_table`
+11. `drop_table`
+12. `create_primary_int_index`
+13. `drop_index`
+14. `batch`
 
-### v2 增量动作（4）
+## 3) 覆盖矩阵（Go API -> Action v3）
 
-在 v1 基础上新增：
-
-1. `create_table`
-2. `drop_table`
-3. `create_primary_int_index`
-4. `drop_index`
-
-## 3) 覆盖矩阵（Go API -> Action v1 / v2）
-
-| Go API | v1 | v2 | 备注 |
-| --- | --- | --- | --- |
-| `ListTables` | `list_tables` | `list_tables` | 已覆盖 |
-| `TableExists` | `table_exists` | `table_exists` | 已覆盖 |
-| `ListTableColumns/ListTableIndexes` | `describe_table` | `describe_table` | 已覆盖 |
-| `GetRowByPrimaryInt` | `get_by_primary_int` | `get_by_primary_int` | 需 primary-int index |
-| `ScanAll` | `scan_all` | `scan_all` | 支持 limit |
-| `ScanByPrimaryIntRange` | `scan_primary_int_range` | `scan_primary_int_range` | 需 primary-int index |
-| `InsertRow` | `insert_row` | `insert_row` | 已覆盖 |
-| `UpdateRowByPrimaryInt` | `update_by_primary_int` | `update_by_primary_int` | 已覆盖 |
-| `DeleteRowByPrimaryInt` | `delete_by_primary_int` | `delete_by_primary_int` | 已覆盖 |
-| `CreateTable` | 不支持 | `create_table` | v2 新增 |
-| `DropTable` | 不支持 | `drop_table` | v2 新增 |
-| `CreatePrimaryIntIndex` | 不支持 | `create_primary_int_index` | v2 新增 |
-| `DropIndex` | 不支持 | `drop_index` | v2 新增 |
+| Go API | v3 | 备注 |
+| --- | --- | --- |
+| `ListTables` | `list_tables` | 已覆盖 |
+| `TableExists` | `table_exists` | 已覆盖 |
+| `ListTableColumns/ListTableIndexes` | `describe_table` | 已覆盖 |
+| `GetRowByPrimaryInt` | `get_by_primary_int` | 需 primary-int index |
+| `ScanAll` | `scan_all` | 支持 limit |
+| `ScanByPrimaryIntRange` | `scan_primary_int_range` | 需 primary-int index |
+| `InsertRow` | `insert_row` | 已覆盖 |
+| `UpdateRowByPrimaryInt` | `update_by_primary_int` | 已覆盖 |
+| `DeleteRowByPrimaryInt` | `delete_by_primary_int` | 已覆盖 |
+| `CreateTable` | `create_table` | 已覆盖 |
+| `DropTable` | `drop_table` | 已覆盖 |
+| `CreatePrimaryIntIndex` | `create_primary_int_index` | 已覆盖 |
+| `DropIndex` | `drop_index` | 已覆盖 |
 
 ## 4) 闭环能力结论
 
-1. v1 闭环
-- 已有表上的读写闭环完整（查/增/改/删/批处理）。
+1. 生命周期闭环
+- 覆盖“空库 -> 建表建索引 -> 读写查询 -> 清理”的完整动作语义。
 
-2. v2 闭环
-- 覆盖“空库到建表建索引到读写再清理”的完整动作集语义。
+2. 协议稳定性
+- 统一 `v3` 语义，避免 `v1/v2` 分叉导致的版本判断错误。
 
 ## 5) 网页测试推荐
 
-- v1 示例：见 [Action v1 功能演示](action-v1-showcase-example.md)
-- v2 示例：见 [Action v2 功能演示](action-v2-showcase-example.md)
+- 打开 `GET /ui`
+- 先调用 `/v1/nl/translate` 预览候选 envelope
+- 确认后调用 `/v1/action` 执行
 
 ## 6) 兼容性说明
 
-- `version=v1` 与 `version=v2` 并存。
-- v1 用户无破坏性影响。
-- v2 仅在显式请求 `version=v2` 时生效。
+- 服务端兼容接收 `version=v1/v2/v3`。
+- 任一版本输入都会按统一 `v3` 语义执行。
+- NL 归一化输出以 `v3` 为准。

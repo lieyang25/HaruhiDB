@@ -5,7 +5,7 @@
 - 入口只保留 `serve`
 - 对外能力是 Web UI + HTTP API
 - 自然语言翻译固定走 Ollama
-- 动作集完整保留（v1 + v2 + batch）
+- 动作集统一为 v3（兼容接收 v1/v2 输入）
 
 如果你想快速接手 Go 侧，这份文档按“最短主线”组织阅读路径。
 
@@ -118,7 +118,7 @@ HTTP /v1/nl/translate
 1. CLI：只支持 `haruhidb serve`。
 2. HTTP：`/healthz`、`/v1/action`、`/v1/nl/translate`、`/ui`。
 3. NL 后端：仅 Ollama（`--base-url` + `--model` + `--stream`）。
-4. 动作集：不删减，v1/v2 全量可用。
+4. 动作集：统一以 v3 执行与输出，兼容 v1/v2 旧请求。
 
 ## 6. 当前可用参数（serve）
 

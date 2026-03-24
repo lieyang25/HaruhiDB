@@ -519,7 +519,7 @@ func normalizeValueForColumn(column haruhidb.ColumnInfo, value any) (any, haruhi
 		}
 		return s, haruhidb.StringValue(s), nil
 	case haruhidb.TypeDecimal:
-		return nil, haruhidb.Value{}, errorf(CodeUnsupported, "DECIMAL is not supported in v1")
+		return nil, haruhidb.Value{}, errorf(CodeUnsupported, "DECIMAL is not supported in protocol values")
 	default:
 		return nil, haruhidb.Value{}, errorf(CodeUnsupported, "unsupported column type %d", column.Type)
 	}

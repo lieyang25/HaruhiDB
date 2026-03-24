@@ -255,17 +255,17 @@ func parseOllamaStream(reader io.Reader) (responseID string, responseModel strin
 			usage = chunk.Usage
 		}
 
-			for _, choice := range chunk.Choices {
-				piece := choice.Delta.Content
-				if piece == "" {
-					piece = choice.Message.Content
-				}
-				if piece == "" {
-					continue
-				}
-				contentBuilder.WriteString(piece)
+		for _, choice := range chunk.Choices {
+			piece := choice.Delta.Content
+			if piece == "" {
+				piece = choice.Message.Content
 			}
+			if piece == "" {
+				continue
+			}
+			contentBuilder.WriteString(piece)
 		}
+	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
 		partialContent := strings.TrimSpace(contentBuilder.String())
@@ -296,7 +296,7 @@ Convert user natural-language requests into one executable HaruhiDB Action Proto
 Core requirements:
 1) Output must be a valid JSON object.
 2) Keep only these top-level keys: "version", "request_id", "mode", "action", "args".
-3) "version" should be "v1" or "v2".
+3) "version" should be "v3".
 4) "mode" should be "read_only" or "read_write".
 5) "args" should be a JSON object (use {} when no args are needed).
 6) Do not include markdown fences or extra explanation text.
@@ -318,8 +318,7 @@ Action set and args schema:
 - batch: {"requests": [{"action": string, "args": object}], "stop_on_error": bool(optional)}
 
 Version compatibility:
-- v1 supports: list_tables, table_exists, describe_table, get_by_primary_int, scan_all, scan_primary_int_range, insert_row, update_by_primary_int, delete_by_primary_int, batch.
-- v2 supports all v1 actions, plus: create_table, drop_table, create_primary_int_index, drop_index.
+- v3 supports all actions above in a single unified action set.
 
 	Behavior guidance:
 	- Prefer minimal actions that satisfy user intent.
@@ -345,7 +344,7 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 		fmt.Sprintf("request_id: %s", in.RequestID),
 		fmt.Sprintf("mode: %s", mode),
 		"guideline: prefer minimal actions; avoid unrelated actions when possible.",
-		"version_guideline: prefer v1 for v1-capable actions; use v2 when DDL actions are needed.",
+		"version_guideline: always set version to v3.",
 		"batch_guideline: if the request clearly contains multiple ordered actions, batch is recommended.",
 		"args_rule: do not copy prompt fields (request_id/mode/catalog_snapshot_json/guidelines) into args.",
 		fmt.Sprintf("natural_request: %s", in.NaturalRequest),
