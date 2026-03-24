@@ -449,6 +449,17 @@ func TestExecuteV3DDLActions(t *testing.T) {
 
 		resp = mustExecuteRequest(t, context.Background(), db, `{
 			"version":"v3",
+			"request_id":"req-v3-delete-before-drop",
+			"mode":"read_write",
+			"action":"delete_by_primary_int",
+			"args":{"table":"ddl_users","key":11}
+		}`)
+		if got, ok := mustSuccessData(t, resp)["deleted"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected deleted count before drop: %#v", mustSuccessData(t, resp)["deleted"])
+		}
+
+		resp = mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v3",
 			"request_id":"req-v3-drop-index",
 			"mode":"read_write",
 			"action":"drop_index",
@@ -481,6 +492,131 @@ func TestExecuteV3DDLActions(t *testing.T) {
 		}
 	})
 }
+
+func TestExecuteDDLEmptyTableGuard(t *testing.T) {
+	db := openExecuteTestDB(t)
+	defer closeExecuteTestDB(t, db)
+
+	createUsersTable(t, db, true)
+	insertUserRows(t, db, []haruhidb.Value{
+		haruhidb.Int32Value(1),
+		haruhidb.StringValue("alice"),
+	})
+	createProfilesTable(t, db)
+	if err := db.InsertRow("profiles", []haruhidb.Value{
+		haruhidb.Int32Value(10),
+		haruhidb.StringValue("profile-a"),
+	}); err != nil {
+		t.Fatalf("insert profile seed failed: %v", err)
+	}
+	if err := db.CreateTable("empty_profiles", []haruhidb.ColumnDef{
+		{Name: "id", Type: haruhidb.TypeInteger},
+		{Name: "name", Type: haruhidb.TypeVarchar, Length: 32},
+	}); err != nil {
+		t.Fatalf("create empty_profiles table failed: %v", err)
+	}
+
+	t.Run("drop_table denied for non-empty table", func(t *testing.T) {
+		resp := mustExecuteEnvelope(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-drop-table-denied",
+			"mode":"read_write",
+			"action":"drop_table",
+			"args":{"table":"users"}
+		}`)
+
+		if resp.Ok {
+			t.Fatalf("expected drop_table to be denied, got success: %#v", resp)
+		}
+		if resp.Error == nil || resp.Error.Code != CodeConstraint {
+			t.Fatalf("unexpected drop_table error: %#v", resp.Error)
+		}
+		if !strings.Contains(resp.Error.Message, "must be empty for action") {
+			t.Fatalf("unexpected drop_table error message: %#v", resp.Error)
+		}
+	})
+
+	t.Run("create_primary_int_index denied for non-empty table", func(t *testing.T) {
+		resp := mustExecuteEnvelope(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-create-index-denied",
+			"mode":"read_write",
+			"action":"create_primary_int_index",
+			"args":{"table":"profiles","index":"idx_profiles_id"}
+		}`)
+
+		if resp.Ok {
+			t.Fatalf("expected create_primary_int_index to be denied, got success: %#v", resp)
+		}
+		if resp.Error == nil || resp.Error.Code != CodeConstraint {
+			t.Fatalf("unexpected create_primary_int_index error: %#v", resp.Error)
+		}
+	})
+
+	t.Run("drop_index denied for non-empty table", func(t *testing.T) {
+		resp := mustExecuteEnvelope(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-drop-index-denied",
+			"mode":"read_write",
+			"action":"drop_index",
+			"args":{"table":"users","index":"idx_users_id"}
+		}`)
+
+		if resp.Ok {
+			t.Fatalf("expected drop_index to be denied, got success: %#v", resp)
+		}
+		if resp.Error == nil || resp.Error.Code != CodeConstraint {
+			t.Fatalf("unexpected drop_index error: %#v", resp.Error)
+		}
+	})
+
+	t.Run("ddl succeeds after table becomes empty", func(t *testing.T) {
+		deleteResp := mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-delete-before-drop-index",
+			"mode":"read_write",
+			"action":"delete_by_primary_int",
+			"args":{"table":"users","key":1}
+		}`)
+		if got, ok := mustSuccessData(t, deleteResp)["deleted"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected delete count: %#v", mustSuccessData(t, deleteResp)["deleted"])
+		}
+
+		dropIndexResp := mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-drop-index-ok",
+			"mode":"read_write",
+			"action":"drop_index",
+			"args":{"table":"users","index":"idx_users_id"}
+		}`)
+		if got, ok := mustSuccessData(t, dropIndexResp)["dropped"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected index dropped count: %#v", mustSuccessData(t, dropIndexResp)["dropped"])
+		}
+
+		dropTableResp := mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-drop-table-ok",
+			"mode":"read_write",
+			"action":"drop_table",
+			"args":{"table":"users"}
+		}`)
+		if got, ok := mustSuccessData(t, dropTableResp)["dropped"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected table dropped count: %#v", mustSuccessData(t, dropTableResp)["dropped"])
+		}
+
+		createIndexResp := mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-ddl-create-index-ok",
+			"mode":"read_write",
+			"action":"create_primary_int_index",
+			"args":{"table":"empty_profiles","index":"idx_empty_profiles_id"}
+		}`)
+		if got, ok := mustSuccessData(t, createIndexResp)["created"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected create index count: %#v", mustSuccessData(t, createIndexResp)["created"])
+		}
+	})
+}
+
 func TestExecuteEnvelopeValidationFailureReturnsProtocolResponse(t *testing.T) {
 	db := openExecuteTestDB(t)
 	defer closeExecuteTestDB(t, db)
@@ -625,6 +761,69 @@ func TestExecuteBatchAction(t *testing.T) {
 		}
 		if len(results) != 2 {
 			t.Fatalf("unexpected results size when stop_on_error=true: %#v", results)
+		}
+	})
+
+	t.Run("ddl empty-table guard is reflected in batch item", func(t *testing.T) {
+		db := openExecuteTestDB(t)
+		defer closeExecuteTestDB(t, db)
+
+		createUsersTable(t, db, true)
+		insertUserRows(t, db, []haruhidb.Value{
+			haruhidb.Int32Value(1),
+			haruhidb.StringValue("alice"),
+		})
+
+		resp := mustExecuteRequest(t, context.Background(), db, `{
+			"version":"v3",
+			"request_id":"req-batch-ddl-guard",
+			"mode":"read_write",
+			"action":"batch",
+			"args":{
+				"stop_on_error": false,
+				"requests":[
+					{
+						"action":"drop_index",
+						"args":{"table":"users","index":"idx_users_id"}
+					},
+					{
+						"action":"table_exists",
+						"args":{"table":"users"}
+					}
+				]
+			}
+		}`)
+
+		data := mustSuccessData(t, resp)
+		if got, ok := data["total"].(int); !ok || got != 2 {
+			t.Fatalf("unexpected total: %#v", data["total"])
+		}
+		if got, ok := data["succeeded"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected succeeded: %#v", data["succeeded"])
+		}
+		if got, ok := data["failed"].(int); !ok || got != 1 {
+			t.Fatalf("unexpected failed: %#v", data["failed"])
+		}
+
+		results, ok := data["results"].([]map[string]any)
+		if !ok || len(results) != 2 {
+			t.Fatalf("unexpected results payload: %#v", data["results"])
+		}
+
+		firstError, ok := results[0]["error"].(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected first item error payload: %#v", results[0]["error"])
+		}
+		if firstError["code"] != CodeConstraint {
+			t.Fatalf("unexpected first item error code: %#v", firstError)
+		}
+
+		secondData, ok := results[1]["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected second item data payload: %#v", results[1]["data"])
+		}
+		if exists, ok := secondData["exists"].(bool); !ok || !exists {
+			t.Fatalf("unexpected table_exists payload: %#v", secondData)
 		}
 	})
 }
@@ -870,6 +1069,16 @@ func mustValidatedRequest(t *testing.T, db *haruhidb.DB, payload string) *Reques
 		t.Fatalf("ValidateEnvelope failed: %v", err)
 	}
 	return req
+}
+
+func mustExecuteEnvelope(t *testing.T, ctx context.Context, db *haruhidb.DB, payload string) ResponseEnvelope[map[string]any] {
+	t.Helper()
+	env := mustDecodeEnvelope(t, payload)
+	resp, err := ExecuteEnvelope(ctx, db, env)
+	if err != nil {
+		t.Fatalf("ExecuteEnvelope failed: %v", err)
+	}
+	return resp
 }
 
 func mustExecuteRequest(t *testing.T, ctx context.Context, db *haruhidb.DB, payload string) ResponseEnvelope[map[string]any] {

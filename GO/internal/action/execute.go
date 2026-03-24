@@ -76,11 +76,11 @@ func executeAction(ctx context.Context, db *haruhidb.DB, req *Request) (map[stri
 	case CreateTableArgs:
 		return executeCreateTable(db, args)
 	case DropTableArgs:
-		return executeDropTable(db, args)
+		return executeDropTable(ctx, db, args)
 	case CreatePrimaryIntIndexArgs:
-		return executeCreatePrimaryIntIndex(db, args)
+		return executeCreatePrimaryIntIndex(ctx, db, args)
 	case DropIndexArgs:
-		return executeDropIndex(db, args)
+		return executeDropIndex(ctx, db, args)
 	case BatchArgs:
 		return executeBatch(ctx, db, args)
 	default:
@@ -258,7 +258,10 @@ func executeCreateTable(db *haruhidb.DB, args CreateTableArgs) (map[string]any, 
 	}, nil
 }
 
-func executeDropTable(db *haruhidb.DB, args DropTableArgs) (map[string]any, error) {
+func executeDropTable(ctx context.Context, db *haruhidb.DB, args DropTableArgs) (map[string]any, error) {
+	if err := ensureTableEmptyForDDL(ctx, db, args.Table, ActionDropTable); err != nil {
+		return nil, err
+	}
 	if err := db.DropTable(args.Table); err != nil {
 		return nil, err
 	}
@@ -268,7 +271,10 @@ func executeDropTable(db *haruhidb.DB, args DropTableArgs) (map[string]any, erro
 	}, nil
 }
 
-func executeCreatePrimaryIntIndex(db *haruhidb.DB, args CreatePrimaryIntIndexArgs) (map[string]any, error) {
+func executeCreatePrimaryIntIndex(ctx context.Context, db *haruhidb.DB, args CreatePrimaryIntIndexArgs) (map[string]any, error) {
+	if err := ensureTableEmptyForDDL(ctx, db, args.Table, ActionCreatePrimaryIndex); err != nil {
+		return nil, err
+	}
 	if err := db.CreatePrimaryIntIndex(args.Table, args.Index); err != nil {
 		return nil, err
 	}
@@ -279,7 +285,10 @@ func executeCreatePrimaryIntIndex(db *haruhidb.DB, args CreatePrimaryIntIndexArg
 	}, nil
 }
 
-func executeDropIndex(db *haruhidb.DB, args DropIndexArgs) (map[string]any, error) {
+func executeDropIndex(ctx context.Context, db *haruhidb.DB, args DropIndexArgs) (map[string]any, error) {
+	if err := ensureTableEmptyForDDL(ctx, db, args.Table, ActionDropIndex); err != nil {
+		return nil, err
+	}
 	if err := db.DropIndex(args.Table, args.Index); err != nil {
 		return nil, err
 	}
@@ -780,4 +789,36 @@ func checkContext(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func ensureTableEmptyForDDL(
+	ctx context.Context,
+	db *haruhidb.DB,
+	table string,
+	actionName Action,
+) (err error) {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+
+	scanner, err := db.ScanAll(table)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeErr := scanner.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	_, nextErr := scanner.Next()
+	if errors.Is(nextErr, io.EOF) {
+		return nil
+	}
+	if nextErr != nil {
+		return nextErr
+	}
+
+	return errorf(CodeConstraint, "table %q must be empty for action %q", table, actionName)
 }

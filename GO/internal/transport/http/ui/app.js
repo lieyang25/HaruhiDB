@@ -13,52 +13,77 @@
     "drop_index"
   ]);
 
+  const INTEGER_TYPES = new Set(["TINYINT", "SMALLINT", "INTEGER", "BIGINT"]);
+  const NUMBER_TYPES = new Set(["FLOAT", "DOUBLE"]);
   const COLUMN_TYPES = ["BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "FLOAT", "DOUBLE", "VARCHAR"];
 
   const statusEl = document.getElementById("status");
-  const envelopeOutEl = document.getElementById("envelopeOut");
-  const executionOutEl = document.getElementById("executionOut");
+  const capabilitiesInfoEl = document.getElementById("capabilitiesInfo");
 
   const dbPathInputEl = document.getElementById("dbPathInput");
   const switchDbBtn = document.getElementById("switchDbBtn");
   const recentDbSelectEl = document.getElementById("recentDbSelect");
   const useRecentBtn = document.getElementById("useRecentBtn");
-  const dbInfoEl = document.getElementById("dbInfo");
-  const capabilitiesInfoEl = document.getElementById("capabilitiesInfo");
+  const dbShortInfoEl = document.getElementById("dbShortInfo");
+  const dbFullPathEl = document.getElementById("dbFullPath");
+  const dbDefaultPathEl = document.getElementById("dbDefaultPath");
 
-  const qaListTablesBtn = document.getElementById("qaListTablesBtn");
-  const qaDescribeTableEl = document.getElementById("qaDescribeTable");
-  const qaDescribeBtn = document.getElementById("qaDescribeBtn");
-  const qaDropTableEl = document.getElementById("qaDropTable");
-  const qaDropBtn = document.getElementById("qaDropBtn");
-  const qaCreateTableNameEl = document.getElementById("qaCreateTableName");
-  const qaColumnsEl = document.getElementById("qaColumns");
-  const qaAddColumnBtn = document.getElementById("qaAddColumnBtn");
-  const qaCreateBtn = document.getElementById("qaCreateBtn");
+  const listTablesBtn = document.getElementById("listTablesBtn");
+  const manageTableSelectEl = document.getElementById("manageTableSelect");
+  const describeTableBtn = document.getElementById("describeTableBtn");
+  const dropTableBtn = document.getElementById("dropTableBtn");
+
+  const createTableNameEl = document.getElementById("createTableName");
+  const createColumnsBodyEl = document.getElementById("createColumnsBody");
+  const addCreateColumnBtn = document.getElementById("addCreateColumnBtn");
+  const createTableBtn = document.getElementById("createTableBtn");
+
+  const queryTableSelectEl = document.getElementById("queryTableSelect");
+  const queryLimitInputEl = document.getElementById("queryLimitInput");
+  const queryFilterModeEl = document.getElementById("queryFilterMode");
+  const queryExactRowEl = document.getElementById("queryExactRow");
+  const queryRangeRowEl = document.getElementById("queryRangeRow");
+  const queryExactKeyInputEl = document.getElementById("queryExactKeyInput");
+  const queryStartKeyInputEl = document.getElementById("queryStartKeyInput");
+  const queryEndKeyInputEl = document.getElementById("queryEndKeyInput");
+  const runQueryBtn = document.getElementById("runQueryBtn");
+  const refreshQueryBtn = document.getElementById("refreshQueryBtn");
+
+  const insertTableSelectEl = document.getElementById("insertTableSelect");
+  const insertFieldsEl = document.getElementById("insertFields");
+  const insertRowBtn = document.getElementById("insertRowBtn");
 
   const actionSelectEl = document.getElementById("actionSelect");
   const modeSelectEl = document.getElementById("modeSelect");
   const argsInputEl = document.getElementById("argsInput");
   const buildEnvelopeBtn = document.getElementById("buildEnvelopeBtn");
   const runEnvelopeBtn = document.getElementById("runEnvelopeBtn");
-  const copyEnvelopeBtn = document.getElementById("copyEnvelopeBtn");
-  const copyExecutionBtn = document.getElementById("copyExecutionBtn");
+
+  const resultSummaryEl = document.getElementById("resultSummary");
+  const resultViewEl = document.getElementById("resultView");
+  const envelopeOutEl = document.getElementById("envelopeOut");
+  const rawOutEl = document.getElementById("rawOut");
 
   const state = {
     activeDBPath: "",
     defaultDBPath: "",
     tables: [],
-    capabilities: null
+    capabilities: null,
+    tableSchemaCache: {},
+    lastQuery: null
   };
 
   const busyButtons = [
     switchDbBtn,
     useRecentBtn,
-    qaListTablesBtn,
-    qaDescribeBtn,
-    qaDropBtn,
-    qaAddColumnBtn,
-    qaCreateBtn,
+    listTablesBtn,
+    describeTableBtn,
+    dropTableBtn,
+    addCreateColumnBtn,
+    createTableBtn,
+    runQueryBtn,
+    refreshQueryBtn,
+    insertRowBtn,
     buildEnvelopeBtn,
     runEnvelopeBtn
   ];
@@ -120,6 +145,16 @@
     return prefix + "-" + Date.now();
   }
 
+  function pathBaseName(path) {
+    const text = (path || "").trim();
+    if (!text) {
+      return "";
+    }
+    const normalized = text.replace(/\\/g, "/");
+    const parts = normalized.split("/").filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : normalized;
+  }
+
   function readRecentDBPaths() {
     try {
       const raw = localStorage.getItem(STORAGE_RECENT_DB_PATHS);
@@ -159,6 +194,7 @@
     if (!trimmed) {
       return;
     }
+
     localStorage.setItem(STORAGE_ACTIVE_DB_PATH, trimmed);
 
     const current = readRecentDBPaths();
@@ -196,21 +232,31 @@
 
   function updateDBInfo() {
     if (!state.activeDBPath) {
-      dbInfoEl.textContent = "当前数据库: (未连接)";
+      dbShortInfoEl.textContent = "当前数据库: (未连接)";
+      dbShortInfoEl.title = "";
+      dbFullPathEl.textContent = "-";
+      dbDefaultPathEl.textContent = "-";
       return;
     }
 
-    const defaultLabel = state.defaultDBPath ? " | 默认库: " + state.defaultDBPath : "";
-    dbInfoEl.textContent = "当前数据库: " + state.activeDBPath + defaultLabel;
+    const shortName = pathBaseName(state.activeDBPath) || state.activeDBPath;
+    dbShortInfoEl.textContent = "当前数据库: " + shortName;
+    dbShortInfoEl.title = state.activeDBPath;
+
+    dbFullPathEl.textContent = state.activeDBPath;
+    dbDefaultPathEl.textContent = state.defaultDBPath || "-";
   }
 
   function renderTableSelect(selectEl) {
+    const previous = selectEl.value;
     selectEl.innerHTML = "";
+
     if (!state.tables || state.tables.length === 0) {
       const option = document.createElement("option");
       option.value = "";
       option.textContent = "(无表)";
       selectEl.appendChild(option);
+      selectEl.disabled = true;
       return;
     }
 
@@ -220,45 +266,18 @@
       option.textContent = table;
       selectEl.appendChild(option);
     });
-  }
 
-  function renderTableSelectors() {
-    renderTableSelect(qaDescribeTableEl);
-    renderTableSelect(qaDropTableEl);
-  }
-
-  function actionSupported(actionName, mode) {
-    if (!state.capabilities || !state.capabilities.actions_by_mode) {
-      return false;
+    if (previous && state.tables.indexOf(previous) >= 0) {
+      selectEl.value = previous;
     }
-    const modeInfo = state.capabilities.actions_by_mode[mode];
-    if (!modeInfo || !Array.isArray(modeInfo.names)) {
-      return false;
-    }
-    return modeInfo.names.indexOf(actionName) >= 0;
+
+    selectEl.disabled = false;
   }
 
-  function modeForAction(actionName) {
-    if (WRITE_ACTIONS.has(actionName)) {
-      return "read_write";
-    }
-    return modeSelectEl.value;
-  }
-
-  function renderQuickActionAvailability() {
-    const canListTables = actionSupported("list_tables", modeForAction("list_tables"));
-    const canDescribeTable = actionSupported("describe_table", modeForAction("describe_table"));
-    const canCreateTable = actionSupported("create_table", "read_write");
-    const canDropTable = actionSupported("drop_table", "read_write");
-    const hasTables = state.tables && state.tables.length > 0;
-
-    qaListTablesBtn.disabled = !canListTables;
-    qaDescribeBtn.disabled = !canDescribeTable || !hasTables;
-    qaCreateBtn.disabled = !canCreateTable;
-    qaDropBtn.disabled = !canDropTable || !hasTables;
-
-    qaDescribeTableEl.disabled = !hasTables;
-    qaDropTableEl.disabled = !hasTables;
+  function renderAllTableSelectors() {
+    [manageTableSelectEl, queryTableSelectEl, insertTableSelectEl].forEach(function (selectEl) {
+      renderTableSelect(selectEl);
+    });
   }
 
   function renderCapabilitiesSummary() {
@@ -273,9 +292,9 @@
     const rwCount = rwInfo && Array.isArray(rwInfo.names) ? rwInfo.names.length : 0;
 
     capabilitiesInfoEl.textContent = "协议版本: " + state.capabilities.protocol_version +
-      " | read_only 动作: " + roCount +
-      " | read_write 动作: " + rwCount +
-      " | 当前表数量: " + state.tables.length;
+      " | read_only: " + roCount +
+      " | read_write: " + rwCount +
+      " | 当前表: " + state.tables.length;
   }
 
   function buildCapabilitiesURL(dbPath) {
@@ -284,6 +303,28 @@
       return "/v1/capabilities";
     }
     return "/v1/capabilities?db_path=" + encodeURIComponent(trimmed);
+  }
+
+  function actionSupported(actionName, mode) {
+    if (!state.capabilities || !state.capabilities.actions_by_mode) {
+      return false;
+    }
+    const modeInfo = state.capabilities.actions_by_mode[mode];
+    if (!modeInfo || !Array.isArray(modeInfo.names)) {
+      return false;
+    }
+    return modeInfo.names.indexOf(actionName) >= 0;
+  }
+
+  function renderAvailability() {
+    const hasTables = state.tables && state.tables.length > 0;
+    listTablesBtn.disabled = !actionSupported("list_tables", "read_only");
+    describeTableBtn.disabled = !hasTables || !actionSupported("describe_table", "read_only");
+    dropTableBtn.disabled = !hasTables || !actionSupported("drop_table", "read_write");
+    createTableBtn.disabled = !actionSupported("create_table", "read_write");
+    runQueryBtn.disabled = !hasTables;
+    refreshQueryBtn.disabled = !hasTables;
+    insertRowBtn.disabled = !hasTables || !actionSupported("insert_row", "read_write");
   }
 
   function defaultArgsForAction(actionName) {
@@ -330,7 +371,8 @@
     }
   }
 
-  function renderActionOptions() {
+  function renderDebugActionOptions() {
+    const previous = actionSelectEl.value;
     actionSelectEl.innerHTML = "";
 
     const actions = state.capabilities && Array.isArray(state.capabilities.actions)
@@ -354,30 +396,300 @@
       actionSelectEl.appendChild(option);
     });
 
-    syncActionPreset(true);
+    if (previous) {
+      actionSelectEl.value = previous;
+      if (!actionSelectEl.value) {
+        actionSelectEl.selectedIndex = 0;
+      }
+    }
+
+    syncDebugActionPreset(true);
   }
 
-  function syncActionPreset(forceArgs) {
-    const actionName = (actionSelectEl.value || "").trim();
-    if (!actionName) {
+  function renderQueryFilterRows() {
+    const mode = queryFilterModeEl.value;
+    queryExactRowEl.style.display = mode === "key_exact" ? "flex" : "none";
+    queryRangeRowEl.style.display = mode === "key_range" ? "flex" : "none";
+  }
+
+  function buildEnvelope(actionName, mode, args, prefix) {
+    return {
+      version: "v3",
+      request_id: newRequestID(prefix || "ui"),
+      mode: mode,
+      action: actionName,
+      args: args
+    };
+  }
+
+  function copyEnvelopeToPayload(envelope) {
+    const payload = Object.assign({}, envelope);
+    if (state.activeDBPath) {
+      payload.db_path = state.activeDBPath;
+    }
+    return payload;
+  }
+
+  function parseInteger(valueText, label) {
+    const text = String(valueText || "").trim();
+    if (!text) {
+      throw new Error(label + "不能为空");
+    }
+    const value = Number(text);
+    if (!Number.isFinite(value) || !Number.isInteger(value)) {
+      throw new Error(label + "必须是整数");
+    }
+    return value;
+  }
+
+  function parsePositiveInteger(valueText, label) {
+    const value = parseInteger(valueText, label);
+    if (value <= 0) {
+      throw new Error(label + "必须大于 0");
+    }
+    return value;
+  }
+
+  function toCellText(value) {
+    if (value === null || value === undefined) {
+      return "null";
+    }
+    if (typeof value === "object") {
+      return pretty(value);
+    }
+    return String(value);
+  }
+
+  function makeTableFromRows(rows) {
+    const table = document.createElement("table");
+    table.className = "result-table";
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      const tbody = document.createElement("tbody");
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.textContent = "暂无数据";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      table.appendChild(tbody);
+      return table;
+    }
+
+    const columns = [];
+    rows.forEach(function (row) {
+      if (!row || typeof row !== "object") {
+        return;
+      }
+      Object.keys(row).forEach(function (key) {
+        if (columns.indexOf(key) < 0) {
+          columns.push(key);
+        }
+      });
+    });
+
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    columns.forEach(function (key) {
+      const th = document.createElement("th");
+      th.textContent = key;
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+
+    const tbody = document.createElement("tbody");
+    rows.forEach(function (row) {
+      const tr = document.createElement("tr");
+      columns.forEach(function (key) {
+        const td = document.createElement("td");
+        td.textContent = toCellText(row ? row[key] : null);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function renderSimpleMessage(text, kind) {
+    const div = document.createElement("div");
+    div.className = kind === "error" ? "result-error" : "result-success";
+    div.textContent = text;
+    return div;
+  }
+
+  function summarizeSuccess(actionName, data) {
+    if (data && typeof data === "object") {
+      if (typeof data.created === "number") {
+        if (actionName === "create_table") {
+          return "建表成功。";
+        }
+        if (actionName === "create_primary_int_index") {
+          return "创建索引成功。";
+        }
+      }
+      if (typeof data.dropped === "number") {
+        if (actionName === "drop_table") {
+          return "删除表成功。";
+        }
+        if (actionName === "drop_index") {
+          return "删除索引成功。";
+        }
+      }
+      if (typeof data.inserted === "number") {
+        return "插入成功。";
+      }
+      if (typeof data.updated === "number") {
+        return "更新完成。";
+      }
+      if (typeof data.deleted === "number") {
+        return "删除完成。";
+      }
+      if (Array.isArray(data.tables)) {
+        return "已列出 " + data.tables.length + " 张表。";
+      }
+      if (Array.isArray(data.rows)) {
+        return "查询完成，共 " + (typeof data.row_count === "number" ? data.row_count : data.rows.length) + " 行。";
+      }
+      if (Object.prototype.hasOwnProperty.call(data, "found")) {
+        return data.found ? "已找到记录。" : "未找到记录。";
+      }
+      if (Array.isArray(data.results)) {
+        const successCount = typeof data.succeeded === "number" ? data.succeeded : 0;
+        const failCount = typeof data.failed === "number" ? data.failed : 0;
+        return "批量执行完成：成功 " + successCount + "，失败 " + failCount + "。";
+      }
+    }
+    return "执行成功。";
+  }
+
+  function renderResultView(actionName, response) {
+    resultViewEl.innerHTML = "";
+
+    if (!response || typeof response !== "object") {
+      resultSummaryEl.textContent = "响应异常。";
+      resultViewEl.appendChild(renderSimpleMessage("服务返回了非 JSON 响应。", "error"));
       return;
     }
 
-    if (WRITE_ACTIONS.has(actionName)) {
-      modeSelectEl.value = "read_write";
+    if (!response.ok) {
+      const code = response.error && response.error.code ? response.error.code : "UNKNOWN";
+      const message = response.error && response.error.message ? response.error.message : "unknown error";
+      resultSummaryEl.textContent = "执行失败。";
+      resultViewEl.appendChild(renderSimpleMessage("[" + code + "] " + message, "error"));
+      return;
     }
 
-    const currentArgs = (argsInputEl.value || "").trim();
-    if (forceArgs || !currentArgs || currentArgs === "{}") {
-      argsInputEl.value = pretty(defaultArgsForAction(actionName));
+    const data = response.data || {};
+    resultSummaryEl.textContent = summarizeSuccess(actionName, data);
+
+    if (Array.isArray(data.rows)) {
+      resultViewEl.appendChild(makeTableFromRows(data.rows));
+      return;
     }
+
+    if (data.row && typeof data.row === "object") {
+      resultViewEl.appendChild(makeTableFromRows([data.row]));
+      return;
+    }
+
+    if (Array.isArray(data.columns)) {
+      const describeRows = data.columns.map(function (column) {
+        return {
+          name: column.name,
+          type: column.type,
+          length: column.length || "",
+          nullable: column.nullable
+        };
+      });
+      resultViewEl.appendChild(makeTableFromRows(describeRows));
+
+      if (Array.isArray(data.indexes)) {
+        const indexNames = data.indexes.map(function (item) { return item.name; }).join(", ");
+        const note = document.createElement("p");
+        note.className = "subtle";
+        note.textContent = "索引: " + (indexNames || "(无)");
+        resultViewEl.appendChild(note);
+      }
+      return;
+    }
+
+    if (Array.isArray(data.tables)) {
+      const rows = data.tables.map(function (name) {
+        return { table: name };
+      });
+      resultViewEl.appendChild(makeTableFromRows(rows));
+      return;
+    }
+
+    if (Array.isArray(data.results)) {
+      const rows = data.results.map(function (item) {
+        const err = item.error && item.error.message ? item.error.message : "";
+        return {
+          index: item.index,
+          action: item.action,
+          ok: item.ok,
+          message: err
+        };
+      });
+      resultViewEl.appendChild(makeTableFromRows(rows));
+      return;
+    }
+
+    const keys = Object.keys(data);
+    if (keys.length > 0) {
+      const row = {};
+      keys.forEach(function (key) {
+        row[key] = data[key];
+      });
+      resultViewEl.appendChild(makeTableFromRows([row]));
+      return;
+    }
+
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "执行完成，当前动作没有可展示的数据。";
+    resultViewEl.appendChild(empty);
+  }
+
+  async function runEnvelope(envelope) {
+    envelopeOutEl.textContent = pretty(envelope);
+
+    const payload = copyEnvelopeToPayload(envelope);
+    setBusy(true);
+    setStatus("执行中...", false);
 
     try {
-      const envelope = buildEnvelope();
-      envelopeOutEl.textContent = pretty(envelope);
+      const result = await postJSON("/v1/action", payload);
+      rawOutEl.textContent = pretty(result);
+      renderResultView(envelope.action, result);
+      setStatus(result.ok ? "执行完成。" : "执行失败。", !result.ok);
+
+      if (result.ok && (WRITE_ACTIONS.has(envelope.action) || envelope.action === "batch")) {
+        state.tableSchemaCache = {};
+        await loadCapabilities(state.activeDBPath, true);
+      }
+
+      return result;
     } catch (err) {
-      envelopeOutEl.textContent = "{}";
+      const payloadError = err && err.payload ? err.payload : {
+        ok: false,
+        error: { message: err && err.message ? err.message : "unknown error" }
+      };
+      rawOutEl.textContent = pretty(payloadError);
+      renderResultView(envelope.action, payloadError);
+      setStatus("失败: " + (err && err.message ? err.message : "unknown error"), true);
+      throw err;
+    } finally {
+      setBusy(false);
+      renderAvailability();
     }
+  }
+
+  async function executeAction(actionName, args, mode, prefix) {
+    const envelope = buildEnvelope(actionName, mode, args, prefix);
+    return runEnvelope(envelope);
   }
 
   async function loadCapabilities(dbPath, keepStatusText) {
@@ -394,56 +706,85 @@
     }
 
     renderRecentDBPaths();
-    renderTableSelectors();
+    renderAllTableSelectors();
     renderCapabilitiesSummary();
-    renderQuickActionAvailability();
-    renderActionOptions();
+    renderDebugActionOptions();
+    renderAvailability();
     updateDBInfo();
+
+    if (state.tables.length > 0) {
+      await refreshInsertFields(true);
+    } else {
+      renderInsertFields([], "");
+    }
 
     if (!keepStatusText) {
       setStatus("能力已加载，当前数据库已就绪。", false);
     }
   }
 
-  function addColumnRow(initial) {
-    const row = document.createElement("div");
-    row.className = "column-row";
+  function addCreateColumnRow(initial) {
+    const tr = document.createElement("tr");
 
+    const nameTd = document.createElement("td");
     const nameInput = document.createElement("input");
     nameInput.type = "text";
-    nameInput.className = "col-name";
+    nameInput.className = "create-col-name";
     nameInput.placeholder = "列名";
+    if (initial && typeof initial.name === "string") {
+      nameInput.value = initial.name;
+    }
+    nameTd.appendChild(nameInput);
 
+    const typeTd = document.createElement("td");
     const typeSelect = document.createElement("select");
-    typeSelect.className = "col-type";
+    typeSelect.className = "create-col-type";
     COLUMN_TYPES.forEach(function (typeName) {
       const option = document.createElement("option");
       option.value = typeName;
       option.textContent = typeName;
       typeSelect.appendChild(option);
     });
+    if (initial && typeof initial.type === "string") {
+      typeSelect.value = initial.type;
+    }
+    typeTd.appendChild(typeSelect);
 
-    const nullableWrap = document.createElement("label");
-    nullableWrap.className = "nullable-wrap";
-    const nullableInput = document.createElement("input");
-    nullableInput.type = "checkbox";
-    nullableInput.className = "col-nullable";
-    nullableWrap.appendChild(nullableInput);
-    nullableWrap.appendChild(document.createTextNode(" nullable"));
-
+    const lengthTd = document.createElement("td");
     const lengthInput = document.createElement("input");
     lengthInput.type = "number";
-    lengthInput.className = "col-length";
+    lengthInput.className = "create-col-length";
     lengthInput.min = "1";
     lengthInput.step = "1";
-    lengthInput.placeholder = "varchar 长度";
+    lengthInput.placeholder = "VARCHAR";
+    if (initial && typeof initial.length === "number") {
+      lengthInput.value = String(initial.length);
+    }
+    lengthTd.appendChild(lengthInput);
 
+    const nullableTd = document.createElement("td");
+    const nullableInput = document.createElement("input");
+    nullableInput.type = "checkbox";
+    nullableInput.className = "create-col-nullable";
+    if (initial && typeof initial.nullable === "boolean") {
+      nullableInput.checked = initial.nullable;
+    }
+    nullableTd.appendChild(nullableInput);
+
+    const opTd = document.createElement("td");
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
-    removeBtn.className = "ghost small remove";
+    removeBtn.className = "ghost remove-col-btn";
     removeBtn.textContent = "删除";
+    removeBtn.addEventListener("click", function () {
+      tr.remove();
+      if (createColumnsBodyEl.children.length === 0) {
+        addCreateColumnRow();
+      }
+    });
+    opTd.appendChild(removeBtn);
 
-    function syncLengthAvailability() {
+    function syncLengthInput() {
       const isVarchar = typeSelect.value === "VARCHAR";
       lengthInput.disabled = !isVarchar;
       if (!isVarchar) {
@@ -451,78 +792,50 @@
       }
     }
 
-    typeSelect.addEventListener("change", syncLengthAvailability);
-    removeBtn.addEventListener("click", function () {
-      row.remove();
-      if (qaColumnsEl.children.length === 0) {
-        addColumnRow();
-      }
-    });
+    typeSelect.addEventListener("change", syncLengthInput);
+    syncLengthInput();
 
-    if (initial && typeof initial.name === "string") {
-      nameInput.value = initial.name;
-    }
-    if (initial && typeof initial.type === "string") {
-      typeSelect.value = initial.type;
-    }
-    if (initial && typeof initial.nullable === "boolean") {
-      nullableInput.checked = initial.nullable;
-    }
-    if (initial && typeof initial.length === "number" && initial.length > 0) {
-      lengthInput.value = String(initial.length);
-    }
-
-    row.appendChild(nameInput);
-    row.appendChild(typeSelect);
-    row.appendChild(nullableWrap);
-    row.appendChild(lengthInput);
-    row.appendChild(removeBtn);
-
-    qaColumnsEl.appendChild(row);
-    syncLengthAvailability();
+    tr.appendChild(nameTd);
+    tr.appendChild(typeTd);
+    tr.appendChild(lengthTd);
+    tr.appendChild(nullableTd);
+    tr.appendChild(opTd);
+    createColumnsBodyEl.appendChild(tr);
   }
 
   function collectCreateColumns() {
-    const rows = qaColumnsEl.querySelectorAll(".column-row");
+    const rows = createColumnsBodyEl.querySelectorAll("tr");
     if (!rows || rows.length === 0) {
       throw new Error("至少需要定义 1 列");
     }
 
     const columns = [];
-    const seenNames = {};
+    const seen = {};
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const nameInput = row.querySelector(".col-name");
-      const typeSelect = row.querySelector(".col-type");
-      const nullableInput = row.querySelector(".col-nullable");
-      const lengthInput = row.querySelector(".col-length");
+      const name = (row.querySelector(".create-col-name").value || "").trim();
+      const type = row.querySelector(".create-col-type").value;
+      const nullable = !!row.querySelector(".create-col-nullable").checked;
+      const lengthText = (row.querySelector(".create-col-length").value || "").trim();
 
-      const name = (nameInput && nameInput.value ? nameInput.value : "").trim();
       if (!name) {
-        throw new Error("第 " + (i + 1) + " 列的列名不能为空");
+        throw new Error("第 " + (i + 1) + " 行列名不能为空");
       }
-      if (seenNames[name]) {
+      if (seen[name]) {
         throw new Error("列名重复: " + name);
       }
-      seenNames[name] = true;
-
-      const typeName = typeSelect ? typeSelect.value : "";
-      const nullable = !!(nullableInput && nullableInput.checked);
+      seen[name] = true;
 
       const column = {
         name: name,
-        type: typeName,
+        type: type,
         nullable: nullable
       };
 
-      if (typeName === "VARCHAR") {
-        const rawLength = (lengthInput && lengthInput.value ? lengthInput.value : "").trim();
-        const parsedLength = Number(rawLength);
-        if (!rawLength || !Number.isInteger(parsedLength) || parsedLength <= 0) {
-          throw new Error("第 " + (i + 1) + " 列的 VARCHAR 长度必须为正整数");
-        }
-        column.length = parsedLength;
+      if (type === "VARCHAR") {
+        const length = parsePositiveInteger(lengthText, "第 " + (i + 1) + " 行 VARCHAR 长度");
+        column.length = length;
       }
 
       columns.push(column);
@@ -531,15 +844,183 @@
     return columns;
   }
 
-  async function refreshCapabilitiesAfterWrite() {
+  function renderInsertFields(columns, table) {
+    insertFieldsEl.innerHTML = "";
+
+    if (!table) {
+      const empty = document.createElement("div");
+      empty.className = "empty-result";
+      empty.textContent = "请选择表后再插入。";
+      insertFieldsEl.appendChild(empty);
+      return;
+    }
+
+    if (!Array.isArray(columns) || columns.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-result";
+      empty.textContent = "未获取到列结构，请先点击“查看结构”确认。";
+      insertFieldsEl.appendChild(empty);
+      return;
+    }
+
+    columns.forEach(function (column) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "insert-field";
+      wrapper.dataset.columnName = column.name;
+      wrapper.dataset.columnType = String(column.type || "").toUpperCase();
+
+      const label = document.createElement("label");
+      label.textContent = column.name + " (" + wrapper.dataset.columnType + ")";
+      wrapper.appendChild(label);
+
+      let input;
+      if (wrapper.dataset.columnType === "BOOLEAN") {
+        const boolWrap = document.createElement("label");
+        boolWrap.className = "insert-boolean";
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.className = "insert-input";
+        boolWrap.appendChild(input);
+        boolWrap.appendChild(document.createTextNode("true / false"));
+        wrapper.appendChild(boolWrap);
+      } else {
+        input = document.createElement("input");
+        input.className = "insert-input";
+
+        if (INTEGER_TYPES.has(wrapper.dataset.columnType)) {
+          input.type = "number";
+          input.step = "1";
+        } else if (NUMBER_TYPES.has(wrapper.dataset.columnType)) {
+          input.type = "number";
+          input.step = "any";
+        } else {
+          input.type = "text";
+          if (wrapper.dataset.columnType === "VARCHAR" && typeof column.length === "number" && column.length > 0) {
+            input.maxLength = column.length;
+            input.placeholder = "最长 " + column.length + " 字符";
+          }
+        }
+
+        wrapper.appendChild(input);
+      }
+
+      insertFieldsEl.appendChild(wrapper);
+    });
+  }
+
+  async function loadTableSchema(table) {
+    const name = (table || "").trim();
+    if (!name) {
+      return null;
+    }
+    if (state.tableSchemaCache[name]) {
+      return state.tableSchemaCache[name];
+    }
+
+    const envelope = buildEnvelope("describe_table", "read_only", { table: name }, "schema");
+    const payload = copyEnvelopeToPayload(envelope);
+    const response = await postJSON("/v1/action", payload);
+
+    if (!response.ok || !response.data || !Array.isArray(response.data.columns)) {
+      throw new Error("读取表结构失败");
+    }
+
+    state.tableSchemaCache[name] = response.data;
+    return response.data;
+  }
+
+  async function refreshInsertFields(silentOnError) {
+    const table = (insertTableSelectEl.value || "").trim();
+    if (!table) {
+      renderInsertFields([], "");
+      return;
+    }
+
     try {
-      await loadCapabilities(state.activeDBPath, true);
+      const schema = await loadTableSchema(table);
+      renderInsertFields(schema.columns || [], table);
     } catch (err) {
-      setStatus("写操作成功，但刷新能力失败: " + err.message, true);
+      renderInsertFields([], table);
+      if (!silentOnError) {
+        setStatus("读取插入表单结构失败: " + (err && err.message ? err.message : "unknown error"), true);
+      }
     }
   }
 
-  function buildEnvelope() {
+  function collectInsertValues() {
+    const table = (insertTableSelectEl.value || "").trim();
+    if (!table) {
+      throw new Error("请先选择插入目标表");
+    }
+
+    const wrappers = insertFieldsEl.querySelectorAll(".insert-field");
+    if (!wrappers || wrappers.length === 0) {
+      throw new Error("当前表没有可插入列");
+    }
+
+    const values = {};
+
+    wrappers.forEach(function (wrapper) {
+      const name = wrapper.dataset.columnName;
+      const type = wrapper.dataset.columnType;
+      const input = wrapper.querySelector(".insert-input");
+
+      if (!name || !input) {
+        return;
+      }
+
+      if (type === "BOOLEAN") {
+        values[name] = !!input.checked;
+        return;
+      }
+
+      const raw = (input.value || "").trim();
+      if (INTEGER_TYPES.has(type)) {
+        values[name] = parseInteger(raw, "列 " + name);
+        return;
+      }
+
+      if (NUMBER_TYPES.has(type)) {
+        if (!raw) {
+          throw new Error("列 " + name + " 不能为空");
+        }
+        const number = Number(raw);
+        if (!Number.isFinite(number)) {
+          throw new Error("列 " + name + " 必须是数字");
+        }
+        values[name] = number;
+        return;
+      }
+
+      values[name] = input.value || "";
+    });
+
+    return values;
+  }
+
+  function syncDebugActionPreset(forceArgs) {
+    const actionName = (actionSelectEl.value || "").trim();
+    if (!actionName) {
+      return;
+    }
+
+    if (WRITE_ACTIONS.has(actionName)) {
+      modeSelectEl.value = "read_write";
+    }
+
+    const currentArgs = (argsInputEl.value || "").trim();
+    if (forceArgs || !currentArgs || currentArgs === "{}") {
+      argsInputEl.value = pretty(defaultArgsForAction(actionName));
+    }
+
+    try {
+      envelopeOutEl.textContent = pretty(buildDebugEnvelope());
+    } catch (err) {
+      envelopeOutEl.textContent = "{}";
+    }
+  }
+
+  function buildDebugEnvelope() {
     const actionName = (actionSelectEl.value || "").trim();
     if (!actionName) {
       throw new Error("action 不能为空");
@@ -556,103 +1037,12 @@
     } catch (err) {
       throw new Error("args JSON 解析失败: " + err.message);
     }
+
     if (!args || Array.isArray(args) || typeof args !== "object") {
       throw new Error("args 必须是 JSON 对象");
     }
 
-    return {
-      version: "v3",
-      request_id: newRequestID("ui"),
-      mode: mode,
-      action: actionName,
-      args: args
-    };
-  }
-
-  async function executeEnvelope() {
-    let envelope;
-    try {
-      envelope = buildEnvelope();
-    } catch (err) {
-      setStatus(err.message, true);
-      return;
-    }
-
-    envelopeOutEl.textContent = pretty(envelope);
-
-    const payload = Object.assign({}, envelope);
-    if (state.activeDBPath) {
-      payload.db_path = state.activeDBPath;
-    }
-
-    setBusy(true);
-    setStatus("执行中...", false);
-
-    try {
-      const result = await postJSON("/v1/action", payload);
-      executionOutEl.textContent = pretty(result);
-      setStatus("执行完成。", false);
-
-      if (result && result.ok && (WRITE_ACTIONS.has(envelope.action) || envelope.action === "batch")) {
-        await refreshCapabilitiesAfterWrite();
-      }
-    } catch (err) {
-      if (err && err.payload) {
-        executionOutEl.textContent = pretty(err.payload);
-      }
-      setStatus("失败: " + (err && err.message ? err.message : "unknown error"), true);
-    } finally {
-      setBusy(false);
-      renderQuickActionAvailability();
-    }
-  }
-
-  async function executeAction(actionName, args, forcedMode) {
-    const envelope = {
-      version: "v3",
-      request_id: newRequestID("qa"),
-      mode: forcedMode || modeForAction(actionName),
-      action: actionName,
-      args: args || {}
-    };
-
-    envelopeOutEl.textContent = pretty(envelope);
-
-    const payload = Object.assign({}, envelope);
-    if (state.activeDBPath) {
-      payload.db_path = state.activeDBPath;
-    }
-
-    setBusy(true);
-    setStatus("执行中...", false);
-
-    try {
-      const result = await postJSON("/v1/action", payload);
-      executionOutEl.textContent = pretty(result);
-      setStatus("执行完成。", false);
-
-      if (result && result.ok && (WRITE_ACTIONS.has(actionName) || actionName === "batch")) {
-        await refreshCapabilitiesAfterWrite();
-      }
-    } catch (err) {
-      if (err && err.payload) {
-        executionOutEl.textContent = pretty(err.payload);
-      }
-      setStatus("失败: " + (err && err.message ? err.message : "unknown error"), true);
-    } finally {
-      setBusy(false);
-      renderQuickActionAvailability();
-    }
-  }
-
-  async function copyFrom(targetEl) {
-    const text = targetEl.textContent || "";
-    try {
-      await navigator.clipboard.writeText(text);
-      setStatus("已复制到剪贴板。", false);
-    } catch (e) {
-      setStatus("复制失败，请手动复制。", true);
-    }
+    return buildEnvelope(actionName, mode, args, "debug");
   }
 
   async function switchDatabase(path) {
@@ -661,14 +1051,64 @@
     setStatus("切换数据库中...", false);
 
     try {
+      state.tableSchemaCache = {};
       await loadCapabilities(candidate, true);
       setStatus("数据库切换成功。", false);
     } catch (err) {
       setStatus("切换失败: " + (err && err.message ? err.message : "unknown error"), true);
     } finally {
       setBusy(false);
-      renderQuickActionAvailability();
+      renderAvailability();
     }
+  }
+
+  function buildQueryAction() {
+    const table = (queryTableSelectEl.value || "").trim();
+    if (!table) {
+      throw new Error("请选择查询表");
+    }
+
+    const limit = parsePositiveInteger(queryLimitInputEl.value, "limit");
+    const filterMode = queryFilterModeEl.value;
+
+    if (filterMode === "none") {
+      return {
+        action: "scan_all",
+        mode: "read_only",
+        args: { table: table, limit: limit }
+      };
+    }
+
+    if (filterMode === "key_exact") {
+      return {
+        action: "get_by_primary_int",
+        mode: "read_only",
+        args: {
+          table: table,
+          key: parseInteger(queryExactKeyInputEl.value, "主键 key")
+        }
+      };
+    }
+
+    if (filterMode === "key_range") {
+      const startKey = parseInteger(queryStartKeyInputEl.value, "start_key");
+      const endKey = parseInteger(queryEndKeyInputEl.value, "end_key");
+      if (startKey > endKey) {
+        throw new Error("start_key 不能大于 end_key");
+      }
+      return {
+        action: "scan_primary_int_range",
+        mode: "read_only",
+        args: {
+          table: table,
+          start_key: startKey,
+          end_key: endKey,
+          limit: limit
+        }
+      };
+    }
+
+    throw new Error("未知筛选模式");
   }
 
   function wireEvents() {
@@ -682,37 +1122,42 @@
       switchDatabase(selected);
     });
 
-    qaListTablesBtn.addEventListener("click", function () {
-      executeAction("list_tables", {});
+    listTablesBtn.addEventListener("click", async function () {
+      try {
+        await executeAction("list_tables", {}, "read_only", "list");
+        await loadCapabilities(state.activeDBPath, true);
+      } catch (_err) {
+        return;
+      }
     });
 
-    qaDescribeBtn.addEventListener("click", function () {
-      const table = (qaDescribeTableEl.value || "").trim();
+    describeTableBtn.addEventListener("click", function () {
+      const table = (manageTableSelectEl.value || "").trim();
       if (!table) {
         setStatus("请先选择表。", true);
         return;
       }
-      executeAction("describe_table", { table: table });
+      executeAction("describe_table", { table: table }, "read_only", "describe");
     });
 
-    qaDropBtn.addEventListener("click", function () {
-      const table = (qaDropTableEl.value || "").trim();
+    dropTableBtn.addEventListener("click", function () {
+      const table = (manageTableSelectEl.value || "").trim();
       if (!table) {
         setStatus("请先选择要删除的表。", true);
         return;
       }
-      if (!window.confirm("确认删除表 " + table + " ? 此操作不可撤销。")) {
+      if (!window.confirm("确认删除表 " + table + " ? 仅空表允许删除。")) {
         return;
       }
-      executeAction("drop_table", { table: table }, "read_write");
+      executeAction("drop_table", { table: table }, "read_write", "drop-table");
     });
 
-    qaAddColumnBtn.addEventListener("click", function () {
-      addColumnRow();
+    addCreateColumnBtn.addEventListener("click", function () {
+      addCreateColumnRow();
     });
 
-    qaCreateBtn.addEventListener("click", function () {
-      const table = (qaCreateTableNameEl.value || "").trim();
+    createTableBtn.addEventListener("click", function () {
+      const table = (createTableNameEl.value || "").trim();
       if (!table) {
         setStatus("表名不能为空。", true);
         return;
@@ -726,15 +1171,61 @@
         return;
       }
 
-      executeAction("create_table", {
-        table: table,
-        columns: columns
-      }, "read_write");
+      executeAction("create_table", { table: table, columns: columns }, "read_write", "create-table");
+    });
+
+    queryFilterModeEl.addEventListener("change", function () {
+      renderQueryFilterRows();
+    });
+
+    runQueryBtn.addEventListener("click", function () {
+      let req;
+      try {
+        req = buildQueryAction();
+      } catch (err) {
+        setStatus(err.message, true);
+        return;
+      }
+      state.lastQuery = req;
+      executeAction(req.action, req.args, req.mode, "query");
+    });
+
+    refreshQueryBtn.addEventListener("click", function () {
+      let req;
+      try {
+        req = buildQueryAction();
+      } catch (err) {
+        setStatus(err.message, true);
+        return;
+      }
+      state.lastQuery = req;
+      executeAction(req.action, req.args, req.mode, "refresh");
+    });
+
+    insertTableSelectEl.addEventListener("change", function () {
+      refreshInsertFields(false);
+    });
+
+    insertRowBtn.addEventListener("click", function () {
+      const table = (insertTableSelectEl.value || "").trim();
+      if (!table) {
+        setStatus("请先选择插入目标表。", true);
+        return;
+      }
+
+      let values;
+      try {
+        values = collectInsertValues();
+      } catch (err) {
+        setStatus("插入参数错误: " + err.message, true);
+        return;
+      }
+
+      executeAction("insert_row", { table: table, values: values }, "read_write", "insert");
     });
 
     actionSelectEl.addEventListener("change", function () {
-      syncActionPreset(true);
-      renderQuickActionAvailability();
+      syncDebugActionPreset(true);
     });
 
     modeSelectEl.addEventListener("change", function () {
@@ -743,16 +1234,15 @@
         modeSelectEl.value = "read_write";
       }
       try {
-        envelopeOutEl.textContent = pretty(buildEnvelope());
-      } catch (err) {
+        envelopeOutEl.textContent = pretty(buildDebugEnvelope());
+      } catch (_err) {
         envelopeOutEl.textContent = "{}";
       }
-      renderQuickActionAvailability();
     });
 
     buildEnvelopeBtn.addEventListener("click", function () {
       try {
-        const envelope = buildEnvelope();
+        const envelope = buildDebugEnvelope();
         envelopeOutEl.textContent = pretty(envelope);
         setStatus("Envelope 已生成。", false);
       } catch (err) {
@@ -761,26 +1251,27 @@
     });
 
     runEnvelopeBtn.addEventListener("click", function () {
-      executeEnvelope();
-    });
-
-    copyEnvelopeBtn.addEventListener("click", function () {
-      copyFrom(envelopeOutEl);
-    });
-
-    copyExecutionBtn.addEventListener("click", function () {
-      copyFrom(executionOutEl);
+      let envelope;
+      try {
+        envelope = buildDebugEnvelope();
+      } catch (err) {
+        setStatus(err.message, true);
+        return;
+      }
+      runEnvelope(envelope);
     });
   }
 
   async function init() {
     wireEvents();
 
-    addColumnRow({ name: "id", type: "INTEGER", nullable: false });
-    addColumnRow({ name: "name", type: "VARCHAR", nullable: false, length: 64 });
+    addCreateColumnRow({ name: "id", type: "INTEGER", nullable: false });
+    addCreateColumnRow({ name: "name", type: "VARCHAR", nullable: false, length: 64 });
 
+    renderQueryFilterRows();
     renderRecentDBPaths();
     updateDBInfo();
+    renderInsertFields([], "");
 
     const stored = localStorage.getItem(STORAGE_ACTIVE_DB_PATH) || "";
     dbPathInputEl.value = stored;
@@ -788,13 +1279,13 @@
     setBusy(true);
     try {
       await loadCapabilities(stored, true);
-      envelopeOutEl.textContent = pretty(buildEnvelope());
+      envelopeOutEl.textContent = pretty(buildDebugEnvelope());
       setStatus("系统就绪。", false);
     } catch (err) {
       setStatus("初始化失败: " + (err && err.message ? err.message : "unknown error"), true);
     } finally {
       setBusy(false);
-      renderQuickActionAvailability();
+      renderAvailability();
     }
   }
 

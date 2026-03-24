@@ -3,3 +3,4 @@ build/
 Go/haruhidb/test_output/
 testgo
 build-mingw
+haruhidb-web.db

@@ -12,116 +12,182 @@
     <header class="hero">
       <p class="eyebrow">HaruhiDB</p>
       <h1>Web Console</h1>
-      <p class="sub">纯动作执行控制台：切库、快捷动作、JSON Envelope 执行。</p>
+      <p class="sub">任务型数据库控制台：表管理、查询与插入；调试能力按需展开。</p>
     </header>
 
-    <section class="panel db-panel">
-      <h2>数据库上下文</h2>
-      <div class="row">
-        <label for="dbPathInput">数据库路径</label>
-        <div class="inline-actions">
-          <input id="dbPathInput" type="text" placeholder="/abs/path/to/database.db">
-          <button id="switchDbBtn" type="button">切换数据库</button>
-        </div>
-      </div>
-      <div class="row">
-        <label for="recentDbSelect">最近使用</label>
-        <div class="inline-actions">
-          <select id="recentDbSelect"></select>
-          <button id="useRecentBtn" class="ghost" type="button">使用选中路径</button>
-        </div>
-      </div>
-      <p id="dbInfo" class="db-info">当前数据库: (未连接)</p>
-    </section>
+    <section class="workspace">
+      <div class="left-column">
+        <section class="panel">
+          <h2>当前数据库</h2>
+          <p id="dbShortInfo" class="db-short" title="">当前数据库: (未连接)</p>
 
-    <section class="panel quick-panel">
-      <h2>快捷动作面板</h2>
-      <p id="capabilitiesInfo" class="subtle">加载能力中...</p>
-
-      <div class="quick-grid">
-        <div class="quick-card">
-          <h3>list_tables</h3>
-          <button id="qaListTablesBtn" type="button">执行 list_tables</button>
-        </div>
-
-        <div class="quick-card">
-          <h3>describe_table</h3>
           <div class="row">
-            <label for="qaDescribeTable">表名</label>
-            <select id="qaDescribeTable"></select>
+            <label for="dbPathInput">数据库路径</label>
+            <div class="inline-actions">
+              <input id="dbPathInput" type="text" placeholder="/abs/path/to/database.db">
+              <button id="switchDbBtn" type="button">切换数据库</button>
+            </div>
           </div>
-          <button id="qaDescribeBtn" type="button">执行 describe_table</button>
-        </div>
 
-        <div class="quick-card">
-          <h3>drop_table</h3>
           <div class="row">
-            <label for="qaDropTable">表名</label>
-            <select id="qaDropTable"></select>
+            <label for="recentDbSelect">最近使用</label>
+            <div class="inline-actions">
+              <select id="recentDbSelect"></select>
+              <button id="useRecentBtn" class="ghost" type="button">使用选中路径</button>
+            </div>
           </div>
-          <button id="qaDropBtn" class="danger" type="button">执行 drop_table</button>
-        </div>
-      </div>
 
-      <div class="quick-create">
-        <h3>create_table</h3>
-        <div class="row">
-          <label for="qaCreateTableName">表名</label>
-          <input id="qaCreateTableName" type="text" placeholder="例如 users">
-        </div>
-        <div class="row">
-          <label>列定义</label>
-          <div id="qaColumns" class="columns"></div>
-          <div class="inline-actions">
-            <button id="qaAddColumnBtn" class="ghost" type="button">新增列</button>
-            <button id="qaCreateBtn" type="button">执行 create_table</button>
+          <details class="details-block" id="dbPathDetails">
+            <summary>展开详情</summary>
+            <div class="kv-row">
+              <span>当前路径</span>
+              <code id="dbFullPath">-</code>
+            </div>
+            <div class="kv-row">
+              <span>默认路径</span>
+              <code id="dbDefaultPath">-</code>
+            </div>
+          </details>
+
+          <p id="status" class="status" aria-live="polite"></p>
+        </section>
+
+        <section class="panel">
+          <h2>常用操作</h2>
+          <p id="capabilitiesInfo" class="subtle">加载能力中...</p>
+
+          <div class="block">
+            <h3>表操作</h3>
+            <div class="row">
+              <div class="inline-actions">
+                <button id="listTablesBtn" type="button">列出表</button>
+                <select id="manageTableSelect"></select>
+              </div>
+            </div>
+            <div class="inline-actions">
+              <button id="describeTableBtn" type="button">查看结构</button>
+              <button id="dropTableBtn" class="danger" type="button">删除表</button>
+            </div>
           </div>
-        </div>
-      </div>
-    </section>
 
-    <section class="panel input-panel">
-      <h2>Action JSON 控制台</h2>
-      <div class="row">
-        <label for="actionSelect">Action</label>
-        <select id="actionSelect"></select>
+          <div class="block">
+            <h3>新建表</h3>
+            <div class="row">
+              <label for="createTableName">表名</label>
+              <input id="createTableName" type="text" placeholder="例如 users">
+            </div>
+            <div class="row">
+              <label>列定义</label>
+              <div class="table-wrap">
+                <table class="editor-table">
+                  <thead>
+                    <tr>
+                      <th>列名</th>
+                      <th>类型</th>
+                      <th>长度</th>
+                      <th>nullable</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="createColumnsBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="inline-actions">
+              <button id="addCreateColumnBtn" class="ghost" type="button">添加列</button>
+              <button id="createTableBtn" type="button">创建表</button>
+            </div>
+          </div>
+
+          <div class="block">
+            <h3>数据查询</h3>
+            <div class="row">
+              <label for="queryTableSelect">表名</label>
+              <select id="queryTableSelect"></select>
+            </div>
+            <div class="row">
+              <label for="queryLimitInput">limit</label>
+              <input id="queryLimitInput" type="number" min="1" step="1" value="20">
+            </div>
+            <div class="row">
+              <label for="queryFilterMode">筛选条件</label>
+              <select id="queryFilterMode">
+                <option value="none">无筛选</option>
+                <option value="key_exact">主键精确</option>
+                <option value="key_range">主键范围</option>
+              </select>
+            </div>
+            <div class="inline-actions" id="queryExactRow">
+              <input id="queryExactKeyInput" type="number" step="1" placeholder="主键 key">
+            </div>
+            <div class="inline-actions" id="queryRangeRow">
+              <input id="queryStartKeyInput" type="number" step="1" placeholder="start_key">
+              <input id="queryEndKeyInput" type="number" step="1" placeholder="end_key">
+            </div>
+            <div class="inline-actions">
+              <button id="runQueryBtn" type="button">查询全部</button>
+              <button id="refreshQueryBtn" class="ghost" type="button">刷新</button>
+            </div>
+          </div>
+
+          <div class="block">
+            <h3>新增数据</h3>
+            <div class="row">
+              <label for="insertTableSelect">表名</label>
+              <select id="insertTableSelect"></select>
+            </div>
+            <div id="insertFields" class="insert-fields"></div>
+            <div class="actions">
+              <button id="insertRowBtn" class="primary" type="button">插入</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <details class="details-block" id="debugDetails">
+            <summary>高级调试</summary>
+            <div class="row">
+              <label for="actionSelect">Action</label>
+              <select id="actionSelect"></select>
+            </div>
+            <div class="row">
+              <label for="modeSelect">Mode</label>
+              <select id="modeSelect">
+                <option value="read_only">read_only</option>
+                <option value="read_write">read_write</option>
+              </select>
+            </div>
+            <div class="row text-row">
+              <label for="argsInput">Args JSON</label>
+              <textarea id="argsInput" rows="8" spellcheck="false">{}</textarea>
+            </div>
+            <div class="actions">
+              <button id="buildEnvelopeBtn" class="ghost" type="button">生成 Envelope</button>
+              <button id="runEnvelopeBtn" type="button">执行 Envelope</button>
+            </div>
+          </details>
+        </section>
       </div>
 
-      <div class="row">
-        <label for="modeSelect">Mode</label>
-        <select id="modeSelect">
-          <option value="read_only">read_only</option>
-          <option value="read_write">read_write</option>
-        </select>
-      </div>
+      <div class="right-column">
+        <section class="panel">
+          <h2>执行结果</h2>
+          <p id="resultSummary" class="result-summary">等待操作。</p>
+          <div id="resultView" class="result-view"></div>
+        </section>
 
-      <div class="row text-row">
-        <label for="argsInput">Args JSON</label>
-        <textarea id="argsInput" rows="8" spellcheck="false">{}</textarea>
-      </div>
+        <section class="panel">
+          <h2>请求预览</h2>
+          <pre id="envelopeOut" class="json">{}</pre>
+        </section>
 
-      <div class="actions">
-        <button id="buildEnvelopeBtn" class="ghost" type="button">生成 Envelope</button>
-        <button id="runEnvelopeBtn" type="button" class="primary">执行 Envelope</button>
+        <section class="panel">
+          <details class="details-block" id="rawResponseDetails">
+            <summary>原始响应</summary>
+            <pre id="rawOut" class="json">{}</pre>
+          </details>
+        </section>
       </div>
-
-      <p id="status" class="status" aria-live="polite"></p>
-    </section>
-
-    <section class="panel output-panel">
-      <div class="output-head">
-        <h2>Envelope Preview</h2>
-        <button id="copyEnvelopeBtn" class="ghost small" type="button">复制</button>
-      </div>
-      <pre id="envelopeOut" class="json">{}</pre>
-    </section>
-
-    <section class="panel output-panel">
-      <div class="output-head">
-        <h2>Execution Result</h2>
-        <button id="copyExecutionBtn" class="ghost small" type="button">复制</button>
-      </div>
-      <pre id="executionOut" class="json">{}</pre>
     </section>
   </main>
 

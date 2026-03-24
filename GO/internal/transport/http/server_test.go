@@ -184,6 +184,57 @@ func TestActionEndpointSupportsDBPathField(t *testing.T) {
 	}
 }
 
+func TestActionEndpointDDLEmptyTableGuard(t *testing.T) {
+	manager, _, _ := newHTTPRuntimeManager(t)
+	defer closeHTTPRuntimeManager(t, manager)
+
+	server := httptest.NewServer(NewHandler(manager, Config{}))
+	defer server.Close()
+
+	insertBody := []byte(`{
+		"version":"v3",
+		"request_id":"req-http-insert-before-drop",
+		"mode":"read_write",
+		"action":"insert_row",
+		"args":{"table":"users","values":{"id":1,"name":"alice"}}
+	}`)
+	insertResp, err := http.Post(server.URL+"/v1/action", "application/json", bytes.NewReader(insertBody))
+	if err != nil {
+		t.Fatalf("POST /v1/action insert failed: %v", err)
+	}
+	defer insertResp.Body.Close()
+	if insertResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected insert status: %d", insertResp.StatusCode)
+	}
+
+	dropBody := []byte(`{
+		"version":"v3",
+		"request_id":"req-http-drop-denied",
+		"mode":"read_write",
+		"action":"drop_table",
+		"args":{"table":"users"}
+	}`)
+	dropResp, err := http.Post(server.URL+"/v1/action", "application/json", bytes.NewReader(dropBody))
+	if err != nil {
+		t.Fatalf("POST /v1/action drop failed: %v", err)
+	}
+	defer dropResp.Body.Close()
+	if dropResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected drop status: %d", dropResp.StatusCode)
+	}
+
+	var envelope action.ResponseEnvelope[map[string]any]
+	if err := json.NewDecoder(dropResp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode drop response failed: %v", err)
+	}
+	if envelope.Ok {
+		t.Fatalf("expected drop_table failure for non-empty table, got success: %#v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != action.CodeConstraint {
+		t.Fatalf("unexpected drop_table error payload: %#v", envelope.Error)
+	}
+}
+
 func TestTranslateEndpointRemoved(t *testing.T) {
 	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
