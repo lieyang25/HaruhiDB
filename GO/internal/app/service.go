@@ -288,11 +288,20 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 	}
 
 	changed := len(normalized) != len(envelope)
-	versionMissing := false
+	currentVersion := ""
 	if version, ok := normalized["version"].(string); !ok || strings.TrimSpace(version) == "" {
 		normalized["version"] = action.VersionV1
-		versionMissing = true
 		changed = true
+		currentVersion = action.VersionV1
+	} else {
+		trimmedVersion := strings.TrimSpace(version)
+		if !action.SupportedVersion(trimmedVersion) {
+			normalized["version"] = action.VersionV1
+			changed = true
+			currentVersion = action.VersionV1
+		} else {
+			currentVersion = trimmedVersion
+		}
 	}
 	if id, ok := normalized["request_id"].(string); !ok || strings.TrimSpace(id) == "" {
 		normalized["request_id"] = strings.TrimSpace(requestID)
@@ -321,15 +330,18 @@ func normalizeCandidateEnvelope(candidate []byte, requestID string, mode action.
 			changed = true
 		}
 
-		if versionMissing {
-			candidateAction := action.Action(canonical)
-			if action.ActionSupportedInVersion(action.VersionV2, candidateAction) && !action.ActionSupportedInVersion(action.VersionV1, candidateAction) {
-				normalized["version"] = action.VersionV2
-				changed = true
-			} else if candidateAction == action.ActionBatch && batchContainsV2OnlyAction(normalized["args"]) {
-				normalized["version"] = action.VersionV2
-				changed = true
-			}
+		candidateAction := action.Action(canonical)
+		requiresV2 := false
+		if action.ActionSupportedInVersion(action.VersionV2, candidateAction) && !action.ActionSupportedInVersion(action.VersionV1, candidateAction) {
+			requiresV2 = true
+		}
+		if candidateAction == action.ActionBatch && batchContainsV2OnlyAction(normalized["args"]) {
+			requiresV2 = true
+		}
+		if requiresV2 && currentVersion != action.VersionV2 {
+			normalized["version"] = action.VersionV2
+			currentVersion = action.VersionV2
+			changed = true
 		}
 
 		normalizedArgs, argsChanged := normalizeArgsForAction(canonical, normalized["args"])

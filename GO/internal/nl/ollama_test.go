@@ -206,6 +206,9 @@ func TestBuildOllamaUserPromptIncludesModeSpecificActionList(t *testing.T) {
 	if !strings.Contains(readOnlyPrompt, "batch_guideline") {
 		t.Fatalf("expected batch_guideline in prompt: %s", readOnlyPrompt)
 	}
+	if !strings.Contains(readOnlyPrompt, "args_rule") {
+		t.Fatalf("expected args_rule in prompt: %s", readOnlyPrompt)
+	}
 	if !strings.Contains(readOnlyPrompt, "mode: read_only") {
 		t.Fatalf("expected prompt to include mode read_only: %s", readOnlyPrompt)
 	}
@@ -240,5 +243,34 @@ func TestExtractJSONPayloadPrefersSupportedVersionAndAction(t *testing.T) {
 
 	if !strings.Contains(string(got), "\"version\":\"v2\"") || !strings.Contains(string(got), "\"action\":\"create_table\"") {
 		t.Fatalf("unexpected selected candidate: %s", string(got))
+	}
+}
+
+type streamErrorAfterFirstChunkReader struct {
+	chunk []byte
+	sent  bool
+}
+
+func (r *streamErrorAfterFirstChunkReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		n := copy(p, r.chunk)
+		return n, nil
+	}
+	return 0, context.DeadlineExceeded
+}
+
+func TestParseOllamaStreamReturnsCandidateWhenLateReadErrorOccurs(t *testing.T) {
+	payload := "data: {\"id\":\"resp-stream\",\"model\":\"qwen2.5-coder:3b\",\"choices\":[{\"delta\":{\"content\":\"{\\\"version\\\":\\\"v1\\\",\\\"request_id\\\":\\\"req-stream\\\",\\\"mode\\\":\\\"read_only\\\",\\\"action\\\":\\\"list_tables\\\",\\\"args\\\":{}}\"}}]}\n\n"
+	reader := &streamErrorAfterFirstChunkReader{chunk: []byte(payload)}
+
+	_, _, _, candidate, err := parseOllamaStream(reader)
+	if err != nil {
+		t.Fatalf("parseOllamaStream failed: %v", err)
+	}
+
+	want := `{"version":"v1","request_id":"req-stream","mode":"read_only","action":"list_tables","args":{}}`
+	if string(candidate) != want {
+		t.Fatalf("unexpected candidate: got %s, want %s", string(candidate), want)
 	}
 }

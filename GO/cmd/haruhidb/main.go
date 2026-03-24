@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ const (
 	defaultOllamaBaseURL = "http://127.0.0.1:11434"
 	defaultOllamaModel   = "qwen2.5-coder:3b"
 	defaultListenAddr    = ":8080"
-	defaultTimeout       = 60 * time.Second
+	defaultTimeout       = 120 * time.Second
 )
 
 func main() {
@@ -71,7 +72,7 @@ func defaultServeOptions() serveOptions {
 		listenAddr:     defaultListenAddr,
 		ollamaBaseURL:  defaultOllamaBaseURL,
 		ollamaModel:    defaultOllamaModel,
-		streamResponse: true,
+		streamResponse: false,
 	}
 }
 
@@ -107,6 +108,10 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	if opts.dbPath == "" {
 		return errors.New("--db-path is required")
 	}
+	absDBPath, err := filepath.Abs(opts.dbPath)
+	if err == nil {
+		opts.dbPath = absDBPath
+	}
 	if opts.listenAddr == "" {
 		opts.listenAddr = defaultListenAddr
 	}
@@ -131,6 +136,7 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	})
 
 	_, _ = fmt.Fprintf(stdout, "serving on %s\n", opts.listenAddr)
+	_, _ = fmt.Fprintf(stdout, "db file: %s\n", opts.dbPath)
 	return http.ListenAndServe(opts.listenAddr, handler)
 }
 

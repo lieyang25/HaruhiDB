@@ -9,8 +9,8 @@
 | 最快跑起来（Web/服务/Ollama） | [Go 使用指南](go-usage-guide.md) | 单入口 serve、网页/API 示例、常见报错 |
 | 使用网页 UI | [网页快速上手](web-quickstart.md) | 一键脚本启动、UI 访问、常见问题 |
 | 理解网页原理与信息流 | [Web 原理与信息流](web-principle-and-dataflow.md) | 页面架构、信息流、输出结构、可改造点 |
-| 做静态库与远程联动排障 | [静态库与远程联动指南](static-link-web-cli-and-remote-exec-guide.md) | Win/Linux 静态库方案、Web/serve 用法、远程联动 |
-| 排查联调报错 | [错误经验汇总](error-experience-playbook.md) | 真实踩坑与修复命令（Windows/模型/UI） |
+| 做静态库与远程联动排障 | [静态库与远程联动指南](static-link-web-cli-and-remote-exec-guide.md) | Linux/macOS 静态库方案、Web/serve 用法、远程联动 |
+| 排查联调报错 | [错误经验汇总](error-experience-playbook.md) | 真实踩坑与修复命令（模型/UI/启动） |
 | 用配置文件启动 | [配置示例](configs/README.md) | `--config`、`HARUHIDB_CONFIG`、现成 JSON 配置 |
 | 查所有支持参数 | [配置参数总表](config-parameter-reference.md) | 配置键、类型、CLI 参数一一对应 |
 | 看 Action 协议字段和约束 | [Action 协议 v1](action-protocol-v1.md) | 请求/响应格式、字段约束、错误码 |
@@ -50,5 +50,4 @@
 2. [Go 使用指南](go-usage-guide.md)
 3. [Go API 与动作覆盖矩阵](go-api-action-capability-matrix.md)
 4. [CXX 文档索引](../CXX/docs/README.md)
-
 

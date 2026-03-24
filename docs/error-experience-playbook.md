@@ -35,53 +35,54 @@
 
 - 当前 `HARU_DB_PATH` 指向空库或不包含目标表。
 
-修复（Windows 示例）：
+修复（Linux/macOS 示例）：
 
-```powershell
-$env:HARU_DB_PATH = "$env:TEMP\haruhidb-web.db"
-Copy-Item -Force .\GO\haruhidb\test_output\quickstart_demo.db  $env:HARU_DB_PATH
-Copy-Item -Force .\GO\haruhidb\test_output\quickstart_demo.wal ($env:HARU_DB_PATH -replace '\.db$','.wal')
+```bash
+export HARU_DB_PATH="$PWD/haruhidb-web.db"
+cp -f ./GO/haruhidb/test_output/quickstart_demo.db  "${HARU_DB_PATH}"
+cp -f ./GO/haruhidb/test_output/quickstart_demo.wal "${HARU_DB_PATH%.db}.wal"
 ```
 
 验证：
 
 - 再次点击“仅翻译”应返回 `valid=true`。
 
-## 3) PowerShell 提示脚本不存在
+## 3) Shell 提示脚本不存在
 
 现象：
 
-- `./scripts/start_web_one_click.ps1 : ... CommandNotFoundException`
+- `./scripts/start_web_one_click.sh: No such file or directory`
 
 原因：
 
-- 当前目录不在仓库根目录（`E:\__code__\HaruhiDB`）。
+- 当前目录不在仓库根目录。
 
 修复：
 
-```powershell
-cd E:\__code__\HaruhiDB
-./scripts/start_web_one_click.ps1
+```bash
+cd /path/to/HaruhiDB
+./scripts/start_web_one_click.sh
 ```
 
 验证：
 
 - 能看到服务启动日志，并打开 `http://127.0.0.1:8080/ui`（若未关闭自动打开）。
 
-## 4) Windows 下 C API 动态库路径问题
+## 4) Linux/macOS 下 C API 动态库路径问题
 
 现象：
 
-- 启动时报找不到 CAPI 相关动态库或导入库。
+- 启动时报找不到 CAPI 相关动态库（`libharuhidb_capi.so`/`libharuhidb_capi.dylib`）。
 
 原因：
 
-- `CXX/build/src/capi` 未加入运行时 `PATH`，或库尚未构建。
+- `CXX/build/src/capi` 未加入运行时库搜索路径，或库尚未构建。
 
 修复：
 
-- 优先使用一键脚本：`./scripts/start_web_one_click.ps1`（会自动检查与构建）。
-- 手动方式需将 `E:\__code__\HaruhiDB\CXX\build\src\capi` 加入 `PATH`。
+- 优先使用一键脚本：`./scripts/start_web_one_click.sh`（会自动检查与构建）。
+- 手动方式可设置：
+  `export LD_LIBRARY_PATH=/path/to/HaruhiDB/CXX/build/src/capi:${LD_LIBRARY_PATH:-}`
 
 验证：
 

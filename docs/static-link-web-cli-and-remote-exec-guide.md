@@ -18,18 +18,11 @@
 
 ## 2) 推荐启动方式
 
-### Linux
+### Linux / macOS
 
 ```bash
 cd /path/to/HaruhiDB
 ./scripts/start_web_one_click.sh
-```
-
-### Windows
-
-```powershell
-cd E:\__code__\HaruhiDB
-./scripts/start_web_one_click.ps1
 ```
 
 脚本会自动完成：

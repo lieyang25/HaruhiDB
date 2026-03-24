@@ -11,8 +11,8 @@ MODEL="${HARU_MODEL:-qwen2.5-coder:3b}"
 BASE_URL="${HARU_BASE_URL:-http://127.0.0.1:11434}"
 DB_PATH="${HARU_DB_PATH:-${ROOT_DIR}/haruhidb-web.db}"
 LISTEN="${HARU_LISTEN:-:8080}"
-TIMEOUT="${HARU_TIMEOUT:-60s}"
-STREAM="${HARU_STREAM:-true}"
+TIMEOUT="${HARU_TIMEOUT:-120s}"
+STREAM="${HARU_STREAM:-false}"
 ALLOW_WRITE="${HARU_ALLOW_WRITE:-true}"
 OPEN_BROWSER="${HARU_OPEN_BROWSER:-true}"
 
@@ -68,26 +68,26 @@ ensure_db_path() {
 
 require_cmd go
 require_cmd ollama
-require_cmd cmake
 
 ensure_ollama_service() {
-  if command -v curl >/dev/null 2>&1; then
-    if curl -fsS "${BASE_URL}/api/tags" >/dev/null 2>&1; then
-      echo "[1/5] Ollama service is running"
-      return
-    fi
-    echo "[1/5] Starting Ollama service in background"
-    nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
-    sleep 2
+  if command -v curl >/dev/null 2>&1 && curl -fsS "${BASE_URL}/api/tags" >/dev/null 2>&1; then
+    echo "[1/5] Ollama service is running"
     return
   fi
 
-  echo "[1/5] curl not found, skip probe and continue"
+  if ollama list >/dev/null 2>&1; then
+    echo "[1/5] Ollama service is running"
+    return
+  fi
+
+  echo "[1/5] Starting Ollama service in background"
+  nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
+  sleep 2
 }
 
 has_capi_artifacts() {
   local dir="$1"
-  [[ -f "${dir}/libharuhidb_capi.so" || -f "${dir}/libharuhidb_capi.dylib" || -f "${dir}/libharuhidb_capi.dll.a" || -f "${dir}/haruhidb_capi.lib" ]]
+  [[ -f "${dir}/libharuhidb_capi.so" || -f "${dir}/libharuhidb_capi.dylib" ]]
 }
 
 ensure_capi() {
@@ -105,9 +105,15 @@ ensure_capi() {
     return
   fi
 
+  require_cmd cmake
   echo "[3/5] Building C API shared library"
   cmake -S "${CXX_DIR}" -B "${CXX_BUILD_DIR}" -DTEST=OFF -DEXAMPLE=OFF
   cmake --build "${CXX_BUILD_DIR}" --target haruhidb_capi
+}
+
+write_db_hint() {
+  local hint_path="${ROOT_DIR}/.haruhidb_db_path"
+  printf '%s\n' "${DB_PATH}" >"${hint_path}"
 }
 
 open_ui_if_needed() {
@@ -125,6 +131,7 @@ open_ui_if_needed() {
 }
 
 ensure_db_path
+write_db_hint
 ensure_ollama_service
 
 echo "[2/5] Pull model: ${MODEL}"
@@ -151,6 +158,7 @@ fi
 echo "[5/5] Start HaruhiDB Web"
 echo "        UI: ${UI_URL}"
 echo "        db_path=${DB_PATH}"
+echo "        db_path_hint_file=${ROOT_DIR}/.haruhidb_db_path"
 echo "        listen=${LISTEN}"
 echo "        timeout=${TIMEOUT}"
 echo "        model=${MODEL}"

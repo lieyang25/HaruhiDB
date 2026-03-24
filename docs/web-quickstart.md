@@ -13,14 +13,7 @@ HaruhiDB 的网页 UI 由 Go `serve` 进程内置提供，和 API 同端口同�
 
 ## 一键启动（推荐）
 
-### Windows (PowerShell)
-
-```powershell
-cd E:\__code__\HaruhiDB
-./scripts/start_web_one_click.ps1
-```
-
-### Linux
+### Linux / macOS
 
 ```bash
 cd /path/to/HaruhiDB
@@ -29,7 +22,7 @@ cd /path/to/HaruhiDB
 
 脚本会自动：
 
-1. 检查依赖（`go`、`ollama`、`cmake`，Windows 额外检查 `mingw32-make`）
+1. 检查依赖（`go`、`ollama`；缺少 C API 库时额外需要 `cmake`）
 2. 确保 Ollama 服务可用
 3. 拉取模型（默认 `qwen2.5-coder:3b`）
 4. 确保 C API 动态库存在（缺失时自动构建）
@@ -41,32 +34,23 @@ cd /path/to/HaruhiDB
 - `HARU_BASE_URL`：默认 `http://127.0.0.1:11434`
 - `HARU_DB_PATH`：数据库路径
 - `HARU_LISTEN`：默认 `:8080`
-- `HARU_TIMEOUT`：默认 `60s`
-- `HARU_STREAM`：默认 `true`
+- `HARU_TIMEOUT`：默认 `120s`
+- `HARU_STREAM`：默认 `false`（推荐，稳定性更高）
 - `HARU_ALLOW_WRITE`：默认 `true`
 - `HARU_OPEN_BROWSER`：是否自动打开浏览器（默认 `true`）
 - `HARU_UI_URL`：覆盖自动打开的网址
 - `HARU_CAPI_DIR`：C API 链接目录
-- `HARU_CAPI_RUNTIME_DIR`：C API 运行时目录（DLL/.so）
+- `HARU_CAPI_RUNTIME_DIR`：C API 运行时目录（`.so`/`.dylib`）
 - `HARU_CGO_CFLAGS`：覆盖 `CGO_CFLAGS`
 - `HARU_CGO_LDFLAGS`：覆盖 `CGO_LDFLAGS`
 
 示例：
 
-```powershell
-$env:HARU_MODEL='qwen2.5-coder:3b'
-$env:HARU_LISTEN=':9090'
-$env:HARU_OPEN_BROWSER='false'
-./scripts/start_web_one_click.ps1
-```
-
-MSVC 产物目录示例：
-
-```powershell
-$env:HARU_CAPI_DIR='E:\path\to\msvc\capi'
-$env:HARU_CAPI_RUNTIME_DIR='E:\path\to\msvc\capi'
-$env:HARU_CGO_LDFLAGS='-LE:\path\to\msvc\capi -l:haruhidb_capi.lib'
-./scripts/start_web_one_click.ps1
+```bash
+export HARU_MODEL='qwen2.5-coder:3b'
+export HARU_LISTEN=':9090'
+export HARU_OPEN_BROWSER='false'
+./scripts/start_web_one_click.sh
 ```
 
 ## 运行逻辑（网页端）
@@ -87,8 +71,9 @@ $env:HARU_CGO_LDFLAGS='-LE:\path\to\msvc\capi -l:haruhidb_capi.lib'
 - 在输入框使用“严格四步模板”语气。
 - 优先使用 `qwen2.5-coder:3b`。
 
-3. Windows 启动时报找不到 C API 库
-- 优先使用脚本自动探测/构建。
-- 若你使用自定义 MSVC 输出目录，请设置 `HARU_CAPI_DIR` 与 `HARU_CAPI_RUNTIME_DIR`。
+3. 找不到数据库文件
+- 一键脚本默认落盘：`<repo>/haruhidb-web.db`。
+- 手动 `--config` 默认落盘：`<repo>/haruhidb-web.db`（配置模板已改为相对路径）。
+- 每次执行一键脚本后，可直接查看 `<repo>/.haruhidb_db_path` 获取当前绝对路径。
 
 更多排查案例见：[错误经验汇总](error-experience-playbook.md)。

@@ -255,25 +255,25 @@ func parseOllamaStream(reader io.Reader) (responseID string, responseModel strin
 			usage = chunk.Usage
 		}
 
-		for _, choice := range chunk.Choices {
-			piece := choice.Delta.Content
-			if piece == "" {
-				piece = choice.Message.Content
+			for _, choice := range chunk.Choices {
+				piece := choice.Delta.Content
+				if piece == "" {
+					piece = choice.Message.Content
+				}
+				if piece == "" {
+					continue
+				}
+				contentBuilder.WriteString(piece)
 			}
-			if piece == "" {
-				piece = choice.Delta.Reasoning
-			}
-			if piece == "" {
-				piece = choice.Message.Reasoning
-			}
-			if piece == "" {
-				continue
-			}
-			contentBuilder.WriteString(piece)
 		}
-	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
+		partialContent := strings.TrimSpace(contentBuilder.String())
+		if partialContent != "" {
+			if partialCandidate, extractErr := extractJSONPayload(partialContent); extractErr == nil {
+				return responseID, responseModel, usage, partialCandidate, nil
+			}
+		}
 		return "", "", nil, nil, fmt.Errorf("read ollama stream: %w", scanErr)
 	}
 
@@ -321,11 +321,12 @@ Version compatibility:
 - v1 supports: list_tables, table_exists, describe_table, get_by_primary_int, scan_all, scan_primary_int_range, insert_row, update_by_primary_int, delete_by_primary_int, batch.
 - v2 supports all v1 actions, plus: create_table, drop_table, create_primary_int_index, drop_index.
 
-Behavior guidance:
-- Prefer minimal actions that satisfy user intent.
-- For clearly multi-step tasks, batch is recommended.
-- If user intent conflicts with mode/version, still output the best valid envelope and let server validation decide.
-`)
+	Behavior guidance:
+	- Prefer minimal actions that satisfy user intent.
+	- For clearly multi-step tasks, batch is recommended.
+	- Never include prompt artifacts (for example catalog_snapshot_json, guidelines, or explanations) in args.
+	- If user intent conflicts with mode/version, still output the best valid envelope and let server validation decide.
+	`)
 }
 
 func buildOllamaUserPrompt(in TranslateInput) (string, error) {
@@ -346,6 +347,7 @@ func buildOllamaUserPrompt(in TranslateInput) (string, error) {
 		"guideline: prefer minimal actions; avoid unrelated actions when possible.",
 		"version_guideline: prefer v1 for v1-capable actions; use v2 when DDL actions are needed.",
 		"batch_guideline: if the request clearly contains multiple ordered actions, batch is recommended.",
+		"args_rule: do not copy prompt fields (request_id/mode/catalog_snapshot_json/guidelines) into args.",
 		fmt.Sprintf("natural_request: %s", in.NaturalRequest),
 		fmt.Sprintf("catalog_snapshot_json: %s", string(catalogJSON)),
 	}

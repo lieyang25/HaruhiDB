@@ -451,6 +451,85 @@ func TestTranslateNLAutoPromotesVersionForBatchContainingV2OnlyAction(t *testing
 		t.Fatalf("unexpected normalized batch sub action: %#v", got)
 	}
 }
+
+func TestTranslateNLAutoPromotesVersionWhenModelReturnsV1ForV2OnlyAction(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-v1-v2-single","mode":"read_write","action":"create_table","args":{"table":"roles","columns":[{"name":"id","type":"INTEGER","nullable":false}]}}`),
+				Model:     "qwen2.5-coder:3b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     true,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-v1-v2-single",
+		Input:     "创建 roles 表",
+		Mode:      action.ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation, got %+v", result)
+	}
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
+		t.Fatalf("expected version %q, got %#v", action.VersionV2, got)
+	}
+}
+
+func TestTranslateNLAutoPromotesVersionWhenBatchContainsV2OnlyActionUnderV1(t *testing.T) {
+	db := openServiceTestDB(t)
+	defer closeServiceTestDB(t, db)
+
+	translator := &scriptedTranslator{
+		outputs: []nl.TranslateOutput{
+			{
+				Candidate: []byte(`{"version":"v1","request_id":"req-v1-v2-batch","mode":"read_write","action":"batch","args":{"requests":[{"action":"create_table","args":{"table":"roles","columns":[{"name":"id","type":"INTEGER","nullable":false}]}}]}}`),
+				Model:     "qwen2.5-coder:3b",
+			},
+		},
+	}
+
+	service, err := NewActionService(Config{
+		DB:             db,
+		AllowWrite:     true,
+		RequestTimeout: 5 * time.Second,
+		Translator:     translator,
+	})
+	if err != nil {
+		t.Fatalf("NewActionService failed: %v", err)
+	}
+
+	result, err := service.TranslateNL(context.Background(), NLRequest{
+		RequestID: "req-v1-v2-batch",
+		Input:     "批量创建 roles 表",
+		Mode:      action.ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("TranslateNL failed: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid translation, got %+v", result)
+	}
+	if got := result.CandidateEnvelope["version"]; got != action.VersionV2 {
+		t.Fatalf("expected version %q, got %#v", action.VersionV2, got)
+	}
+}
+
 func TestTranslateNLDropsUnknownTopLevelFields(t *testing.T) {
 	db := openServiceTestDB(t)
 	defer closeServiceTestDB(t, db)
