@@ -71,6 +71,18 @@ func TestUIRouteServesHTML(t *testing.T) {
 	if body := rr.Body.String(); !strings.Contains(body, "HaruhiDB Web Console") {
 		t.Fatalf("expected UI HTML content, got %q", body)
 	}
+	body := rr.Body.String()
+	for _, token := range []string{
+		"检查表是否存在",
+		"创建索引",
+		"更新与删除",
+		"批处理",
+		"batchSteps",
+	} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("expected UI HTML to contain %q, got %q", token, body)
+		}
+	}
 }
 
 func TestUIAssetsRouteServesJS(t *testing.T) {
@@ -90,6 +102,9 @@ func TestUIAssetsRouteServesJS(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, "postJSON(\"/v1/action\"") {
 		t.Fatalf("expected UI JS content, got %q", body)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "runBatchFromUI") {
+		t.Fatalf("expected batch ui logic, got %q", body)
 	}
 }
 
@@ -232,6 +247,148 @@ func TestActionEndpointDDLEmptyTableGuard(t *testing.T) {
 	}
 	if envelope.Error == nil || envelope.Error.Code != action.CodeConstraint {
 		t.Fatalf("unexpected drop_table error payload: %#v", envelope.Error)
+	}
+}
+
+func TestActionEndpointMainUIActions(t *testing.T) {
+	manager, _, _ := newHTTPRuntimeManager(t)
+	defer closeHTTPRuntimeManager(t, manager)
+
+	server := httptest.NewServer(NewHandler(manager, Config{}))
+	defer server.Close()
+
+	tableExistsResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-table-exists",
+		"mode":"read_only",
+		"action":"table_exists",
+		"args":{"table":"users"}
+	}`)
+	if !tableExistsResp.Ok {
+		t.Fatalf("table_exists failed: %#v", tableExistsResp)
+	}
+	if tableExistsResp.Data == nil {
+		t.Fatalf("table_exists missing data payload")
+	}
+	if exists, ok := (*tableExistsResp.Data)["exists"].(bool); !ok || !exists {
+		t.Fatalf("table_exists unexpected payload: %#v", tableExistsResp.Data)
+	}
+
+	createTableResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-create-table",
+		"mode":"read_write",
+		"action":"create_table",
+		"args":{
+			"table":"ui_work",
+			"columns":[
+				{"name":"id","type":"INTEGER","nullable":false},
+				{"name":"name","type":"VARCHAR","length":64,"nullable":false}
+			]
+		}
+	}`)
+	if !createTableResp.Ok {
+		t.Fatalf("create_table failed: %#v", createTableResp)
+	}
+
+	createIndexResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-create-index",
+		"mode":"read_write",
+		"action":"create_primary_int_index",
+		"args":{"table":"ui_work","index":"idx_ui_work_id"}
+	}`)
+	if !createIndexResp.Ok {
+		t.Fatalf("create_primary_int_index failed: %#v", createIndexResp)
+	}
+
+	dropIndexResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-drop-index",
+		"mode":"read_write",
+		"action":"drop_index",
+		"args":{"table":"ui_work","index":"idx_ui_work_id"}
+	}`)
+	if !dropIndexResp.Ok {
+		t.Fatalf("drop_index failed: %#v", dropIndexResp)
+	}
+
+	insertResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-insert",
+		"mode":"read_write",
+		"action":"insert_row",
+		"args":{"table":"users","values":{"id":99,"name":"alice"}}
+	}`)
+	if !insertResp.Ok {
+		t.Fatalf("insert_row failed: %#v", insertResp)
+	}
+
+	updateResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-update",
+		"mode":"read_write",
+		"action":"update_by_primary_int",
+		"args":{"table":"users","key":99,"values":{"name":"alice-updated"}}
+	}`)
+	if !updateResp.Ok {
+		t.Fatalf("update_by_primary_int failed: %#v", updateResp)
+	}
+
+	getResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-get",
+		"mode":"read_only",
+		"action":"get_by_primary_int",
+		"args":{"table":"users","key":99}
+	}`)
+	if !getResp.Ok {
+		t.Fatalf("get_by_primary_int failed: %#v", getResp)
+	}
+	if getResp.Data == nil {
+		t.Fatalf("get_by_primary_int missing data payload")
+	}
+	rowRaw, ok := (*getResp.Data)["row"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected row payload: %#v", (*getResp.Data)["row"])
+	}
+	if name, ok := rowRaw["name"].(string); !ok || name != "alice-updated" {
+		t.Fatalf("unexpected updated row payload: %#v", rowRaw)
+	}
+
+	deleteResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-delete",
+		"mode":"read_write",
+		"action":"delete_by_primary_int",
+		"args":{"table":"users","key":99}
+	}`)
+	if !deleteResp.Ok {
+		t.Fatalf("delete_by_primary_int failed: %#v", deleteResp)
+	}
+
+	batchResp := postActionEnvelope(t, server.URL, `{
+		"version":"v3",
+		"request_id":"req-ui-batch",
+		"mode":"read_only",
+		"action":"batch",
+		"args":{
+			"stop_on_error":true,
+			"requests":[
+				{"action":"list_tables","args":{}},
+				{"action":"table_exists","args":{"table":"users"}}
+			]
+		}
+	}`)
+	if !batchResp.Ok {
+		t.Fatalf("batch failed: %#v", batchResp)
+	}
+	if batchResp.Data == nil {
+		t.Fatalf("batch missing data payload")
+	}
+	results, ok := (*batchResp.Data)["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("unexpected batch results payload: %#v", (*batchResp.Data)["results"])
 	}
 }
 
@@ -417,4 +574,29 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func postActionEnvelope(
+	t *testing.T,
+	baseURL string,
+	payload string,
+) action.ResponseEnvelope[map[string]any] {
+	t.Helper()
+
+	resp, err := http.Post(baseURL+"/v1/action", "application/json", bytes.NewReader([]byte(payload)))
+	if err != nil {
+		t.Fatalf("POST /v1/action failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("unexpected status=%d payload=%s", resp.StatusCode, string(raw))
+	}
+
+	var envelope action.ResponseEnvelope[map[string]any]
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode action response failed: %v", err)
+	}
+	return envelope
 }

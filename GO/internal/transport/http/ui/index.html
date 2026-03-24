@@ -65,8 +65,17 @@
               </div>
             </div>
             <div class="inline-actions">
+              <button id="tableExistsBtn" class="ghost" type="button">检查表是否存在</button>
               <button id="describeTableBtn" type="button">查看结构</button>
               <button id="dropTableBtn" class="danger" type="button">删除表</button>
+            </div>
+            <div class="row">
+              <label for="indexNameInput">索引名</label>
+              <input id="indexNameInput" type="text" placeholder="例如 idx_users_id">
+            </div>
+            <div class="inline-actions">
+              <button id="createIndexBtn" type="button">创建索引</button>
+              <button id="dropIndexBtn" class="danger" type="button">删除索引</button>
             </div>
           </div>
 
@@ -139,6 +148,51 @@
             <div id="insertFields" class="insert-fields"></div>
             <div class="actions">
               <button id="insertRowBtn" class="primary" type="button">插入</button>
+            </div>
+          </div>
+
+          <div class="block">
+            <h3>更新与删除</h3>
+            <div class="row">
+              <label for="updateTableSelect">表名</label>
+              <select id="updateTableSelect"></select>
+            </div>
+            <div class="row">
+              <label for="updateKeyInput">更新主键 key</label>
+              <input id="updateKeyInput" type="number" step="1" placeholder="例如 1">
+            </div>
+            <div id="updateFields" class="insert-fields"></div>
+            <div class="actions">
+              <button id="updateRowBtn" type="button">更新数据</button>
+            </div>
+            <div class="row">
+              <label for="deleteKeyInput">删除主键 key</label>
+              <input id="deleteKeyInput" type="number" step="1" placeholder="例如 1">
+            </div>
+            <div class="actions">
+              <button id="deleteRowBtn" class="danger" type="button">删除数据</button>
+            </div>
+          </div>
+
+          <div class="block">
+            <h3>批处理</h3>
+            <div class="row">
+              <label for="batchModeSelect">Mode</label>
+              <select id="batchModeSelect">
+                <option value="read_only">read_only</option>
+                <option value="read_write">read_write</option>
+              </select>
+            </div>
+            <div class="row">
+              <label class="checkbox-inline">
+                <input id="batchStopOnErrorInput" type="checkbox" checked>
+                <span>stop_on_error</span>
+              </label>
+            </div>
+            <div id="batchSteps" class="batch-steps"></div>
+            <div class="actions">
+              <button id="addBatchStepBtn" class="ghost" type="button">添加步骤</button>
+              <button id="runBatchBtn" type="button">执行批处理</button>
             </div>
           </div>
         </section>

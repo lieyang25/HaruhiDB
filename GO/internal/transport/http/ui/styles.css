@@ -260,6 +260,19 @@ button:disabled {
   margin-bottom: 8px;
 }
 
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.checkbox-inline input {
+  width: auto;
+  margin: 0;
+}
+
 .table-wrap {
   border: 1px solid #d5dfea;
   border-radius: 10px;
@@ -310,6 +323,10 @@ button:disabled {
   gap: 8px;
 }
 
+.compact-row {
+  margin-bottom: 8px;
+}
+
 .insert-field {
   display: grid;
   gap: 6px;
@@ -356,12 +373,80 @@ button:disabled {
   background: #fff5f4;
 }
 
+.result-error-main {
+  margin: 0;
+  font-weight: 700;
+}
+
+.result-error-detail {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #6f1912;
+}
+
 .result-success {
   border: 1px solid #b6d7ce;
   border-radius: 10px;
   padding: 12px;
   color: #0b5d57;
   background: #f2fbf8;
+}
+
+.batch-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.batch-step {
+  border: 1px solid #d5dfea;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+}
+
+.batch-step-head {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.batch-step-title {
+  font-size: 13px;
+  color: #30414f;
+}
+
+.batch-step-action {
+  width: 100%;
+}
+
+.batch-step-tools {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.batch-step-tools button {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.batch-step-args {
+  margin-top: 10px;
+}
+
+.step-args {
+  display: grid;
+  gap: 8px;
+}
+
+.kv-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.kv-value-host {
+  width: 100%;
 }
 
 .json {
@@ -408,6 +493,10 @@ button:disabled {
 
   .actions button {
     width: 100%;
+  }
+
+  .batch-step-head {
+    grid-template-columns: 1fr;
   }
 
   .kv-row {
