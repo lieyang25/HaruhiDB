@@ -11,7 +11,7 @@
 ```json
 {
   "common": {
-    "db_path": "../haruhidb-web.db",
+    "db_path": "../db/haruhidb-web.db",
     "allow_write": true,
     "timeout": "30s"
   },
