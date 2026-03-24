@@ -2,7 +2,7 @@
   "common": {
     "db_path": "../haruhidb-web.db",
     "allow_write": true,
-    "timeout": "120s"
+    "timeout": "30s"
   },
   "ollama": {
     "base_url": "http://192.168.137.236:11434",

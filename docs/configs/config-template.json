@@ -2,11 +2,11 @@
   "common": {
     "db_path": "../haruhidb-web.db",
     "allow_write": true,
-    "timeout": "120s"
+    "timeout": "30s"
   },
   "ollama": {
     "base_url": "http://127.0.0.1:11434",
-    "model": "qwen2.5-coder:3b",
+    "model": "qwen2.5-coder:1.5b",
     "stream": false
   },
   "serve": {

@@ -53,3 +53,8 @@ go run ./cmd/haruhidb serve
 cd /home/suzumiya/__code__/code/HaruhiDB
 HARU_CONFIG=docs/configs/serve-web-ollama-rpi.json ./scripts/start_web_one_click.sh
 ```
+
+优先级说明：
+
+- 默认以配置文件值为准
+- 仅当显式设置 `HARU_*`（如 `HARU_TIMEOUT`）时，才覆盖配置文件同名项

@@ -30,6 +30,11 @@ cd /path/to/HaruhiDB
 
 ## 环境变量
 
+- 优先级（重要）：
+  - `HARU_CONFIG` 指定配置文件
+  - 配置文件值默认生效
+  - 只有显式设置的 `HARU_*` 才会覆盖配置文件同名项
+
 - `HARU_MODEL`：默认 `qwen2.5-coder:3b`
 - `HARU_BASE_URL`：默认 `http://127.0.0.1:11434`
 - `HARU_DB_PATH`：数据库路径
