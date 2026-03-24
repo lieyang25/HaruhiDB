@@ -18,9 +18,9 @@
 
 常用文档：
 
-- [一页上手与动作速查](docs/web-action-one-page-guide.md)：启动流程 + 支持动作表 + 动作示例 + 常见报错
-- [Web 原理与信息流](docs/web-principle-and-dataflow.md)：网页架构与两段式执行
-- [错误经验汇总](docs/error-experience-playbook.md)：联调排错
+- [一页上手与动作速查](docs/web-action-one-page-guide.md)：树莓派部署 + 动作表 + 动作示例 + 常见报错
+- [Web 原理与数据流](docs/web-principle-and-dataflow.md)：Web-only 架构与执行路径
+- [常见错误排查](docs/error-experience-playbook.md)：联调排错
 - [配置参数总表](docs/config-parameter-reference.md)：配置键与 CLI 参数映射
 
 深入阅读：

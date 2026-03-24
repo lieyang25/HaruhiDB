@@ -1,60 +1,41 @@
-# HaruhiDB 启动配置（Web + Ollama）
+# 配置文件说明（Web-Only）
 
-当前 `docs/configs` 只保留两类配置文件：
+`docs/configs` 当前保留：
 
-- `serve-web-ollama.json`：可直接用于 Web 服务启动的推荐配置
-- `serve-web-ollama-rpi.json`：本地服务 + 树莓派 Ollama 的示例配置
-- `config-template.json`：最小模板，适合复制后按环境修改
+- `serve-web.json`：本机默认配置
+- `serve-web-rpi.json`：树莓派局域网访问配置（`0.0.0.0:8080`）
+- `config-template.json`：最小模板
 
-## 配置结构
+## 结构
 
-配置只保留三个顶层分组：
-
-- `common`
-  - `db_path`：数据库文件路径
-  - `allow_write`：是否允许写动作（默认建议 `true`）
-  - `timeout`：请求超时（Go duration）
-- `ollama`
-  - `base_url`：Ollama 地址（默认 `http://127.0.0.1:11434`）
-  - `model`：模型名（默认 `qwen2.5-coder:3b`）
-  - `stream`：是否启用流式翻译（默认建议 `true`）
-- `serve`
-  - `listen`：HTTP 监听地址
+```json
+{
+  "common": {
+    "db_path": "../haruhidb-web.db",
+    "allow_write": true,
+    "timeout": "30s"
+  },
+  "serve": {
+    "listen": ":8080"
+  }
+}
+```
 
 ## 启动示例
 
 ```bash
 cd /home/suzumiya/__code__/code/HaruhiDB/GO
-go run ./cmd/haruhidb serve --config ../docs/configs/serve-web-ollama.json
+go run ./cmd/haruhidb serve --config ../docs/configs/serve-web.json
 ```
 
-命令行参数会覆盖配置文件同名项，例如：
+树莓派部署（推荐）：
 
 ```bash
-go run ./cmd/haruhidb serve \
-  --config ../docs/configs/serve-web-ollama.json \
-  --db-path /tmp/haruhidb-demo.db \
-  --model qwen2.5-coder:3b \
-  --listen :8090
+cd /home/pi/HaruhiDB
+HARU_CONFIG=docs/configs/serve-web-rpi.json HARU_OPEN_BROWSER=false ./scripts/start_web_one_click.sh
 ```
 
-也可以使用 `HARUHIDB_CONFIG`：
+## 覆盖规则
 
-```bash
-export HARUHIDB_CONFIG=../docs/configs/serve-web-ollama.json
-go run ./cmd/haruhidb serve
-```
-
-## 一键脚本使用指定配置
-
-`scripts/start_web_one_click.sh` 支持 `HARU_CONFIG` 覆盖默认配置文件：
-
-```bash
-cd /home/suzumiya/__code__/code/HaruhiDB
-HARU_CONFIG=docs/configs/serve-web-ollama-rpi.json ./scripts/start_web_one_click.sh
-```
-
-优先级说明：
-
-- 默认以配置文件值为准
-- 仅当显式设置 `HARU_*`（如 `HARU_TIMEOUT`）时，才覆盖配置文件同名项
+- 配置文件生效后，CLI 同名参数会覆盖配置值。
+- 一键脚本 `start_web_one_click.sh` 默认只传 `--config`，不会再写死模型相关参数。

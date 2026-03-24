@@ -10,14 +10,12 @@ import (
 	"time"
 
 	"haruhidb-go/haruhidb"
-	"haruhidb-go/internal/nl"
 )
 
 type RuntimeManagerConfig struct {
 	DefaultDBPath  string
 	AllowWrite     bool
 	RequestTimeout time.Duration
-	Translator     nl.Translator
 	Logger         *log.Logger
 }
 
@@ -27,7 +25,6 @@ type RuntimeManager struct {
 	defaultDBPath  string
 	allowWrite     bool
 	requestTimeout time.Duration
-	translator     nl.Translator
 	logger         *log.Logger
 
 	dbs      map[string]*haruhidb.DB
@@ -47,7 +44,6 @@ func NewRuntimeManager(cfg RuntimeManagerConfig) (*RuntimeManager, error) {
 		defaultDBPath:  defaultDBPath,
 		allowWrite:     cfg.AllowWrite,
 		requestTimeout: cfg.RequestTimeout,
-		translator:     cfg.Translator,
 		logger:         cfg.Logger,
 		dbs:            make(map[string]*haruhidb.DB),
 		services:       make(map[string]*ActionService),
@@ -99,7 +95,6 @@ func (m *RuntimeManager) Resolve(dbPath string) (*ActionService, string, error) 
 		DB:             db,
 		AllowWrite:     m.allowWrite,
 		RequestTimeout: m.requestTimeout,
-		Translator:     m.translator,
 		Logger:         m.logger,
 	})
 	if err != nil {

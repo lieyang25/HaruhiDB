@@ -12,7 +12,7 @@
     <header class="hero">
       <p class="eyebrow">HaruhiDB</p>
       <h1>Web Console</h1>
-      <p class="sub">支持切库、快捷动作分流与严格翻译链路。先预览，后落库。</p>
+      <p class="sub">纯动作执行控制台：切库、快捷动作、JSON Envelope 执行。</p>
     </header>
 
     <section class="panel db-panel">
@@ -81,28 +81,28 @@
     </section>
 
     <section class="panel input-panel">
+      <h2>Action JSON 控制台</h2>
       <div class="row">
-        <label for="mode">Mode</label>
-        <select id="mode">
+        <label for="actionSelect">Action</label>
+        <select id="actionSelect"></select>
+      </div>
+
+      <div class="row">
+        <label for="modeSelect">Mode</label>
+        <select id="modeSelect">
           <option value="read_only">read_only</option>
-          <option value="read_write" selected>read_write</option>
+          <option value="read_write">read_write</option>
         </select>
       </div>
 
-      <div class="row">
-        <label for="authToken">Auth Token (optional)</label>
-        <input id="authToken" type="password" placeholder="Bearer token without Bearer prefix">
-      </div>
-
       <div class="row text-row">
-        <label for="nlInput">Natural Language</label>
-        <textarea id="nlInput" rows="8" spellcheck="false">请列出当前数据库中的所有表。</textarea>
+        <label for="argsInput">Args JSON</label>
+        <textarea id="argsInput" rows="8" spellcheck="false">{}</textarea>
       </div>
 
       <div class="actions">
-        <button id="strictBtn" class="ghost" type="button">填入四步流程示例</button>
-        <button id="translateBtn" type="button">仅翻译</button>
-        <button id="runBtn" type="button" class="primary">翻译并执行</button>
+        <button id="buildEnvelopeBtn" class="ghost" type="button">生成 Envelope</button>
+        <button id="runEnvelopeBtn" type="button" class="primary">执行 Envelope</button>
       </div>
 
       <p id="status" class="status" aria-live="polite"></p>
@@ -110,10 +110,10 @@
 
     <section class="panel output-panel">
       <div class="output-head">
-        <h2>Translation Result</h2>
-        <button id="copyTranslationBtn" class="ghost small" type="button">复制</button>
+        <h2>Envelope Preview</h2>
+        <button id="copyEnvelopeBtn" class="ghost small" type="button">复制</button>
       </div>
-      <pre id="translationOut" class="json">{}</pre>
+      <pre id="envelopeOut" class="json">{}</pre>
     </section>
 
     <section class="panel output-panel">

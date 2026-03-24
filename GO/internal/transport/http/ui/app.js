@@ -1,5 +1,4 @@
 (function () {
-  const strictTemplate = "请完成这个四步流程（可直接用 batch）：1) insert_row(table=student, values={id:303,name:'instruct_test'})；2) get_by_primary_int(table=student,key=303)；3) delete_by_primary_int(table=student,key=303)；4) get_by_primary_int(table=student,key=303)。除非必要，不要添加无关动作。";
   const STORAGE_ACTIVE_DB_PATH = "active_db_path";
   const STORAGE_RECENT_DB_PATHS = "recent_db_paths";
   const MAX_RECENT_PATHS = 8;
@@ -16,17 +15,9 @@
 
   const COLUMN_TYPES = ["BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "FLOAT", "DOUBLE", "VARCHAR"];
 
-  const modeEl = document.getElementById("mode");
-  const tokenEl = document.getElementById("authToken");
-  const inputEl = document.getElementById("nlInput");
   const statusEl = document.getElementById("status");
-  const translationOutEl = document.getElementById("translationOut");
+  const envelopeOutEl = document.getElementById("envelopeOut");
   const executionOutEl = document.getElementById("executionOut");
-  const translateBtn = document.getElementById("translateBtn");
-  const runBtn = document.getElementById("runBtn");
-  const strictBtn = document.getElementById("strictBtn");
-  const copyTranslationBtn = document.getElementById("copyTranslationBtn");
-  const copyExecutionBtn = document.getElementById("copyExecutionBtn");
 
   const dbPathInputEl = document.getElementById("dbPathInput");
   const switchDbBtn = document.getElementById("switchDbBtn");
@@ -45,6 +36,14 @@
   const qaAddColumnBtn = document.getElementById("qaAddColumnBtn");
   const qaCreateBtn = document.getElementById("qaCreateBtn");
 
+  const actionSelectEl = document.getElementById("actionSelect");
+  const modeSelectEl = document.getElementById("modeSelect");
+  const argsInputEl = document.getElementById("argsInput");
+  const buildEnvelopeBtn = document.getElementById("buildEnvelopeBtn");
+  const runEnvelopeBtn = document.getElementById("runEnvelopeBtn");
+  const copyEnvelopeBtn = document.getElementById("copyEnvelopeBtn");
+  const copyExecutionBtn = document.getElementById("copyExecutionBtn");
+
   const state = {
     activeDBPath: "",
     defaultDBPath: "",
@@ -53,16 +52,15 @@
   };
 
   const busyButtons = [
-    translateBtn,
-    runBtn,
-    strictBtn,
     switchDbBtn,
     useRecentBtn,
     qaListTablesBtn,
     qaDescribeBtn,
     qaDropBtn,
     qaAddColumnBtn,
-    qaCreateBtn
+    qaCreateBtn,
+    buildEnvelopeBtn,
+    runEnvelopeBtn
   ];
 
   function setBusy(busy) {
@@ -84,17 +82,6 @@
     } catch (e) {
       return String(value);
     }
-  }
-
-  function buildHeaders() {
-    const headers = {
-      "Content-Type": "application/json"
-    };
-    const token = tokenEl.value.trim();
-    if (token) {
-      headers.Authorization = "Bearer " + token;
-    }
-    return headers;
   }
 
   async function requestJSON(url, options) {
@@ -120,16 +107,13 @@
   async function postJSON(url, payload) {
     return requestJSON(url, {
       method: "POST",
-      headers: buildHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
   }
 
   async function getJSON(url) {
-    return requestJSON(url, {
-      method: "GET",
-      headers: buildHeaders()
-    });
+    return requestJSON(url, { method: "GET" });
   }
 
   function newRequestID(prefix) {
@@ -258,7 +242,7 @@
     if (WRITE_ACTIONS.has(actionName)) {
       return "read_write";
     }
-    return modeEl.value;
+    return modeSelectEl.value;
   }
 
   function renderQuickActionAvailability() {
@@ -302,6 +286,100 @@
     return "/v1/capabilities?db_path=" + encodeURIComponent(trimmed);
   }
 
+  function defaultArgsForAction(actionName) {
+    const table = state.tables && state.tables.length > 0 ? state.tables[0] : "users";
+    switch (actionName) {
+      case "list_tables":
+        return {};
+      case "table_exists":
+      case "describe_table":
+      case "drop_table":
+        return { table: table };
+      case "get_by_primary_int":
+      case "delete_by_primary_int":
+        return { table: table, key: 1 };
+      case "scan_all":
+        return { table: table, limit: 20 };
+      case "scan_primary_int_range":
+        return { table: table, start_key: 1, end_key: 100, limit: 20 };
+      case "insert_row":
+        return { table: table, values: { id: 1, name: "demo" } };
+      case "update_by_primary_int":
+        return { table: table, key: 1, values: { name: "demo-updated" } };
+      case "create_table":
+        return {
+          table: "users_new",
+          columns: [
+            { name: "id", type: "INTEGER", nullable: false },
+            { name: "name", type: "VARCHAR", length: 64, nullable: false }
+          ]
+        };
+      case "create_primary_int_index":
+      case "drop_index":
+        return { table: table, index: "idx_" + table + "_id" };
+      case "batch":
+        return {
+          stop_on_error: true,
+          requests: [
+            { action: "list_tables", args: {} },
+            { action: "describe_table", args: { table: table } }
+          ]
+        };
+      default:
+        return {};
+    }
+  }
+
+  function renderActionOptions() {
+    actionSelectEl.innerHTML = "";
+
+    const actions = state.capabilities && Array.isArray(state.capabilities.actions)
+      ? state.capabilities.actions
+      : [];
+
+    if (actions.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "(无动作可用)";
+      actionSelectEl.appendChild(option);
+      argsInputEl.value = "{}";
+      return;
+    }
+
+    actions.forEach(function (spec) {
+      const option = document.createElement("option");
+      option.value = spec.name;
+      const modes = Array.isArray(spec.modes) ? spec.modes.join(",") : "read_only/read_write";
+      option.textContent = spec.name + " [" + modes + "]";
+      actionSelectEl.appendChild(option);
+    });
+
+    syncActionPreset(true);
+  }
+
+  function syncActionPreset(forceArgs) {
+    const actionName = (actionSelectEl.value || "").trim();
+    if (!actionName) {
+      return;
+    }
+
+    if (WRITE_ACTIONS.has(actionName)) {
+      modeSelectEl.value = "read_write";
+    }
+
+    const currentArgs = (argsInputEl.value || "").trim();
+    if (forceArgs || !currentArgs || currentArgs === "{}") {
+      argsInputEl.value = pretty(defaultArgsForAction(actionName));
+    }
+
+    try {
+      const envelope = buildEnvelope();
+      envelopeOutEl.textContent = pretty(envelope);
+    } catch (err) {
+      envelopeOutEl.textContent = "{}";
+    }
+  }
+
   async function loadCapabilities(dbPath, keepStatusText) {
     const payload = await getJSON(buildCapabilitiesURL(dbPath));
 
@@ -319,6 +397,7 @@
     renderTableSelectors();
     renderCapabilitiesSummary();
     renderQuickActionAvailability();
+    renderActionOptions();
     updateDBInfo();
 
     if (!keepStatusText) {
@@ -460,14 +539,46 @@
     }
   }
 
-  async function executeAction(actionName, args, forcedMode) {
-    const envelope = {
+  function buildEnvelope() {
+    const actionName = (actionSelectEl.value || "").trim();
+    if (!actionName) {
+      throw new Error("action 不能为空");
+    }
+
+    const mode = (modeSelectEl.value || "").trim();
+    if (mode !== "read_only" && mode !== "read_write") {
+      throw new Error("mode 必须为 read_only 或 read_write");
+    }
+
+    let args;
+    try {
+      args = JSON.parse((argsInputEl.value || "").trim() || "{}");
+    } catch (err) {
+      throw new Error("args JSON 解析失败: " + err.message);
+    }
+    if (!args || Array.isArray(args) || typeof args !== "object") {
+      throw new Error("args 必须是 JSON 对象");
+    }
+
+    return {
       version: "v3",
-      request_id: newRequestID("qa"),
-      mode: forcedMode || modeForAction(actionName),
+      request_id: newRequestID("ui"),
+      mode: mode,
       action: actionName,
-      args: args || {}
+      args: args
     };
+  }
+
+  async function executeEnvelope() {
+    let envelope;
+    try {
+      envelope = buildEnvelope();
+    } catch (err) {
+      setStatus(err.message, true);
+      return;
+    }
+
+    envelopeOutEl.textContent = pretty(envelope);
 
     const payload = Object.assign({}, envelope);
     if (state.activeDBPath) {
@@ -476,14 +587,13 @@
 
     setBusy(true);
     setStatus("执行中...", false);
-    translationOutEl.textContent = pretty(envelope);
 
     try {
       const result = await postJSON("/v1/action", payload);
       executionOutEl.textContent = pretty(result);
       setStatus("执行完成。", false);
 
-      if (result && result.ok && (WRITE_ACTIONS.has(actionName) || actionName === "batch")) {
+      if (result && result.ok && (WRITE_ACTIONS.has(envelope.action) || envelope.action === "batch")) {
         await refreshCapabilitiesAfterWrite();
       }
     } catch (err) {
@@ -497,72 +607,31 @@
     }
   }
 
-  function candidateContainsWriteAction(candidate) {
-    if (!candidate || typeof candidate !== "object") {
-      return false;
-    }
+  async function executeAction(actionName, args, forcedMode) {
+    const envelope = {
+      version: "v3",
+      request_id: newRequestID("qa"),
+      mode: forcedMode || modeForAction(actionName),
+      action: actionName,
+      args: args || {}
+    };
 
-    const actionName = typeof candidate.action === "string" ? candidate.action.trim() : "";
-    if (WRITE_ACTIONS.has(actionName)) {
-      return true;
-    }
-    if (actionName !== "batch") {
-      return false;
-    }
+    envelopeOutEl.textContent = pretty(envelope);
 
-    const args = candidate.args;
-    if (!args || typeof args !== "object" || !Array.isArray(args.requests)) {
-      return false;
-    }
-
-    return args.requests.some(function (item) {
-      return item && typeof item.action === "string" && WRITE_ACTIONS.has(item.action.trim());
-    });
-  }
-
-  async function runNL(execute) {
-    const natural = inputEl.value.trim();
-    if (!natural) {
-      setStatus("请输入自然语言请求。", true);
-      return;
+    const payload = Object.assign({}, envelope);
+    if (state.activeDBPath) {
+      payload.db_path = state.activeDBPath;
     }
 
     setBusy(true);
-    setStatus(execute ? "翻译并执行中..." : "翻译中...", false);
-    translationOutEl.textContent = "{}";
-    executionOutEl.textContent = "{}";
+    setStatus("执行中...", false);
 
     try {
-      const request = {
-        request_id: newRequestID("ui"),
-        db_path: state.activeDBPath,
-        input: natural,
-        mode: modeEl.value
-      };
-
-      const translated = await postJSON("/v1/nl/translate", request);
-      translationOutEl.textContent = pretty(translated);
-
-      if (!execute) {
-        setStatus("翻译完成。", false);
-        return;
-      }
-
-      if (!translated.valid || !translated.candidate_envelope) {
-        setStatus("翻译结果不可执行，请先调整输入。", true);
-        return;
-      }
-
-      const actionPayload = Object.assign({}, translated.candidate_envelope);
-      if (state.activeDBPath) {
-        actionPayload.db_path = state.activeDBPath;
-      }
-
-      const executed = await postJSON("/v1/action", actionPayload);
-      executionOutEl.textContent = pretty(executed);
+      const result = await postJSON("/v1/action", payload);
+      executionOutEl.textContent = pretty(result);
       setStatus("执行完成。", false);
 
-      if (executed && executed.ok && candidateContainsWriteAction(translated.candidate_envelope)) {
+      if (result && result.ok && (WRITE_ACTIONS.has(actionName) || actionName === "batch")) {
         await refreshCapabilitiesAfterWrite();
       }
     } catch (err) {
@@ -603,27 +672,6 @@
   }
 
   function wireEvents() {
-    strictBtn.addEventListener("click", function () {
-      inputEl.value = strictTemplate;
-      setStatus("已填入四步流程示例。", false);
-    });
-
-    translateBtn.addEventListener("click", function () {
-      runNL(false);
-    });
-
-    runBtn.addEventListener("click", function () {
-      runNL(true);
-    });
-
-    copyTranslationBtn.addEventListener("click", function () {
-      copyFrom(translationOutEl);
-    });
-
-    copyExecutionBtn.addEventListener("click", function () {
-      copyFrom(executionOutEl);
-    });
-
     switchDbBtn.addEventListener("click", function () {
       switchDatabase(dbPathInputEl.value);
     });
@@ -632,10 +680,6 @@
       const selected = recentDbSelectEl.value || "";
       dbPathInputEl.value = selected;
       switchDatabase(selected);
-    });
-
-    modeEl.addEventListener("change", function () {
-      renderQuickActionAvailability();
     });
 
     qaListTablesBtn.addEventListener("click", function () {
@@ -687,6 +731,46 @@
         columns: columns
       }, "read_write");
     });
+
+    actionSelectEl.addEventListener("change", function () {
+      syncActionPreset(true);
+      renderQuickActionAvailability();
+    });
+
+    modeSelectEl.addEventListener("change", function () {
+      const actionName = (actionSelectEl.value || "").trim();
+      if (WRITE_ACTIONS.has(actionName) && modeSelectEl.value !== "read_write") {
+        modeSelectEl.value = "read_write";
+      }
+      try {
+        envelopeOutEl.textContent = pretty(buildEnvelope());
+      } catch (err) {
+        envelopeOutEl.textContent = "{}";
+      }
+      renderQuickActionAvailability();
+    });
+
+    buildEnvelopeBtn.addEventListener("click", function () {
+      try {
+        const envelope = buildEnvelope();
+        envelopeOutEl.textContent = pretty(envelope);
+        setStatus("Envelope 已生成。", false);
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+
+    runEnvelopeBtn.addEventListener("click", function () {
+      executeEnvelope();
+    });
+
+    copyEnvelopeBtn.addEventListener("click", function () {
+      copyFrom(envelopeOutEl);
+    });
+
+    copyExecutionBtn.addEventListener("click", function () {
+      copyFrom(executionOutEl);
+    });
   }
 
   async function init() {
@@ -704,6 +788,7 @@
     setBusy(true);
     try {
       await loadCapabilities(stored, true);
+      envelopeOutEl.textContent = pretty(buildEnvelope());
       setStatus("系统就绪。", false);
     } catch (err) {
       setStatus("初始化失败: " + (err && err.message ? err.message : "unknown error"), true);

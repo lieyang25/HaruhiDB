@@ -50,12 +50,16 @@ func TestRunServeRequiresDBPath(t *testing.T) {
 	}
 }
 
-func TestBuildTranslatorUsesDefaults(t *testing.T) {
-	translator, err := buildTranslator(defaultServeOptions())
+func TestRunServeRejectsRemovedModelFlags(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := run([]string{"serve", "--db-path", "tmp.db", "--model", "x"}, &stdout, &stderr)
 	if err != nil {
-		t.Fatalf("buildTranslator returned error: %v", err)
+		if !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return
 	}
-	if translator == nil {
-		t.Fatal("expected translator")
-	}
+	t.Fatal("expected unknown-flag error for removed --model")
 }

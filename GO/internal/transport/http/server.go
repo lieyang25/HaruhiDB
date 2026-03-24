@@ -153,62 +153,6 @@ func NewHandler(runtimeManager *app.RuntimeManager, cfg Config) http.Handler {
 		logRequest(cfg.Logger, r, requestID, http.StatusOK, start)
 	})
 
-	mux.HandleFunc("/v1/nl/translate", func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		if r.Method != http.MethodPost {
-			writeMethodNotAllowed(w, http.MethodPost)
-			logRequest(cfg.Logger, r, "", http.StatusMethodNotAllowed, start)
-			return
-		}
-
-		raw, err := readLimitedBody(r.Body, defaultMaxBodyBytes)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": map[string]any{
-					"code":    string(action.CodeInvalidRequest),
-					"message": err.Error(),
-				},
-			})
-			logRequest(cfg.Logger, r, "", http.StatusBadRequest, start)
-			return
-		}
-
-		var req app.NLRequest
-		if err := decodeStrictJSON(raw, &req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": map[string]any{
-					"code":    string(action.CodeInvalidRequest),
-					"message": err.Error(),
-				},
-			})
-			logRequest(cfg.Logger, r, "", http.StatusBadRequest, start)
-			return
-		}
-
-		service, resolvedDBPath, resolveErr := runtimeManager.Resolve(req.DBPath)
-		if resolveErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": map[string]any{
-					"code":    string(action.CodeInvalidRequest),
-					"message": resolveErr.Error(),
-				},
-			})
-			logRequest(cfg.Logger, r, req.RequestID, http.StatusBadRequest, start)
-			return
-		}
-		req.DBPath = resolvedDBPath
-
-		result, translateErr := service.TranslateNL(r.Context(), req)
-		if translateErr != nil {
-			writeSystemError(w, translateErr)
-			logRequest(cfg.Logger, r, req.RequestID, systemErrorStatus(translateErr), start)
-			return
-		}
-
-		writeJSON(w, http.StatusOK, result)
-		logRequest(cfg.Logger, r, result.RequestID, http.StatusOK, start)
-	})
-
 	mux.HandleFunc("/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		if r.Method != http.MethodGet {
@@ -232,11 +176,11 @@ func NewHandler(runtimeManager *app.RuntimeManager, cfg Config) http.Handler {
 
 		tables, _ := listTablesForCapabilities(r.Context(), service)
 		payload := map[string]any{
-			"ok":              true,
-			"db_path":         resolvedDBPath,
-			"default_db_path": runtimeManager.DefaultDBPath(),
+			"ok":               true,
+			"db_path":          resolvedDBPath,
+			"default_db_path":  runtimeManager.DefaultDBPath(),
 			"protocol_version": action.DefaultVersion,
-			"actions":         action.PublicActionSpecs(),
+			"actions":          action.PublicActionSpecs(),
 			"actions_by_mode": map[string]any{
 				string(action.ModeReadOnly): map[string]any{
 					"names":      action.PublicActionNamesForMode(action.ModeReadOnly),

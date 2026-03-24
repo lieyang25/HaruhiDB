@@ -17,7 +17,6 @@ const (
 
 type runtimeConfig struct {
 	Common commonConfig `json:"common"`
-	Ollama ollamaConfig `json:"ollama"`
 	Serve  serveConfig  `json:"serve"`
 }
 
@@ -25,12 +24,6 @@ type commonConfig struct {
 	DBPath     *string `json:"db_path"`
 	AllowWrite *bool   `json:"allow_write"`
 	Timeout    *string `json:"timeout"`
-}
-
-type ollamaConfig struct {
-	BaseURL *string `json:"base_url"`
-	Model   *string `json:"model"`
-	Stream  *bool   `json:"stream"`
 }
 
 type serveConfig struct {
@@ -112,16 +105,6 @@ func applyServeConfig(opts *serveOptions, cfg runtimeConfig) error {
 			return fmt.Errorf("invalid common.timeout: %w", err)
 		}
 		opts.timeout = duration
-	}
-
-	if cfg.Ollama.BaseURL != nil {
-		opts.ollamaBaseURL = strings.TrimSpace(*cfg.Ollama.BaseURL)
-	}
-	if cfg.Ollama.Model != nil {
-		opts.ollamaModel = strings.TrimSpace(*cfg.Ollama.Model)
-	}
-	if cfg.Ollama.Stream != nil {
-		opts.streamResponse = *cfg.Ollama.Stream
 	}
 
 	if cfg.Serve.Listen != nil {

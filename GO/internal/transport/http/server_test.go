@@ -2,7 +2,6 @@ package httptransport
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,29 +15,10 @@ import (
 	"haruhidb-go/haruhidb"
 	"haruhidb-go/internal/action"
 	"haruhidb-go/internal/app"
-	"haruhidb-go/internal/nl"
 )
 
-type translatorStub struct {
-	output nl.TranslateOutput
-}
-
-func (t *translatorStub) Translate(context.Context, nl.TranslateInput) (nl.TranslateOutput, error) {
-	return t.output, nil
-}
-
-type capturingTranslatorStub struct {
-	output nl.TranslateOutput
-	inputs []nl.TranslateInput
-}
-
-func (t *capturingTranslatorStub) Translate(_ context.Context, in nl.TranslateInput) (nl.TranslateOutput, error) {
-	t.inputs = append(t.inputs, in)
-	return t.output, nil
-}
-
 func TestHealthz(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	handler := NewHandler(manager, Config{})
@@ -57,7 +37,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestRootRedirectToUI(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	handler := NewHandler(manager, Config{})
@@ -74,7 +54,7 @@ func TestRootRedirectToUI(t *testing.T) {
 }
 
 func TestUIRouteServesHTML(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	handler := NewHandler(manager, Config{})
@@ -94,7 +74,7 @@ func TestUIRouteServesHTML(t *testing.T) {
 }
 
 func TestUIAssetsRouteServesJS(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	handler := NewHandler(manager, Config{})
@@ -108,13 +88,13 @@ func TestUIAssetsRouteServesJS(t *testing.T) {
 	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "javascript") {
 		t.Fatalf("expected javascript content type, got %q", got)
 	}
-	if body := rr.Body.String(); !strings.Contains(body, "postJSON(\"/v1/nl/translate\"") {
+	if body := rr.Body.String(); !strings.Contains(body, "postJSON(\"/v1/action\"") {
 		t.Fatalf("expected UI JS content, got %q", body)
 	}
 }
 
 func TestActionEndpointLegacyPayload(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
@@ -172,7 +152,7 @@ func TestActionEndpointLegacyPayload(t *testing.T) {
 }
 
 func TestActionEndpointSupportsDBPathField(t *testing.T) {
-	manager, _, extraDBPath := newHTTPRuntimeManager(t, nil)
+	manager, _, extraDBPath := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
@@ -204,110 +184,26 @@ func TestActionEndpointSupportsDBPathField(t *testing.T) {
 	}
 }
 
-func TestTranslateEndpointWithDBPath(t *testing.T) {
-	translator := &translatorStub{
-		output: nl.TranslateOutput{
-			Candidate: []byte(`{
-				"version":"v3",
-				"request_id":"req-http-nl",
-				"mode":"read_only",
-				"action":"list_tables",
-				"args":{}
-			}`),
-			Model: "stub-model",
-		},
-	}
-
-	manager, _, extraDBPath := newHTTPRuntimeManager(t, translator)
+func TestTranslateEndpointRemoved(t *testing.T) {
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
 	defer server.Close()
 
-	reqBody := []byte(`{
-		"db_path":"` + extraDBPath + `",
-		"request_id":"req-http-nl",
-		"input":"列出所有表",
-		"mode":"read_only"
-	}`)
-	resp, err := http.Post(server.URL+"/v1/nl/translate", "application/json", bytes.NewReader(reqBody))
+	resp, err := http.Post(server.URL+"/v1/nl/translate", "application/json", bytes.NewReader([]byte(`{}`)))
 	if err != nil {
 		t.Fatalf("POST /v1/nl/translate failed: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected status: %d", resp.StatusCode)
-	}
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response failed: %v", err)
-	}
-	var parsed app.NLResult
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("decode response failed: %v", err)
-	}
-	if !parsed.Valid {
-		t.Fatalf("expected valid translate response, got %+v", parsed)
-	}
-	if parsed.Meta["model"] != "stub-model" {
-		t.Fatalf("unexpected model meta: %#v", parsed.Meta)
-	}
-}
-
-func TestTranslateEndpointFallsBackToDefaultDBPath(t *testing.T) {
-	translator := &capturingTranslatorStub{
-		output: nl.TranslateOutput{
-			Candidate: []byte(`{
-				"version":"v3",
-				"request_id":"req-http-nl-default",
-				"mode":"read_only",
-				"action":"list_tables",
-				"args":{}
-			}`),
-			Model: "stub-model",
-		},
-	}
-
-	manager, _, _ := newHTTPRuntimeManager(t, translator)
-	defer closeHTTPRuntimeManager(t, manager)
-
-	server := httptest.NewServer(NewHandler(manager, Config{}))
-	defer server.Close()
-
-	reqBody := []byte(`{
-		"request_id":"req-http-nl-default",
-		"input":"列出所有表",
-		"mode":"read_only"
-	}`)
-	resp, err := http.Post(server.URL+"/v1/nl/translate", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		t.Fatalf("POST /v1/nl/translate failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected status: %d", resp.StatusCode)
-	}
-	if len(translator.inputs) != 1 {
-		t.Fatalf("expected exactly one translator call, got %d", len(translator.inputs))
-	}
-
-	tableNames := make([]string, 0, len(translator.inputs[0].Catalog.Tables))
-	for _, table := range translator.inputs[0].Catalog.Tables {
-		tableNames = append(tableNames, table.Name)
-	}
-	if !containsString(tableNames, "users") {
-		t.Fatalf("expected catalog snapshot to come from default db, got %#v", tableNames)
-	}
-	if containsString(tableNames, "extra_users") {
-		t.Fatalf("expected catalog snapshot to exclude extra db tables, got %#v", tableNames)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed endpoint, got %d", resp.StatusCode)
 	}
 }
 
 func TestCapabilitiesEndpoint(t *testing.T) {
-	manager, _, extraDBPath := newHTTPRuntimeManager(t, nil)
+	manager, _, extraDBPath := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
@@ -325,9 +221,9 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 	}
 
 	var parsed struct {
-		Ok            bool              `json:"ok"`
-		DBPath        string            `json:"db_path"`
-		DefaultDBPath string            `json:"default_db_path"`
+		Ok            bool                `json:"ok"`
+		DBPath        string              `json:"db_path"`
+		DefaultDBPath string              `json:"default_db_path"`
 		Actions       []action.ActionSpec `json:"actions"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -345,7 +241,7 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 }
 
 func TestCapabilitiesEndpointInvalidDBPath(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
@@ -363,7 +259,7 @@ func TestCapabilitiesEndpointInvalidDBPath(t *testing.T) {
 }
 
 func TestActionEndpointMethodNotAllowed(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
@@ -384,7 +280,7 @@ func TestActionEndpointMethodNotAllowed(t *testing.T) {
 }
 
 func TestActionEndpointBodyTooLarge(t *testing.T) {
-	manager, _, _ := newHTTPRuntimeManager(t, nil)
+	manager, _, _ := newHTTPRuntimeManager(t)
 	defer closeHTTPRuntimeManager(t, manager)
 
 	server := httptest.NewServer(NewHandler(manager, Config{}))
@@ -410,7 +306,7 @@ func TestActionEndpointBodyTooLarge(t *testing.T) {
 	}
 }
 
-func newHTTPRuntimeManager(t *testing.T, translator nl.Translator) (*app.RuntimeManager, string, string) {
+func newHTTPRuntimeManager(t *testing.T) (*app.RuntimeManager, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	defaultDBPath := filepath.Join(dir, "http_default.db")
@@ -423,7 +319,6 @@ func newHTTPRuntimeManager(t *testing.T, translator nl.Translator) (*app.Runtime
 		DefaultDBPath:  defaultDBPath,
 		AllowWrite:     true,
 		RequestTimeout: 5 * time.Second,
-		Translator:     translator,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntimeManager failed: %v", err)

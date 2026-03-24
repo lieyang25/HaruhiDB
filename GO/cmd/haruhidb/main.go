@@ -13,17 +13,12 @@ import (
 	"time"
 
 	"haruhidb-go/internal/app"
-	"haruhidb-go/internal/nl"
 	transporthttp "haruhidb-go/internal/transport/http"
 )
 
-var translatorFactory = buildTranslator
-
 const (
-	defaultOllamaBaseURL = "http://127.0.0.1:11434"
-	defaultOllamaModel   = "qwen2.5-coder:3b"
-	defaultListenAddr    = ":8080"
-	defaultTimeout       = 120 * time.Second
+	defaultListenAddr = ":8080"
+	defaultTimeout    = 30 * time.Second
 )
 
 func main() {
@@ -55,23 +50,17 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 type serveOptions struct {
-	dbPath         string
-	allowWrite     bool
-	timeout        time.Duration
-	listenAddr     string
-	ollamaBaseURL  string
-	ollamaModel    string
-	streamResponse bool
+	dbPath     string
+	allowWrite bool
+	timeout    time.Duration
+	listenAddr string
 }
 
 func defaultServeOptions() serveOptions {
 	return serveOptions{
-		allowWrite:     true,
-		timeout:        defaultTimeout,
-		listenAddr:     defaultListenAddr,
-		ollamaBaseURL:  defaultOllamaBaseURL,
-		ollamaModel:    defaultOllamaModel,
-		streamResponse: false,
+		allowWrite: true,
+		timeout:    defaultTimeout,
+		listenAddr: defaultListenAddr,
 	}
 }
 
@@ -93,17 +82,12 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.BoolVar(&opts.allowWrite, "allow-write", opts.allowWrite, "allow write actions")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "request timeout")
 	fs.StringVar(&opts.listenAddr, "listen", opts.listenAddr, "listen address")
-	fs.StringVar(&opts.ollamaModel, "model", opts.ollamaModel, "ollama model name")
-	fs.StringVar(&opts.ollamaBaseURL, "base-url", opts.ollamaBaseURL, "ollama base URL")
-	fs.BoolVar(&opts.streamResponse, "stream", opts.streamResponse, "enable streaming responses from Ollama")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	opts.dbPath = strings.TrimSpace(opts.dbPath)
 	opts.listenAddr = strings.TrimSpace(opts.listenAddr)
-	opts.ollamaModel = strings.TrimSpace(opts.ollamaModel)
-	opts.ollamaBaseURL = strings.TrimSpace(opts.ollamaBaseURL)
 	if opts.dbPath == "" {
 		return errors.New("--db-path is required")
 	}
@@ -116,12 +100,6 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	if opts.timeout <= 0 {
 		opts.timeout = defaultTimeout
-	}
-	if opts.ollamaModel == "" {
-		opts.ollamaModel = defaultOllamaModel
-	}
-	if opts.ollamaBaseURL == "" {
-		opts.ollamaBaseURL = defaultOllamaBaseURL
 	}
 
 	runtimeManager, cleanup, err := buildRuntimeManager(opts)
@@ -140,19 +118,10 @@ func runServe(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func buildRuntimeManager(opts serveOptions) (*app.RuntimeManager, func(), error) {
-	translator, err := translatorFactory(opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	if translator == nil {
-		return nil, nil, errors.New("ollama translator is required")
-	}
-
 	runtimeManager, err := app.NewRuntimeManager(app.RuntimeManagerConfig{
 		DefaultDBPath:  opts.dbPath,
 		AllowWrite:     opts.allowWrite,
 		RequestTimeout: opts.timeout,
-		Translator:     translator,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -161,21 +130,6 @@ func buildRuntimeManager(opts serveOptions) (*app.RuntimeManager, func(), error)
 	return runtimeManager, func() {
 		_ = runtimeManager.Close()
 	}, nil
-}
-
-func buildTranslator(opts serveOptions) (nl.Translator, error) {
-	translator, err := nl.NewOllamaTranslator(nl.OllamaConfig{
-		BaseURL: opts.ollamaBaseURL,
-		Model:   opts.ollamaModel,
-		Stream:  opts.streamResponse,
-		HTTPClient: &http.Client{
-			Timeout: opts.timeout,
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return translator, nil
 }
 
 func printUsage(writer io.Writer) {

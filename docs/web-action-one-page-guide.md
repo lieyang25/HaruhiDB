@@ -1,239 +1,171 @@
-# HaruhiDB 一页上手与动作速查（Web + 远程 Ollama）
+# HaruhiDB Web 一页上手与动作速查（Web-Only）
 
-这篇文档用于解决两个问题：
+这篇是当前唯一主线文档，覆盖：
 
-1. 不熟流程，不知道先做什么
-2. 不确定哪些动作受支持、该怎么写
+1. 树莓派部署
+2. 本机网页访问
+3. API 与动作集
+4. 常用请求示例
+5. 常见报错排查
 
-适用场景：本机运行 HaruhiDB 服务，通过树莓派 Ollama 返回结构化动作，再由本机执行。
+## 1. 当前架构（去模型化）
 
-## 1) 先跑起来（最短路径）
+- 服务：HaruhiDB 单进程（内置 UI + API）
+- UI：`GET /ui`
+- API：`GET /healthz`、`GET /v1/capabilities`、`POST /v1/action`
+- 已移除：`POST /v1/nl/translate`
 
-### 1.1 编辑配置
+## 2. 树莓派部署（默认方案）
 
-推荐直接编辑：
+### 2.1 配置文件
 
-- `docs/configs/serve-web-ollama-rpi.json`
-
-关键字段：
+编辑 `docs/configs/serve-web-rpi.json`：
 
 ```json
 {
-  "ollama": {
-    "base_url": "http://192.168.137.236:11434",
-    "model": "qwen2.5-coder:0.5b",
-    "stream": false
+  "common": {
+    "db_path": "/home/pi/haruhidb/data/main.db",
+    "allow_write": true,
+    "timeout": "30s"
+  },
+  "serve": {
+    "listen": "0.0.0.0:8080"
   }
 }
 ```
 
-如果你在树莓派上换了模型名，只改 `model` 即可。
-
-### 1.2 启动服务（脚本）
+### 2.2 启动
 
 ```bash
-cd /home/suzumiya/__code__/code/HaruhiDB
-HARU_CONFIG=docs/configs/serve-web-ollama-rpi.json HARU_OPEN_BROWSER=false ./scripts/start_web_one_click.sh
+cd /home/pi/HaruhiDB
+HARU_CONFIG=docs/configs/serve-web-rpi.json HARU_OPEN_BROWSER=false ./scripts/start_web_one_click.sh
 ```
 
-### 1.3 验证链路
+### 2.3 验证
 
 ```bash
 curl -s http://127.0.0.1:8080/healthz
-curl -s http://127.0.0.1:8080/v1/nl/translate \
-  -H 'Content-Type: application/json' \
-  -d '{"request_id":"req-check-1","input":"列出所有表","mode":"read_only"}'
+curl -s "http://127.0.0.1:8080/v1/capabilities"
 ```
 
-只要翻译返回 `valid=true`，就表示“树莓派推理 -> 本机拿结构”已打通。
+本机浏览器访问：`http://<pi-ip>:8080/ui`
 
-## 2) 协议速记
+## 3. API 速查
 
-- 顶层信封固定 5 个字段：`version` / `request_id` / `mode` / `action` / `args`
-- `mode` 只允许：`read_only`、`read_write`
-- 只允许固定动作名，不允许自造动作（例如 `insert_table` 是非法动作）
-- `args` 必须是 JSON 对象，拒绝未知字段
+- `GET /healthz`：服务健康检查
+- `GET /v1/capabilities?db_path=<optional>`：返回协议版本、动作清单、按 mode 分类、当前表清单
+- `POST /v1/action`：执行 Action envelope（支持可选 `db_path` 外层字段）
 
-最小模板：
+## 4. 支持动作表（14 个）
 
-```json
-{
-  "version": "v3",
-  "request_id": "req-0001",
-  "mode": "read_only",
-  "action": "list_tables",
-  "args": {}
-}
-```
+| 动作 | 分类 | mode | 必填 args | 说明 |
+| --- | --- | --- | --- | --- |
+| `list_tables` | metadata | `read_only/read_write` | 无 | 列出所有表 |
+| `table_exists` | metadata | `read_only/read_write` | `table` | 判断表是否存在 |
+| `describe_table` | metadata | `read_only/read_write` | `table` | 查看表结构与索引 |
+| `get_by_primary_int` | read | `read_only/read_write` | `table`,`key` | 按主键取一行 |
+| `scan_all` | read | `read_only/read_write` | `table` | 全表扫描（可选 `limit`） |
+| `scan_primary_int_range` | read | `read_only/read_write` | `table`,`start_key`,`end_key` | 主键范围扫描（可选 `limit`） |
+| `insert_row` | write | `read_write` | `table`,`values` | 插入一行 |
+| `update_by_primary_int` | write | `read_write` | `table`,`key`,`values` | 按主键更新 |
+| `delete_by_primary_int` | write | `read_write` | `table`,`key` | 按主键删除 |
+| `create_table` | ddl | `read_write` | `table`,`columns` | 建表 |
+| `drop_table` | ddl | `read_write` | `table` | 删表 |
+| `create_primary_int_index` | ddl | `read_write` | `table`,`index` | 创建主键整型索引 |
+| `drop_index` | ddl | `read_write` | `table`,`index` | 删除索引 |
+| `batch` | batch | `read_only/read_write` | `requests` | 顺序执行多个子动作（可选 `stop_on_error`） |
 
-版本说明：
+## 5. Action 示例
 
-- 当前服务接受 `v1` / `v2` / `v3`
-- 服务端会统一按 `v3` 语义处理（canonicalize to v3）
-- 新请求建议直接用 `v3`
-
-## 3) 支持动作总表（当前实现）
-
-也可以通过接口实时查看（推荐）：
+### 5.1 列出所有表
 
 ```bash
-curl -s 'http://127.0.0.1:8080/v1/capabilities' | jq '.actions[].name'
+curl -s http://127.0.0.1:8080/v1/action \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "version":"v3",
+    "request_id":"req-list-1",
+    "mode":"read_only",
+    "action":"list_tables",
+    "args":{}
+  }'
 ```
 
-| 动作 | 分类 | 支持 mode | 必填参数 | 说明 |
-| --- | --- | --- | --- | --- |
-| `list_tables` | metadata | `read_only`, `read_write` | 无 | 列出所有表 |
-| `table_exists` | metadata | `read_only`, `read_write` | `table` | 判断表是否存在 |
-| `describe_table` | metadata | `read_only`, `read_write` | `table` | 查看列与索引 |
-| `get_by_primary_int` | read | `read_only`, `read_write` | `table`, `key` | 按主键整型查一行 |
-| `scan_all` | read | `read_only`, `read_write` | `table` | 全表扫描（可加 `limit`） |
-| `scan_primary_int_range` | read | `read_only`, `read_write` | `table`, `start_key`, `end_key` | 主键范围扫描（可加 `limit`） |
-| `insert_row` | write | `read_write` | `table`, `values` | 插入一行 |
-| `update_by_primary_int` | write | `read_write` | `table`, `key`, `values` | 按主键更新 |
-| `delete_by_primary_int` | write | `read_write` | `table`, `key` | 按主键删除 |
-| `create_table` | ddl | `read_write` | `table`, `columns` | 建表 |
-| `drop_table` | ddl | `read_write` | `table` | 删表 |
-| `create_primary_int_index` | ddl | `read_write` | `table`, `index` | 建主键整型索引 |
-| `drop_index` | ddl | `read_write` | `table`, `index` | 删索引 |
-| `batch` | batch | `read_only`, `read_write` | `requests` | 顺序执行子动作 |
+### 5.2 建表 + 建索引（batch）
 
-## 4) 每个动作的最小示例（可复制）
-
-### `list_tables`
-
-```json
-{"version":"v3","request_id":"req-list","mode":"read_only","action":"list_tables","args":{}}
+```bash
+curl -s http://127.0.0.1:8080/v1/action \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "version":"v3",
+    "request_id":"req-init-1",
+    "mode":"read_write",
+    "action":"batch",
+    "args":{
+      "stop_on_error": true,
+      "requests":[
+        {
+          "action":"create_table",
+          "args":{
+            "table":"characters",
+            "columns":[
+              {"name":"id","type":"INTEGER","nullable":false},
+              {"name":"name","type":"VARCHAR","length":64,"nullable":false}
+            ]
+          }
+        },
+        {
+          "action":"create_primary_int_index",
+          "args":{"table":"characters","index":"idx_characters_id"}
+        }
+      ]
+    }
+  }'
 ```
 
-### `table_exists`
+### 5.3 插入 + 查询
 
-```json
-{"version":"v3","request_id":"req-exists","mode":"read_only","action":"table_exists","args":{"table":"roles"}}
+```bash
+curl -s http://127.0.0.1:8080/v1/action \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "version":"v3",
+    "request_id":"req-insert-1",
+    "mode":"read_write",
+    "action":"insert_row",
+    "args":{"table":"characters","values":{"id":1,"name":"凉宫春日"}}
+  }'
+
+curl -s http://127.0.0.1:8080/v1/action \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "version":"v3",
+    "request_id":"req-get-1",
+    "mode":"read_only",
+    "action":"get_by_primary_int",
+    "args":{"table":"characters","key":1}
+  }'
 ```
 
-### `describe_table`
+## 6. Web 控制台操作顺序
 
-```json
-{"version":"v3","request_id":"req-desc","mode":"read_only","action":"describe_table","args":{"table":"roles"}}
-```
+1. 打开 `/ui`
+2. 在“数据库上下文”里切换 `db_path`
+3. 等待 capabilities 加载完成
+4. 用快捷动作或 Action JSON 控制台执行
+5. 写动作建议使用 `read_write`，读动作用 `read_only`
+6. 复杂流程直接用 `batch`
 
-### `get_by_primary_int`
+## 7. 常见问题
 
-```json
-{"version":"v3","request_id":"req-get","mode":"read_only","action":"get_by_primary_int","args":{"table":"roles","key":1}}
-```
+1. `unsupported action ...`
+- 动作名不在 14 个支持动作里，或拼写错误。
 
-### `scan_all`
+2. `write actions are disabled by server configuration`
+- 配置里 `common.allow_write=false`，改为 `true` 后重启。
 
-```json
-{"version":"v3","request_id":"req-scan-all","mode":"read_only","action":"scan_all","args":{"table":"roles","limit":20}}
-```
+3. `context deadline exceeded`
+- 请求超时，增大 `common.timeout`（例如 `30s -> 60s`），然后重启服务。
 
-### `scan_primary_int_range`
-
-```json
-{"version":"v3","request_id":"req-range","mode":"read_only","action":"scan_primary_int_range","args":{"table":"roles","start_key":1,"end_key":100,"limit":20}}
-```
-
-### `insert_row`
-
-```json
-{"version":"v3","request_id":"req-insert","mode":"read_write","action":"insert_row","args":{"table":"roles","values":{"id":1,"name":"凉宫春日","gender":"女"}}}
-```
-
-### `update_by_primary_int`
-
-```json
-{"version":"v3","request_id":"req-update","mode":"read_write","action":"update_by_primary_int","args":{"table":"roles","key":1,"values":{"name":"凉宫春日(更新版)"}}}
-```
-
-### `delete_by_primary_int`
-
-```json
-{"version":"v3","request_id":"req-delete","mode":"read_write","action":"delete_by_primary_int","args":{"table":"roles","key":1}}
-```
-
-### `create_table`
-
-```json
-{"version":"v3","request_id":"req-create-table","mode":"read_write","action":"create_table","args":{"table":"roles","columns":[{"name":"id","type":"INTEGER","nullable":false},{"name":"name","type":"VARCHAR","length":64,"nullable":false},{"name":"gender","type":"VARCHAR","length":16,"nullable":false}]}}
-```
-
-### `drop_table`
-
-```json
-{"version":"v3","request_id":"req-drop-table","mode":"read_write","action":"drop_table","args":{"table":"roles"}}
-```
-
-### `create_primary_int_index`
-
-```json
-{"version":"v3","request_id":"req-create-index","mode":"read_write","action":"create_primary_int_index","args":{"table":"roles","index":"idx_roles_id"}}
-```
-
-### `drop_index`
-
-```json
-{"version":"v3","request_id":"req-drop-index","mode":"read_write","action":"drop_index","args":{"table":"roles","index":"idx_roles_id"}}
-```
-
-### `batch`
-
-```json
-{
-  "version": "v3",
-  "request_id": "req-batch-1",
-  "mode": "read_write",
-  "action": "batch",
-  "args": {
-    "stop_on_error": true,
-    "requests": [
-      {"action":"insert_row","args":{"table":"roles","values":{"id":1,"name":"凉宫春日","gender":"女"}}},
-      {"action":"get_by_primary_int","args":{"table":"roles","key":1}},
-      {"action":"delete_by_primary_int","args":{"table":"roles","key":1}}
-    ]
-  }
-}
-```
-
-## 5) Web UI 推荐操作顺序
-
-1. `Mode` 按需求选择：读操作用 `read_only`，写操作用 `read_write`
-2. 先点“仅翻译”，确认 `valid=true` 且 `candidate_envelope.action` 符合预期
-3. 再点“翻译并执行”
-
-## 6) 常见报错与修复
-
-### 6.1 `unsupported action "insert_table"`
-
-原因：模型生成了不支持的动作名（幻觉）。
-
-修复：
-
-1. 把提示词写成“严格动作名”格式，例如：
-
-```text
-严格只执行 1 步：
-insert_row(table=roles, values={id:1,name:'凉宫春日',gender:'女'})。
-禁止输出任何额外动作，禁止使用 insert_table。
-```
-
-2. 对写入操作必须选 `mode=read_write`
-3. 若仍不稳，优先换成更大的模型（例如 `qwen2.5-coder:3b`）
-
-### 6.2 `table "xxx" not found`
-
-原因：当前数据库里没有目标表。
-
-修复：
-
-1. 先 `create_table`
-2. 再 `create_primary_int_index`（若后续用 `get_by_primary_int` / `scan_primary_int_range`）
-3. 再执行读写动作
-
-## 7) 相关阅读（按需）
-
-- 协议细节与完整示例：`docs/action-protocol-v1.md`
-- 网页原理与数据流：`docs/web-principle-and-dataflow.md`
-- 排错经验：`docs/error-experience-playbook.md`
-- 配置项总表：`docs/config-parameter-reference.md`
+4. `/v1/nl/translate` 404
+- 这是预期行为：该接口已移除。

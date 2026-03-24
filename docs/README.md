@@ -1,32 +1,35 @@
-# HaruhiDB 文档中心（整合版）
+# HaruhiDB 文档中心（Web-Only）
 
-如果你只看一篇，请先看：
+当前默认方案已经统一为：
 
-- [一页上手与动作速查](web-action-one-page-guide.md)
+- 树莓派运行 HaruhiDB Web 服务
+- 本机浏览器访问 `http://<pi-ip>:8080/ui`
+- 交互方式只保留 Action 协议（无模型、无 NL 翻译）
 
-上面这篇已经整合了启动流程、动作清单、动作示例、常见报错。
+如果只看一篇，请先看：
 
-## 按场景选读
+- [Web 一页上手与动作速查](web-action-one-page-guide.md)
 
-| 场景 | 先看哪篇 | 说明 |
-| --- | --- | --- |
-| SSH + 网页联调（最常见） | [一页上手与动作速查](web-action-one-page-guide.md) | 从配置到执行的最短路径 |
-| 网页功能与两段式执行原理 | [Web 原理与信息流](web-principle-and-dataflow.md) | 为什么先翻译再执行 |
-| 线上联调报错排查 | [错误经验汇总](error-experience-playbook.md) | 真实报错与修复 |
-| 配置项查询 | [配置参数总表](config-parameter-reference.md) | 配置键与 CLI 参数映射 |
+## 推荐阅读顺序
 
-## 深入文档（需要时再看）
+1. [Web 一页上手与动作速查](web-action-one-page-guide.md)
+2. [配置参数总表](config-parameter-reference.md)
+3. [配置文件说明](configs/README.md)
+4. [Web 原理与数据流](web-principle-and-dataflow.md)
 
-- 启动与 API 说明：`go-usage-guide.md`
-- 远程联动与静态库：`static-link-web-cli-and-remote-exec-guide.md`
-- 配置样例：`configs/README.md`
-- 协议详规（历史命名保留）：`action-protocol-v1.md`
-- 动作机器可读规范（历史命名保留）：`action-v1-model-spec.json`
-- 旧版示例：`action-v1-showcase-example.md`、`action-v2-showcase-example.md`
-- Go API 与动作覆盖矩阵：`go-api-action-capability-matrix.md`
+## 参考文档
 
-## 当前建议
+- [Go 使用指南（serve/API）](go-usage-guide.md)
+- [Go API 与 Action 覆盖矩阵](go-api-action-capability-matrix.md)
+- [常见错误排查](error-experience-playbook.md)
+- [静态链接与远程运行说明](static-link-web-cli-and-remote-exec-guide.md)
 
-1. 新请求统一使用 `version="v3"`
-2. 需要写入时使用 `mode="read_write"`
-3. 先“仅翻译”，确认 `valid=true` 后再执行
+## 历史协议资料
+
+- `action-protocol-v1.md`
+- `action-v1-model-spec.json`
+- `action-v1-request-template.json`
+- `action-v1-showcase-example.md`
+- `action-v2-showcase-example.md`
+
+说明：历史文件名保留为 `v1/v2`，但当前运行时统一按 `v3` Action 语义执行。
