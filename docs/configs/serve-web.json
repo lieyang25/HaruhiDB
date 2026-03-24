@@ -6,5 +6,8 @@
   },
   "serve": {
     "listen": ":8080"
+  },
+  "launcher": {
+    "open_browser": true
   }
 }

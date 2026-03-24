@@ -8,7 +8,7 @@
 
 ## 配置结构
 
-当前只保留两个顶层分组：`common`、`serve`。
+当前只保留三个顶层分组：`common`、`serve`、`launcher`。
 
 ### `common`
 
@@ -23,6 +23,13 @@
 | 配置键 | 类型 | 说明 | 对应 CLI |
 | --- | --- | --- | --- |
 | `serve.listen` | string | 监听地址 | `--listen` |
+
+### `launcher`（启动脚本层）
+
+| 配置键 | 类型 | 说明 | 对应脚本参数 |
+| --- | --- | --- | --- |
+| `launcher.open_browser` | bool | 启动后是否自动打开浏览器 | `--open-browser` |
+| `launcher.ui_url` | string | 自动打开的 UI 地址（可选） | `--ui-url` |
 
 ## `serve` 当前可用 CLI 参数
 

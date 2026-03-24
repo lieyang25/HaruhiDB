@@ -10,7 +10,7 @@
 
 ```bash
 cd /home/pi/HaruhiDB
-HARU_CONFIG=docs/configs/serve-web-rpi.json HARU_OPEN_BROWSER=false ./scripts/start_web_one_click.sh
+./scripts/start_web_one_click.sh --config docs/configs/serve-web-rpi.json
 ```
 
 ## 健康检查

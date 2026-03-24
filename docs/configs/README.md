@@ -17,6 +17,9 @@
   },
   "serve": {
     "listen": ":8080"
+  },
+  "launcher": {
+    "open_browser": true
   }
 }
 ```
@@ -32,10 +35,11 @@ go run ./cmd/haruhidb serve --config ../docs/configs/serve-web.json
 
 ```bash
 cd /home/pi/HaruhiDB
-HARU_CONFIG=docs/configs/serve-web-rpi.json HARU_OPEN_BROWSER=false ./scripts/start_web_one_click.sh
+./scripts/start_web_one_click.sh --config docs/configs/serve-web-rpi.json
 ```
 
 ## 覆盖规则
 
 - 配置文件生效后，CLI 同名参数会覆盖配置值。
-- 一键脚本 `start_web_one_click.sh` 默认只传 `--config`，不会再写死模型相关参数。
+- 一键脚本优先读取配置文件；如需临时切换配置，可用 `--config` 参数。
+- 启动浏览器可在配置中设置 `launcher.open_browser`，也可用 `--open-browser` 临时覆盖。

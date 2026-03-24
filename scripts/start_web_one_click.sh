@@ -6,14 +6,64 @@ GO_DIR="${ROOT_DIR}/GO"
 CXX_DIR="${ROOT_DIR}/CXX"
 CXX_BUILD_DIR="${CXX_BUILD_DIR:-${ROOT_DIR}/CXX/build}"
 CONFIG_PATH="${HARU_CONFIG:-${ROOT_DIR}/docs/configs/serve-web.json}"
+SCRIPT_OPEN_BROWSER=""
+SCRIPT_UI_URL=""
 
-OPEN_BROWSER="${HARU_OPEN_BROWSER:-true}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for --config" >&2
+        exit 1
+      fi
+      CONFIG_PATH="$2"
+      shift 2
+      ;;
+    --config=*)
+      CONFIG_PATH="${1#*=}"
+      shift
+      ;;
+    --open-browser)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for --open-browser" >&2
+        exit 1
+      fi
+      SCRIPT_OPEN_BROWSER="$2"
+      shift 2
+      ;;
+    --open-browser=*)
+      SCRIPT_OPEN_BROWSER="${1#*=}"
+      shift
+      ;;
+    --ui-url)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for --ui-url" >&2
+        exit 1
+      fi
+      SCRIPT_UI_URL="$2"
+      shift 2
+      ;;
+    --ui-url=*)
+      SCRIPT_UI_URL="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      echo "usage: ./scripts/start_web_one_click.sh [--config <path>] [--open-browser <true|false>] [--ui-url <url>]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 CFG_LISTEN=""
+CFG_OPEN_BROWSER=""
+CFG_UI_URL=""
 CONFIG_PARSE_OK=false
 
 if [[ -f "${CONFIG_PATH}" ]] && command -v jq >/dev/null 2>&1; then
   CFG_LISTEN="$(jq -r '.serve.listen // empty' "${CONFIG_PATH}" 2>/dev/null || true)"
+  CFG_OPEN_BROWSER="$(jq -r 'if .launcher.open_browser == null then "" else (.launcher.open_browser|tostring) end' "${CONFIG_PATH}" 2>/dev/null || true)"
+  CFG_UI_URL="$(jq -r '.launcher.ui_url // empty' "${CONFIG_PATH}" 2>/dev/null || true)"
   CONFIG_PARSE_OK=true
 fi
 
@@ -21,12 +71,17 @@ DB_PATH="${HARU_DB_PATH:-}"
 LISTEN="${HARU_LISTEN:-${CFG_LISTEN:-:8080}}"
 TIMEOUT="${HARU_TIMEOUT:-}"
 ALLOW_WRITE="${HARU_ALLOW_WRITE:-}"
+OPEN_BROWSER="${SCRIPT_OPEN_BROWSER:-${HARU_OPEN_BROWSER:-${CFG_OPEN_BROWSER:-true}}}"
 
 CAPI_DIR="${HARU_CAPI_DIR:-${ROOT_DIR}/CXX/build/src/capi}"
 CAPI_RUNTIME_DIR="${HARU_CAPI_RUNTIME_DIR:-${CAPI_DIR}}"
 
-if [[ -n "${HARU_UI_URL:-}" ]]; then
+if [[ -n "${SCRIPT_UI_URL}" ]]; then
+  UI_URL="${SCRIPT_UI_URL}"
+elif [[ -n "${HARU_UI_URL:-}" ]]; then
   UI_URL="${HARU_UI_URL}"
+elif [[ -n "${CFG_UI_URL}" ]]; then
+  UI_URL="${CFG_UI_URL}"
 elif [[ "${LISTEN}" =~ ^:([0-9]+)$ ]]; then
   UI_URL="http://127.0.0.1:${BASH_REMATCH[1]}/ui"
 else
@@ -113,6 +168,7 @@ fi
 
 echo "[3/3] Start HaruhiDB Web"
 echo "        UI: ${UI_URL}"
+echo "        open_browser=${OPEN_BROWSER}"
 if [[ -n "${DB_PATH}" ]]; then
   echo "        db_path(override)=${DB_PATH}"
 else
