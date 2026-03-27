@@ -20,6 +20,7 @@
 ## 参考文档
 
 - [Go 使用指南（serve/API）](go-usage-guide.md)
+- [Python 客户端开发者文档](python-client-developer-guide.md)
 - [Go API 与 Action 覆盖矩阵](go-api-action-capability-matrix.md)
 - [常见错误排查](error-experience-playbook.md)
 - [静态链接与远程运行说明](static-link-web-cli-and-remote-exec-guide.md)

@@ -19,6 +19,7 @@
 常用文档：
 
 - [一页上手与动作速查](docs/web-action-one-page-guide.md)：树莓派部署 + 动作表 + 动作示例 + 常见报错
+- [Python 客户端开发者文档](docs/python-client-developer-guide.md)：`/v1/action` 接口格式 + 最小 Python 客户端
 - [Web 原理与数据流](docs/web-principle-and-dataflow.md)：Web-only 架构与执行路径
 - [常见错误排查](docs/error-experience-playbook.md)：联调排错
 - [配置参数总表](docs/config-parameter-reference.md)：配置键与 CLI 参数映射
@@ -27,6 +28,88 @@
 
 - [Go 阅读指南（从最简单路径开始）](GO_READING_GUIDE.md)
 - [CXX 文档索引](CXX/docs/README.md)
+
+## Python 快速示例（复制可跑）
+
+先装依赖：
+
+```bash
+python3 -m pip install requests
+```
+
+最小客户端函数：
+
+```python
+import requests
+
+BASE = "http://127.0.0.1:8080"
+
+def execute(action, args, mode="read_only", request_id="demo", db_path=None):
+    envelope = {
+        "version": "v3",
+        "request_id": request_id,
+        "mode": mode,
+        "action": action,
+        "args": args,
+    }
+    payload = envelope if not db_path else {"db_path": db_path, **envelope}
+    resp = requests.post(f"{BASE}/v1/action", json=payload, timeout=10)
+    return resp.json()
+```
+
+调用示例：
+
+```python
+import uuid
+
+table = f"characters_demo_{uuid.uuid4().hex[:6]}"
+index = f"idx_{table}_id"
+
+print(execute("list_tables", {}, mode="read_only", request_id="demo-list"))
+
+print(execute(
+    "batch",
+    {
+        "stop_on_error": True,
+        "requests": [
+            {
+                "action": "create_table",
+                "args": {
+                    "table": table,
+                    "columns": [
+                        {"name": "id", "type": "INTEGER", "nullable": False},
+                        {"name": "name", "type": "VARCHAR", "length": 64, "nullable": False},
+                    ],
+                },
+            },
+            {
+                "action": "create_primary_int_index",
+                "args": {"table": table, "index": index},
+            },
+        ],
+    },
+    mode="read_write",
+    request_id="demo-init",
+))
+
+print(execute(
+    "insert_row",
+    {"table": table, "values": {"id": 1, "name": "haruhi"}},
+    mode="read_write",
+    request_id="demo-insert",
+))
+
+print(execute(
+    "get_by_primary_int",
+    {"table": table, "key": 1},
+    mode="read_only",
+    request_id="demo-get",
+))
+```
+
+完整可运行脚本见：
+
+- [`examples/python/action_client_demo.py`](examples/python/action_client_demo.py)
 
 ## 项目当前定位
 
