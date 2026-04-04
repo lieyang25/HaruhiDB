@@ -39,12 +39,12 @@
 - `--timeout`
 - `--allow-write`
 
-## 已移除项
+## 脚本层可选覆盖（`start_web_one_click.sh`）
 
-- 配置分组：`ollama.*`
-- CLI 参数：`--model`、`--base-url`、`--stream`
-- 接口：`POST /v1/nl/translate`
-- 启动语义：`HARU_MODEL`、`HARU_BASE_URL`、`HARU_STREAM`
+- `HARU_DB_PATH`：覆盖数据库路径（映射 `--db-path`）
+- `HARU_LISTEN`：覆盖监听地址（映射 `--listen`）
+- `HARU_TIMEOUT`：覆盖超时（映射 `--timeout`）
+- `HARU_ALLOW_WRITE`：覆盖写开关（映射 `--allow-write`）
 
 ## 推荐配置文件
 

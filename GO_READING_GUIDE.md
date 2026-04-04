@@ -1,11 +1,11 @@
-# Go 阅读指南（当前版本：Web + serve + Ollama）
+# Go 阅读指南（当前版本：Web + Action）
 
-这份指南只覆盖**当前 Go 侧真实形态**：
+这份指南只覆盖当前 Go 侧真实形态：
 
 - 入口只保留 `serve`
 - 对外能力是 Web UI + HTTP API
-- 自然语言翻译固定走 Ollama
-- 动作集统一为 v3（兼容接收 v1/v2 输入）
+- 请求执行统一走 Action 协议
+- 动作集按 `v3` 语义执行（兼容接收 `v1`/`v2` 输入）
 
 如果你想快速接手 Go 侧，这份文档按“最短主线”组织阅读路径。
 
@@ -13,22 +13,23 @@
 
 ```text
 Browser/UI
-  -> /v1/nl/translate
-  -> /v1/action
+  -> GET  /v1/capabilities
+  -> POST /v1/action
 
 cmd/haruhidb serve
-  -> ActionService
-    -> action.Decode/Validate/Execute
-    -> nl.OllamaTranslator
-    -> haruhidb.DB (CGO C API)
+  -> RuntimeManager.Resolve(db_path)
+    -> ActionService.ExecuteJSON
+      -> action.Decode/Validate/Execute
+      -> haruhidb.DB (CGO C API)
 ```
 
 核心点：
 
 1. `serve` 是唯一 CLI 入口。
-2. `ActionService` 是业务中枢（执行 + NL 翻译）。
-3. `action` 包是协议和动作分发中心。
-4. `haruhidb` 包是 Go 到 C API 的桥。
+2. `RuntimeManager` 负责多 `db_path` 下的 DB/Service 复用与生命周期管理。
+3. `ActionService` 负责请求超时、写保护与 Action 执行编排。
+4. `action` 包是协议与动作分发中心。
+5. `haruhidb` 包是 Go 到 C API 的桥。
 
 ## 2. 30 分钟最短阅读路径
 
@@ -37,23 +38,25 @@ cmd/haruhidb serve
 1. `GO/cmd/haruhidb/main.go`
 2. `GO/cmd/haruhidb/config.go`
 3. `GO/internal/transport/http/server.go`
-4. `GO/internal/app/service.go`
-5. `GO/internal/action/decode.go`
-6. `GO/internal/action/execute.go`
-7. `GO/internal/nl/ollama.go`
+4. `GO/internal/app/runtime_manager.go`
+5. `GO/internal/app/service.go`
+6. `GO/internal/action/decode.go`
+7. `GO/internal/action/execute.go`
 
 读法建议：
 
-- 先看“入口怎么把对象连起来”（`main.go`）
-- 再看“请求怎么进来和出去”（`server.go`）
-- 最后看“动作执行 + NL 翻译核心逻辑”（`service/action/nl`）
+- 先看入口怎么把对象装起来（`main.go`）
+- 再看 HTTP 请求如何进入业务层（`server.go`）
+- 最后看协议解码、校验和动作执行（`action/*`）
 
-## 3. 三条关键请求链路
+## 3. 两条关键请求链路
 
 ### 3.1 `/v1/action` 执行链路
 
 ```text
-HTTP /v1/action
+HTTP POST /v1/action
+  -> read body + extract envelope
+  -> RuntimeManager.Resolve(db_path)
   -> ActionService.ExecuteJSON
   -> action.Decode
   -> action.ValidateEnvelope
@@ -61,23 +64,14 @@ HTTP /v1/action
   -> haruhidb.DB.*
 ```
 
-### 3.2 `/v1/nl/translate` 翻译链路
+### 3.2 `/v1/capabilities` 能力发现链路
 
 ```text
-HTTP /v1/nl/translate
-  -> ActionService.TranslateNL
-  -> loadCatalogSnapshot
-  -> OllamaTranslator.Translate
-  -> candidate normalization + validation
-  -> NLResult(valid/candidate_envelope/error)
-```
-
-### 3.3 UI 两段式链路
-
-```text
-/ui
-  1) 先调 /v1/nl/translate 预览
-  2) valid=true 后再调 /v1/action 执行
+HTTP GET /v1/capabilities
+  -> RuntimeManager.Resolve(db_path)
+  -> listTablesForCapabilities
+  -> action.PublicActionSpecs / PublicActionNamesForMode
+  -> capabilities payload
 ```
 
 ## 4. 模块职责速查
@@ -89,13 +83,13 @@ HTTP /v1/nl/translate
 
 ### `GO/internal/transport/http`
 
-- `server.go`：路由、请求解码、错误映射。
+- `server.go`：路由、请求解码、错误映射、UI 与 API 暴露。
 - `ui/*`：内置网页静态资源。
 
 ### `GO/internal/app`
 
-- `service.go`：Action 与 NL 的统一编排层。
-- 职责包括：写保护、超时、catalog 快照、候选校验与归一化。
+- `runtime_manager.go`：按 `db_path` 解析与复用 `haruhidb.DB` + `ActionService`。
+- `service.go`：请求级执行编排（超时、写保护、调用 action 层）。
 
 ### `GO/internal/action`
 
@@ -104,11 +98,6 @@ HTTP /v1/nl/translate
 - `execute.go`：动作分发与执行。
 - `validator.go`：参数/表结构/类型约束校验。
 
-### `GO/internal/nl`
-
-- `ollama.go`：Ollama 翻译器，支持流式与 JSON 提取。
-- `types.go`：翻译器接口与 catalog 快照结构。
-
 ### `GO/haruhidb`
 
 - `haruhidb.go`：CGO 封装，提供 DDL/DML/扫描/元数据 API。
@@ -116,34 +105,31 @@ HTTP /v1/nl/translate
 ## 5. 当前对外能力边界
 
 1. CLI：只支持 `haruhidb serve`。
-2. HTTP：`/healthz`、`/v1/action`、`/v1/nl/translate`、`/ui`。
-3. NL 后端：仅 Ollama（`--base-url` + `--model` + `--stream`）。
-4. 动作集：统一以 v3 执行与输出，兼容 v1/v2 旧请求。
+2. HTTP：`/healthz`、`/v1/capabilities`、`/v1/action`、`/ui`（以及 `/ui/*` 静态资源）。
+3. Action：14 个公开动作，按 `mode` 进行读写约束。
+4. 协议版本：输入支持 `v1/v2/v3`，运行时统一按 `v3` 语义处理。
 
 ## 6. 当前可用参数（serve）
 
 - `--config`
 - `--db-path`
 - `--listen`
-- `--model`
-- `--base-url`
-- `--stream`
 - `--timeout`
 - `--allow-write`
 
 ## 7. 常见改动从哪里下手
 
-### 7.1 改路由/返回结构
+### 7.1 改路由或 HTTP 返回结构
 
 先看：`GO/internal/transport/http/server.go`。
 
-### 7.2 改动作语义或加新动作
+### 7.2 加新动作或改动作语义
 
 先看：`GO/internal/action/types.go` -> `decode.go` -> `execute.go` -> `validator.go`。
 
-### 7.3 调整 NL 翻译策略
+### 7.3 调整 DB 路由与多库行为
 
-先看：`GO/internal/nl/ollama.go` 与 `GO/internal/app/service.go` 里候选归一化逻辑。
+先看：`GO/internal/app/runtime_manager.go` 与 `server.go` 中的 `db_path` 解析。
 
 ### 7.4 改配置项
 
@@ -152,9 +138,9 @@ HTTP /v1/nl/translate
 ## 8. 推荐验证顺序
 
 1. `go test ./... -run '^$'`（先做全包编译检查）
-2. `go test ./internal/transport/http -run TestHealthz -count=1`
+2. `go test ./internal/transport/http -count=1`
 3. 手工启动 `serve` 后访问 `/healthz` 与 `/ui`
-4. 用 UI 走一遍“仅翻译 -> 翻译并执行”
+4. 用 `curl` 验证 `list_tables`、`batch`、`/v1/capabilities`
 
 ## 9. 一句话总结
 
@@ -162,6 +148,6 @@ HTTP /v1/nl/translate
 
 - 一个 `serve` 进程
 - 暴露 Web + HTTP
-- 内部通过 Action 协议和 Ollama 翻译器驱动 HaruhiDB C API
+- 通过 Action 协议驱动 HaruhiDB C API
 
 阅读时始终围绕这条主线，就不会迷路。

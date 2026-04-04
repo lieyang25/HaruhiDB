@@ -8,12 +8,11 @@
 4. 常用请求示例
 5. 常见报错排查
 
-## 1. 当前架构（去模型化）
+## 1. 当前架构
 
 - 服务：HaruhiDB 单进程（内置 UI + API）
 - UI：`GET /ui`
 - API：`GET /healthz`、`GET /v1/capabilities`、`POST /v1/action`
-- 已移除：`POST /v1/nl/translate`
 
 ## 2. 树莓派部署（默认方案）
 
@@ -169,6 +168,3 @@ curl -s http://127.0.0.1:8080/v1/action \
 
 3. `context deadline exceeded`
 - 请求超时，增大 `common.timeout`（例如 `30s -> 60s`），然后重启服务。
-
-4. `/v1/nl/translate` 404
-- 这是预期行为：该接口已移除。

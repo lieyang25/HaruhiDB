@@ -29,8 +29,3 @@ HaruhiDB Web 是“单进程内置前后端”：
 - 写请求使用 `mode=read_write`
 - 写入可被 `common.allow_write=false` 全局禁用
 - `batch` 可封装多步骤操作
-
-## 4. 变更说明
-
-- 已移除自然语言翻译链路与模型依赖
-- `/v1/nl/translate` 不再提供

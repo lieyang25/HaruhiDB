@@ -14,8 +14,6 @@
 | `/v1/action` | POST | 执行动作 |
 | `/ui` | GET | Web 控制台 |
 
-已移除：`POST /v1/nl/translate`。
-
 ## 3. 动作覆盖（14）
 
 | 分类 | 动作 |

@@ -35,16 +35,12 @@ go run ./cmd/haruhidb serve \
 - `--timeout`
 - `--allow-write`
 
-已移除：`--model`、`--base-url`、`--stream`。
-
 ## 4. HTTP 接口
 
 - `GET /healthz`
 - `GET /v1/capabilities`
 - `POST /v1/action`
 - `GET /ui`
-
-已移除：`POST /v1/nl/translate`。
 
 ## 5. 快速验证
 

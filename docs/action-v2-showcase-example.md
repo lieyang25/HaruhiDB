@@ -97,19 +97,5 @@
 
 1. 打开 Web Console：`http://127.0.0.1:8080/ui`
 2. `Mode` 选 `read_write`
-3. 先点“仅翻译”，确认 `candidate_envelope.version = "v2"`
-4. 再点“翻译并执行”，观察 `batch.results` 全部通过
-
-## 可直接粘贴的 NL 提示词（严格版）
-
-```text
-严格输出 v2 batch。按顺序执行 7 步：
-1) create_table(table=books_v2_demo, columns=[{name:id,type:INTEGER,nullable:false},{name:name,type:VARCHAR,length:32,nullable:false}])；
-2) create_primary_int_index(table=books_v2_demo,index=idx_books_v2_demo_id)；
-3) insert_row(table=books_v2_demo,values={id:501,name:'book-demo'})；
-4) get_by_primary_int(table=books_v2_demo,key=501)；
-5) delete_by_primary_int(table=books_v2_demo,key=501)；
-6) drop_index(table=books_v2_demo,index=idx_books_v2_demo_id)；
-7) drop_table(table=books_v2_demo)。
-禁止输出任何额外动作。
-```
+3. 在 Action JSON 控制台粘贴上面的 `v2` 请求
+4. 点击执行，确认返回的 `batch.results` 全部通过

@@ -27,8 +27,6 @@ curl -s "http://127.0.0.1:8080/v1/capabilities"
 - `GET /v1/capabilities`
 - `POST /v1/action`
 
-说明：`POST /v1/nl/translate` 已移除。
-
 完整流程、14 动作表与示例见：
 
 - [Web 一页上手与动作速查](web-action-one-page-guide.md)
