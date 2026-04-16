@@ -24,6 +24,7 @@
 
 #include "table/table_iterator.h"
 #include "table/table_heap.h"
+#include "scope_guard.h"
 
 #include "storage/page/table_page.h"
 
@@ -35,44 +36,6 @@ namespace HaruhiDB
 {
 namespace table
 {
-
-namespace
-{
-    template <typename F>
-    class ScopeGuard
-    {
-    public:
-        explicit ScopeGuard(F&& fn)
-            : fn_(std::forward<F>(fn)), active_(true)
-        {
-        }
-
-        ScopeGuard(ScopeGuard&& other) noexcept
-            : fn_(std::move(other.fn_)), active_(std::exchange(other.active_, false))
-        {
-        }
-
-        ~ScopeGuard()
-        {
-            if (active_) {
-                fn_();
-            }
-        }
-
-        ScopeGuard(const ScopeGuard&) = delete;
-        ScopeGuard& operator=(const ScopeGuard&) = delete;
-
-    private:
-        F fn_;
-        bool active_;
-    };
-
-    template <typename F>
-    ScopeGuard<F> MakeScopeGuard(F&& fn)
-    {
-        return ScopeGuard<F>(std::forward<F>(fn));
-    }
-} // namespace
 
     TableIterator::TableIterator()
     {
