@@ -15,11 +15,6 @@ target_compile_features(compile_version_cxx23 INTERFACE cxx_std_23)
 
 add_subdirectory(src)
 
-option(EXAMPLE "Bggin example" OFF)
-if(EXAMPLE)
-        add_subdirectory(example)
-endif()
-
 option(TEST "Begin test" OFF)
 if(TEST)
         add_subdirectory(test)
